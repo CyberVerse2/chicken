@@ -124,10 +124,14 @@ struct DayReading: Identifiable, Hashable {
     var minutes: Int { seconds / 60 }
     var isToday: Bool { Calendar.current.isDateInToday(dayStart) }
     var dayLetter: String {
-        let f = DateFormatter()
-        f.dateFormat = "EEEEE"  // narrow weekday: M, T, W, T, F, S, S
-        return f.string(from: dayStart)
+        Self.dayLetterFormatter.string(from: dayStart)
     }
+
+    private static let dayLetterFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "EEEEE"  // narrow weekday: M, T, W, T, F, S, S
+        return formatter
+    }()
 }
 
 extension Notification.Name {
@@ -692,11 +696,15 @@ final class LocalLibraryStore: ObservableObject {
     }
 
     private nonisolated static func dayKey(for date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: date)
+        dayKeyFormatter.string(from: date)
     }
+
+    private nonisolated static let dayKeyFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
 
     private func loadReadingLog() {
         guard let data = try? Data(contentsOf: readingLogURL) else {
@@ -738,11 +746,18 @@ final class LocalLibraryStore: ObservableObject {
         let clamped = min(max(progress, 0), 1)
         let wasFinished = books[index].progress >= 1
         let nowFinished = clamped >= 1
+        let now = Date()
+        let progressChanged = abs(books[index].progress - clamped) >= 0.001
+        let locationChanged = location != nil && books[index].lastLocation != location
+        let finishChanged = wasFinished != nowFinished
+        let shouldRefreshOpenedAt = books[index].lastOpenedAt.map { now.timeIntervalSince($0) >= 60 } ?? true
+        guard progressChanged || locationChanged || finishChanged || shouldRefreshOpenedAt else { return }
+
         books[index].progress = clamped
-        books[index].lastLocation = location
-        books[index].lastOpenedAt = Date()
+        if locationChanged { books[index].lastLocation = location }
+        if shouldRefreshOpenedAt { books[index].lastOpenedAt = now }
         if nowFinished && !wasFinished {
-            books[index].finishedAt = Date()
+            books[index].finishedAt = now
         } else if !nowFinished && wasFinished {
             books[index].finishedAt = nil
         }

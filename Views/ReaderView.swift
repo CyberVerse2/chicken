@@ -201,7 +201,10 @@ struct ReaderView: View {
         .onReceive(NotificationCenter.default.publisher(for: NSWindow.didResignKeyNotification)) { _ in
             library.endReadingSession()
         }
-        .onChange(of: chapterIndex) { _, _ in selection = nil }
+        .onChange(of: chapterIndex) { _, _ in
+            selection = nil
+            currentLocation = nil
+        }
         .onChange(of: isZenMode) { _, isZen in
             if isZen {
                 selection = nil
@@ -212,6 +215,7 @@ struct ReaderView: View {
         .onChange(of: book.id) { _, _ in
             chapterIndex = 0
             selection = nil
+            currentLocation = nil
             bodyState.readerError = nil
             showHighlights = false
             showSearch = false
@@ -1646,11 +1650,22 @@ private struct PDFReaderBody: NSViewRepresentable {
 
         func go(toIndex index: Int) {
             guard let view, let doc = view.document, pageMap.indices.contains(index) else { return }
+            if let currentPage = view.currentPage {
+                let currentIndex = doc.index(for: currentPage)
+                let range = pageRange(forChapterAt: index, document: doc)
+                if range.contains(currentIndex) { return }
+            }
             let pageIndex = pageMap[index].0
             guard let page = doc.page(at: pageIndex) else { return }
             if view.currentPage != page {
                 view.go(to: page)
             }
+        }
+
+        private func pageRange(forChapterAt index: Int, document doc: PDFDocument) -> Range<Int> {
+            let start = pageMap.indices.contains(index) ? pageMap[index].0 : 0
+            let end = pageMap.indices.contains(index + 1) ? pageMap[index + 1].0 : doc.pageCount
+            return start..<max(start + 1, end)
         }
 
         @objc private func pageChanged(_ note: Notification) {
@@ -1676,9 +1691,9 @@ private struct PDFReaderBody: NSViewRepresentable {
                 return
             }
             let nearest = pageMap.lastIndex(where: { $0.0 <= pageIndex }) ?? 0
-            let chapterStart = pageMap.indices.contains(nearest) ? pageMap[nearest].0 : 0
-            let chapterEnd = pageMap.indices.contains(nearest + 1) ? pageMap[nearest + 1].0 : doc.pageCount
-            let chapterPageCount = max(1, chapterEnd - chapterStart)
+            let range = pageRange(forChapterAt: nearest, document: doc)
+            let chapterStart = range.lowerBound
+            let chapterPageCount = max(1, range.count)
             let currentChapterPage = max(1, min(chapterPageCount, pageIndex - chapterStart + 1))
             parent.bodyState.currentPage = max(1, min(doc.pageCount, pageIndex + 1))
             parent.bodyState.currentChapterPage = currentChapterPage
@@ -1798,6 +1813,8 @@ private struct EPUBWebReader: NSViewRepresentable {
         private var restoredInitialLocation = false
         private var lastSearchID: UUID?
         private var isTornDown = false
+        private var loadTask: Task<Void, Never>?
+        private var lastAppliedThemeKey: String?
 
         init(parent: EPUBWebReader) {
             self.parent = parent
@@ -1810,6 +1827,8 @@ private struct EPUBWebReader: NSViewRepresentable {
 
         func prepareForDismantle() {
             isTornDown = true
+            loadTask?.cancel()
+            loadTask = nil
             webView?.stopLoading()
             webView?.navigationDelegate = nil
             webView?.configuration.userContentController.removeScriptMessageHandler(forName: "chickenProgress")
@@ -1819,10 +1838,12 @@ private struct EPUBWebReader: NSViewRepresentable {
         func loadPublication(from url: URL) {
             guard preparedURL != url else { return }
             preparedURL = url
-
-            Task.detached(priority: .utility) {
-                let publication = EPUBPublication.load(from: url)
-                await MainActor.run {
+            let requestedURL = url
+            loadTask?.cancel()
+            loadTask = Task.detached(priority: .utility) { [weak self] in
+                let publication = EPUBPublication.load(from: requestedURL)
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isTornDown, self.preparedURL == requestedURL else { return }
                     guard let publication else {
                         self.publication = nil
                         self.currentChapterIndex = nil
@@ -1875,7 +1896,7 @@ private struct EPUBWebReader: NSViewRepresentable {
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-            applyTheme()
+            applyTheme(force: true)
             // Promote the web view to first responder so its keydown listener
             // gets ←/→/Space immediately, without the user having to click
             // into the page first.
@@ -1899,9 +1920,13 @@ private struct EPUBWebReader: NSViewRepresentable {
             }
         }
 
-        func applyTheme() {
+        func applyTheme(force: Bool = false) {
             guard let webView else { return }
             let css = parent.makeReaderCSS()
+            let background = parent.palette.background.webHex
+            let themeKey = "\(parent.fontSize)|\(parent.lineHeight)|\(parent.columnWidth)|\(parent.readingMode.rawValue)|\(background)|\(css.stableChickenHash)"
+            guard force || lastAppliedThemeKey != themeKey else { return }
+            lastAppliedThemeKey = themeKey
             let isHorizontal = parent.readingMode == .paged || parent.readingMode == .spread
             let script =
                 """
@@ -2207,8 +2232,8 @@ private struct EPUBWebReader: NSViewRepresentable {
                     document.head.appendChild(style);
                   }
                   style.textContent = \(Self.javascriptString(css));
-                  document.documentElement.style.background = \(Self.javascriptString(parent.palette.background.webHex));
-                  document.body.style.background = \(Self.javascriptString(parent.palette.background.webHex));
+                  document.documentElement.style.background = \(Self.javascriptString(background));
+                  document.body.style.background = \(Self.javascriptString(background));
                 })();
             """
             webView.evaluateJavaScript(script, completionHandler: nil)
@@ -2639,7 +2664,7 @@ private struct EPUBPublication {
         return base
             .appendingPathComponent("Chicken", isDirectory: true)
             .appendingPathComponent("EPUBCache", isDirectory: true)
-            .appendingPathComponent("\(safeName)-\(signature.stableReaderHash)", isDirectory: true)
+            .appendingPathComponent("\(safeName)-\(String(signature.stableChickenHash, radix: 16))", isDirectory: true)
     }
 
     nonisolated private static func unzip(_ archiveURL: URL, to destination: URL) -> Bool {
@@ -3006,16 +3031,6 @@ private struct EPUBSpineItem {
     let relativePath: String
     let fileURL: URL
     let tocLevel: Int
-}
-
-private extension String {
-    nonisolated var stableReaderHash: String {
-        var hash: UInt64 = 5381
-        for byte in utf8 {
-            hash = ((hash << 5) &+ hash) &+ UInt64(byte)
-        }
-        return String(hash, radix: 16)
-    }
 }
 
 private extension Color {

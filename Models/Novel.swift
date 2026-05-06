@@ -76,9 +76,15 @@ struct Book: Identifiable, Codable, Hashable {
     /// Stable hash that maps to the cover-tint palette (so a book always paints
     /// the same color until it gets a real cover image).
     var coverTintIndex: Int {
-        var sum: UInt64 = 5381
-        for byte in title.utf8 { sum = sum &* 33 &+ UInt64(byte) }
-        return Int(sum % 6)
+        Int(title.stableChickenHash % 6)
+    }
+}
+
+extension String {
+    nonisolated var stableChickenHash: UInt64 {
+        var hash: UInt64 = 5381
+        for byte in utf8 { hash = hash &* 33 &+ UInt64(byte) }
+        return hash
     }
 }
 
