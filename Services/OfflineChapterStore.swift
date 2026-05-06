@@ -621,8 +621,10 @@ final class LocalLibraryStore: ObservableObject {
         sessionTimer?.invalidate()
         // Tick every 30s to commit partial time and keep `readingSecondsToday`
         // live in the library while a session is open.
-        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.commitSession(continuing: true) }
+        let timer = Timer(timeInterval: 30, repeats: true) { _ in
+            Task { @MainActor [weak self] in
+                self?.commitSession(continuing: true)
+            }
         }
         RunLoop.main.add(timer, forMode: .common)
         sessionTimer = timer

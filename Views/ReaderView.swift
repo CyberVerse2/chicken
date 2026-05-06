@@ -147,7 +147,6 @@ struct ReaderView: View {
                     ReaderBottomBar(
                         palette: palette,
                         progress: bodyState.progress(at: chapterIndex),
-                        chapterProgress: bodyState.chapterProgressValue(at: chapterIndex),
                         pageReadout: bodyState.pageReadout(at: chapterIndex),
                         progressReadout: bodyState.progressReadout(at: chapterIndex),
                         timeReadout: bodyState.timeReadout(at: chapterIndex),
@@ -1218,7 +1217,6 @@ private struct HighlightSelectionPopover: View {
 private struct ReaderBottomBar: View {
     let palette: ReaderPalette
     let progress: Double
-    let chapterProgress: Double
     let pageReadout: String
     let progressReadout: String
     let timeReadout: String
@@ -1578,6 +1576,10 @@ private struct PDFReaderBody: NSViewRepresentable {
                 name: .PDFViewPageChanged,
                 object: view
             )
+        }
+
+        deinit {
+            NotificationCenter.default.removeObserver(self)
         }
 
         func updateReaderState(for document: PDFDocument?, url: URL) {
