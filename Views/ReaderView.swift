@@ -1567,6 +1567,7 @@ private struct PDFReaderBody: NSViewRepresentable {
         private var lastSearchQuery = ""
         private var searchMatches: [PDFSelection] = []
         private var searchIndex = -1
+        private var derivedChapterIndexFromPageTurn: Int?
 
         init(_ parent: PDFReaderBody) {
             self.parent = parent
@@ -1650,6 +1651,10 @@ private struct PDFReaderBody: NSViewRepresentable {
 
         func go(toIndex index: Int) {
             guard let view, let doc = view.document, pageMap.indices.contains(index) else { return }
+            if derivedChapterIndexFromPageTurn == index {
+                derivedChapterIndexFromPageTurn = nil
+                return
+            }
             if let currentPage = view.currentPage {
                 let currentIndex = doc.index(for: currentPage)
                 let range = pageRange(forChapterAt: index, document: doc)
@@ -1674,6 +1679,7 @@ private struct PDFReaderBody: NSViewRepresentable {
             guard let nearest = pageMap.lastIndex(where: { $0.0 <= pageIndex }) else { return }
             DispatchQueue.main.async {
                 if self.parent.chapterIndex != nearest {
+                    self.derivedChapterIndexFromPageTurn = nearest
                     self.parent.chapterIndex = nearest
                 }
                 self.updatePageState(pageIndex: pageIndex, document: doc)
