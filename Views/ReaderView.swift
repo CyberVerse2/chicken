@@ -2604,6 +2604,7 @@ private struct EPUBPublication {
 
     nonisolated static func load(from archiveURL: URL) -> EPUBPublication? {
         let fileManager = FileManager.default
+        pruneEPUBCacheIfNeeded(fileManager: fileManager)
         let root = epubCacheRoot(for: archiveURL)
 
         do {
@@ -2654,16 +2655,51 @@ private struct EPUBPublication {
         return EPUBPublication(rootURL: root, combinedHTMLURL: combinedHTMLURL, spine: spine)
     }
 
-    nonisolated private static func epubCacheRoot(for archiveURL: URL) -> URL {
-        let fileManager = FileManager.default
+    nonisolated private static func pruneEPUBCacheIfNeeded(fileManager: FileManager = .default) {
+        let base = epubCacheBase(fileManager: fileManager)
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: base,
+            includingPropertiesForKeys: [.contentModificationDateKey, .totalFileAllocatedSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        let cutoff = Date().addingTimeInterval(-14 * 24 * 60 * 60)
+        var kept: [(url: URL, modified: Date, size: Int)] = []
+        for entry in entries {
+            let values = try? entry.resourceValues(forKeys: [.contentModificationDateKey, .totalFileAllocatedSizeKey])
+            let modified = values?.contentModificationDate ?? .distantPast
+            let size = values?.totalFileAllocatedSize ?? 0
+            if modified < cutoff {
+                try? fileManager.removeItem(at: entry)
+            } else {
+                kept.append((entry, modified, size))
+            }
+        }
+
+        let maxBytes = 1_500_000_000
+        var total = kept.reduce(0) { $0 + $1.size }
+        guard total > maxBytes else { return }
+        for entry in kept.sorted(by: { $0.modified < $1.modified }) {
+            try? fileManager.removeItem(at: entry.url)
+            total -= entry.size
+            if total <= maxBytes { break }
+        }
+    }
+
+    nonisolated private static func epubCacheBase(fileManager: FileManager = .default) -> URL {
         let base = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
+        return base
+            .appendingPathComponent("Chicken", isDirectory: true)
+            .appendingPathComponent("EPUBCache", isDirectory: true)
+    }
+
+    nonisolated private static func epubCacheRoot(for archiveURL: URL) -> URL {
+        let fileManager = FileManager.default
+        let base = epubCacheBase(fileManager: fileManager)
         let values = try? archiveURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
         let signature = "\(archiveURL.path)|\(values?.fileSize ?? 0)|\(values?.contentModificationDate?.timeIntervalSince1970 ?? 0)"
         let safeName = archiveURL.deletingPathExtension().lastPathComponent.replacingOccurrences(of: "/", with: "-")
         return base
-            .appendingPathComponent("Chicken", isDirectory: true)
-            .appendingPathComponent("EPUBCache", isDirectory: true)
             .appendingPathComponent("\(safeName)-\(String(signature.stableChickenHash, radix: 16))", isDirectory: true)
     }
 
@@ -3058,6 +3094,7 @@ private struct TextReaderBody: View {
 
     @EnvironmentObject private var library: LocalLibraryStore
     @State private var content: String = ""
+    @State private var unavailableMessage: String?
     @State private var loaded = false
 
     var body: some View {
@@ -3087,7 +3124,7 @@ private struct TextReaderBody: View {
                     .padding(.vertical, 64)
                     .frame(maxWidth: .infinity)
                 } else if loaded {
-                    Text("Preview unavailable for \(book.originalFileName).")
+                    Text(unavailableMessage ?? "Preview unavailable for \(book.originalFileName).")
                         .font(.chickenSerif(15))
                         .foregroundStyle(palette.muted)
                         .padding(56)
@@ -3100,9 +3137,32 @@ private struct TextReaderBody: View {
 
     private func load() async {
         let url = library.fileURL(for: book)
-        let raw = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        let result = await Task.detached(priority: .utility) { () -> Result<String, TextReaderLoadError> in
+            let maxBytes = 2_000_000
+            guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+                  let size = values.fileSize else {
+                return .failure(.unavailable)
+            }
+            guard size <= maxBytes else { return .failure(.tooLarge(size)) }
+            guard let raw = try? String(contentsOf: url, encoding: .utf8), !raw.isEmpty else {
+                return .failure(.unavailable)
+            }
+            return .success(raw)
+        }.value
+
         await MainActor.run {
-            content = raw
+            switch result {
+            case .success(let raw):
+                content = raw
+                unavailableMessage = nil
+            case .failure(.tooLarge(let size)):
+                content = ""
+                let mb = max(1, Int(ceil(Double(size) / 1_000_000)))
+                unavailableMessage = "This text file is too large to preview safely (\(mb) MB)."
+            case .failure(.unavailable):
+                content = ""
+                unavailableMessage = "Preview unavailable for \(book.originalFileName)."
+            }
             let chapter = ReaderChapter(
                 id: 0,
                 title: book.title,
@@ -3111,7 +3171,13 @@ private struct TextReaderBody: View {
             bodyState.chapters = [chapter]
             bodyState.totalPages = nil
             bodyState.currentPage = nil
+            bodyState.readerError = nil
         }
+    }
+
+    private enum TextReaderLoadError: Error {
+        case tooLarge(Int)
+        case unavailable
     }
 }
 

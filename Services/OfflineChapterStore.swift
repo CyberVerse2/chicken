@@ -456,43 +456,59 @@ final class LocalLibraryStore: ObservableObject {
     }
 
     nonisolated private static func enrichedDiscoveredMetadata(_ discovered: [DiscoveredBook]) async -> [DiscoveredBook] {
-        let candidates = discovered.filter {
-            $0.format == .pdf || $0.format == .epub
-        }
-
-        var enriched: [DiscoveredBook] = []
-        for item in candidates {
-            guard !Task.isCancelled else { return enriched }
-            let metadata = Self.metadata(for: item.url, format: item.format)
-            guard metadata.title != nil || metadata.author != nil || metadata.pageCount != nil || metadata.publisher != nil || metadata.language != nil else {
-                continue
+        let candidates = discovered.filter { $0.format == .pdf || $0.format == .epub }
+        return await withTaskGroup(of: DiscoveredBook?.self) { group in
+            var iterator = candidates.makeIterator()
+            let workerCount = min(4, candidates.count)
+            for _ in 0..<workerCount {
+                if let item = iterator.next() {
+                    group.addTask { enrichedDiscoveredBook(item) }
+                }
             }
 
-            let score = Self.bookScore(
-                url: item.url,
-                format: item.format,
-                fileSize: item.fileSize,
-                metadata: metadata
-            )
-
-            enriched.append(
-                DiscoveredBook(
-                    url: item.url,
-                    title: metadata.title ?? item.title,
-                    format: item.format,
-                    sourceFolder: item.sourceFolder,
-                    fileSize: item.fileSize,
-                    author: metadata.author,
-                    pageCount: metadata.pageCount,
-                    publisher: metadata.publisher,
-                    language: metadata.language,
-                    summary: metadata.summary,
-                    bookScore: score,
-                    classification: Self.classification(for: score)
-                )
-            )
+            var enriched: [DiscoveredBook] = []
+            while let result = await group.next() {
+                guard !Task.isCancelled else {
+                    group.cancelAll()
+                    return enriched
+                }
+                if let result { enriched.append(result) }
+                if let next = iterator.next() {
+                    group.addTask { enrichedDiscoveredBook(next) }
+                }
+            }
+            return enriched
         }
-        return enriched
+    }
+
+    nonisolated private static func enrichedDiscoveredBook(_ item: DiscoveredBook) -> DiscoveredBook? {
+        guard !Task.isCancelled else { return nil }
+        let metadata = Self.metadata(for: item.url, format: item.format)
+        guard metadata.title != nil || metadata.author != nil || metadata.pageCount != nil || metadata.publisher != nil || metadata.language != nil else {
+            return nil
+        }
+
+        let score = Self.bookScore(
+            url: item.url,
+            format: item.format,
+            fileSize: item.fileSize,
+            metadata: metadata
+        )
+
+        return DiscoveredBook(
+            url: item.url,
+            title: metadata.title ?? item.title,
+            format: item.format,
+            sourceFolder: item.sourceFolder,
+            fileSize: item.fileSize,
+            author: metadata.author,
+            pageCount: metadata.pageCount,
+            publisher: metadata.publisher,
+            language: metadata.language,
+            summary: metadata.summary,
+            bookScore: score,
+            classification: Self.classification(for: score)
+        )
     }
 
     private func applyEnrichedDiscovered(_ enriched: [DiscoveredBook]) {
@@ -567,28 +583,53 @@ final class LocalLibraryStore: ObservableObject {
         let booksDirectory = documentsDirectory
         coverRefreshTask?.cancel()
         coverRefreshTask = Task.detached(priority: .utility) {
+            var completed = 0
             var refreshedCount = 0
-            for (index, book) in snapshot.enumerated() {
-                guard !Task.isCancelled else { return }
-
-                let fileURL = booksDirectory.appendingPathComponent(book.storedFileName)
-                let coverName = Self.generateCover(
-                    for: fileURL,
-                    format: book.format,
-                    id: book.id,
-                    coversDirectory: coversDir
-                )
-                if coverName != nil { refreshedCount += 1 }
-
-                let completed = index + 1
-                let nameSnapshot = coverName
-                let bookID = book.id
-                await MainActor.run {
-                    if let nameSnapshot,
-                       let bookIndex = self.books.firstIndex(where: { $0.id == bookID }) {
-                        self.books[bookIndex].coverImageName = nameSnapshot
+            await withTaskGroup(of: (UUID, String?).self) { group in
+                var iterator = snapshot.makeIterator()
+                let workerCount = min(3, snapshot.count)
+                for _ in 0..<workerCount {
+                    if let book = iterator.next() {
+                        group.addTask {
+                            let fileURL = booksDirectory.appendingPathComponent(book.storedFileName)
+                            let coverName = Self.generateCover(
+                                for: fileURL,
+                                format: book.format,
+                                id: book.id,
+                                coversDirectory: coversDir
+                            )
+                            return (book.id, coverName)
+                        }
                     }
-                    self.coverRefreshState = .refreshing(completed: completed, total: snapshot.count)
+                }
+
+                while let (bookID, coverName) = await group.next() {
+                    guard !Task.isCancelled else {
+                        group.cancelAll()
+                        return
+                    }
+                    completed += 1
+                    if coverName != nil { refreshedCount += 1 }
+                    let completedSnapshot = completed
+                    await MainActor.run {
+                        if let coverName,
+                           let bookIndex = self.books.firstIndex(where: { $0.id == bookID }) {
+                            self.books[bookIndex].coverImageName = coverName
+                        }
+                        self.coverRefreshState = .refreshing(completed: completedSnapshot, total: snapshot.count)
+                    }
+                    if let book = iterator.next() {
+                        group.addTask {
+                            let fileURL = booksDirectory.appendingPathComponent(book.storedFileName)
+                            let coverName = Self.generateCover(
+                                for: fileURL,
+                                format: book.format,
+                                id: book.id,
+                                coversDirectory: coversDir
+                            )
+                            return (book.id, coverName)
+                        }
+                    }
                 }
             }
 
@@ -1291,7 +1332,7 @@ final class LocalLibraryStore: ObservableObject {
     nonisolated private static func bestEPUBCoverImageData(from archiveURL: URL) -> Data? {
         let imageEntries = unzipEntryNames(from: archiveURL)
             .filter { $0.range(of: #"\.(jpe?g|png|webp)$"#, options: .regularExpression) != nil }
-            .prefix(180)
+            .prefix(48)
 
         var best: (score: Double, data: Data)?
 
