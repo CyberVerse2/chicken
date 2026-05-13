@@ -43,6 +43,12 @@ Initial packaging target: signed macOS desktop app build suitable for local dist
 - No backend required for the first launch.
 - Bundle identifier: `cyberverse.Chicken`.
 
+## Releases
+
+GitHub Releases are created from semantic version tags such as `v1.0.0`. The release workflow builds Chicken, packages macOS `.zip` and `.dmg` artifacts, and attaches SHA-256 checksums to the release.
+
+See [RELEASE.md](RELEASE.md) for the release checklist, versioning rules, and the signing/notarization requirements for public distribution.
+
 ## Current Fork State
 
 The project folder and Xcode identity have been renamed from Asterion to Chicken. The codebase still contains inherited Asterion product surfaces that need to be replaced during the rebuild.

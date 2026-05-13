@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, for example v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build GitHub Release
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Validate release tag
+        run: |
+          set -euo pipefail
+
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          PROJECT_VERSION="$(awk -F '= ' '/MARKETING_VERSION = / { gsub(/;/, "", $2); print $2; exit }' Chicken.xcodeproj/project.pbxproj)"
+
+          if [[ "$TAG" != v*.*.* ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH, for example v1.0.0."
+            exit 1
+          fi
+
+          if [[ "$PROJECT_VERSION" != "$VERSION" ]]; then
+            echo "Tag $TAG does not match MARKETING_VERSION $PROJECT_VERSION."
+            echo "Update MARKETING_VERSION before tagging the release."
+            exit 1
+          fi
+
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Resolve packages
+        run: xcodebuild -resolvePackageDependencies -project Chicken.xcodeproj -scheme Chicken
+
+      - name: Run unit tests
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project Chicken.xcodeproj \
+            -scheme Chicken \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Archive macOS app
+        run: |
+          set -euo pipefail
+          xcodebuild archive \
+            -project Chicken.xcodeproj \
+            -scheme Chicken \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -archivePath build/Chicken.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            SKIP_INSTALL=NO
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist staging
+
+          APP_PATH="build/Chicken.xcarchive/Products/Applications/Chicken.app"
+          if [[ ! -d "$APP_PATH" ]]; then
+            echo "Expected archive app was not produced at $APP_PATH."
+            exit 1
+          fi
+
+          cp -R "$APP_PATH" staging/
+          ditto -c -k --keepParent "$APP_PATH" "dist/Chicken-${VERSION}-macOS-unsigned.zip"
+          hdiutil create \
+            -volname "Chicken ${VERSION}" \
+            -srcfolder staging \
+            -ov \
+            -format UDZO \
+            "dist/Chicken-${VERSION}-macOS-unsigned.dmg"
+
+          shasum -a 256 dist/* > "dist/Chicken-${VERSION}-checksums.txt"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: Chicken ${{ env.VERSION }}
+          generate_release_notes: true
+          files: |
+            dist/Chicken-${{ env.VERSION }}-macOS-unsigned.zip
+            dist/Chicken-${{ env.VERSION }}-macOS-unsigned.dmg
+            dist/Chicken-${{ env.VERSION }}-checksums.txt
