@@ -11,7 +11,7 @@ git tag v1.0.0
 git push origin v1.0.0
 ```
 
-The tag version must match `MARKETING_VERSION` in `Chicken.xcodeproj/project.pbxproj`. For example, `v1.0.0` requires `MARKETING_VERSION = 1.0.0`.
+The tag version must match `MARKETING_VERSION` in `Chicken.xcodeproj/project.pbxproj`. The workflow normalizes two-part Xcode versions, so `MARKETING_VERSION = 1.0` can be released as `v1.0.0`.
 
 ## Release Artifacts
 

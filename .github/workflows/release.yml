@@ -41,13 +41,18 @@ jobs:
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
           PROJECT_VERSION="$(awk -F '= ' '/MARKETING_VERSION = / { gsub(/;/, "", $2); print $2; exit }' Chicken.xcodeproj/project.pbxproj)"
+          NORMALIZED_PROJECT_VERSION="$PROJECT_VERSION"
+
+          if [[ "$NORMALIZED_PROJECT_VERSION" =~ ^[0-9]+\\.[0-9]+$ ]]; then
+            NORMALIZED_PROJECT_VERSION="${NORMALIZED_PROJECT_VERSION}.0"
+          fi
 
           if [[ "$TAG" != v*.*.* ]]; then
             echo "Release tags must use vMAJOR.MINOR.PATCH, for example v1.0.0."
             exit 1
           fi
 
-          if [[ "$PROJECT_VERSION" != "$VERSION" ]]; then
+          if [[ "$NORMALIZED_PROJECT_VERSION" != "$VERSION" ]]; then
             echo "Tag $TAG does not match MARKETING_VERSION $PROJECT_VERSION."
             echo "Update MARKETING_VERSION before tagging the release."
             exit 1
