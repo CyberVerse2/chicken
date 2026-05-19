@@ -1868,6 +1868,7 @@ private struct PDFReaderBody: NSViewRepresentable {
             view.go(to: selection)
         }
 
+        @MainActor
         func performSeekIfNeeded(_ request: ReaderSeekRequest?) {
             guard let request, lastSeekID != request.id else { return }
             lastSeekID = request.id
@@ -2541,6 +2542,7 @@ private struct EPUBWebReader: NSViewRepresentable {
             }
         }
 
+        @MainActor
         func performSeekIfNeeded(_ request: ReaderSeekRequest?) {
             guard let request, lastSeekID != request.id else { return }
             lastSeekID = request.id
