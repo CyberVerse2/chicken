@@ -164,7 +164,7 @@ struct ReaderView: View {
                         isOnLastPage: bodyState.isOnLastPage(at: chapterIndex),
                         onScrub: { seekRequest = ReaderSeekRequest(progress: $0) }
                     )
-                    .opacity(chromeDimmed && !hasDismissibleReaderChrome ? 0.34 : 1)
+                    .opacity(chromeDimmed && !hasDismissibleReaderChrome ? 0.82 : 1)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -1316,7 +1316,7 @@ private struct ReaderBottomBar: View {
         HStack(spacing: 14) {
             Text("\(Int(round(displayedProgress * 100)))%")
                 .font(.chickenMono(11))
-                .foregroundStyle(palette.faint)
+                .foregroundStyle(palette.muted)
                 .frame(minWidth: 32, alignment: .leading)
                 .contentTransition(.numericText())
                 .animation(reduceMotion ? .none : .timingCurve(0.25, 1, 0.5, 1, duration: 0.28),
@@ -1324,8 +1324,8 @@ private struct ReaderBottomBar: View {
 
             GeometryReader { g in
                 ZStack(alignment: .leading) {
-                    Capsule().fill(palette.surfaceAlt).frame(height: 3)
-                    Capsule().fill(palette.muted)
+                    Capsule().fill(palette.surfaceAlt.opacity(0.95)).frame(height: 3)
+                    Capsule().fill(palette.text.opacity(0.72))
                         .frame(width: max(0, g.size.width * displayedProgress), height: 3)
                     Circle()
                         .fill(palette.text)
@@ -1365,7 +1365,7 @@ private struct ReaderBottomBar: View {
                     } else {
                         Text(pageReadout)
                             .font(.chickenMono(11))
-                            .foregroundStyle(palette.faint)
+                            .foregroundStyle(palette.muted)
                             .transition(.opacity)
                     }
                 }
@@ -1380,7 +1380,7 @@ private struct ReaderBottomBar: View {
                     }
                 }
                 .font(.chickenMono(10))
-                .foregroundStyle(palette.faint.opacity(0.82))
+                .foregroundStyle(palette.muted.opacity(0.9))
             }
         }
         .padding(.horizontal, 24)
