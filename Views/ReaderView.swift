@@ -27,6 +27,12 @@ struct ReaderView: View {
     @State private var readingMode: EPUBReadingMode = .scroll
     @State private var currentLocation: String?
 
+    init(book: Book, onClose: @escaping () -> Void) {
+        self.book = book
+        self.onClose = onClose
+        _chapterIndex = State(initialValue: EPUBLocation.decode(book.lastLocation)?.spineIndex ?? 0)
+    }
+
     private var palette: ReaderPalette { library.readingTheme.palette }
     private var bookHighlights: [Highlight] { library.highlights(for: book) }
     private var chapterHighlights: [Highlight] {
@@ -213,7 +219,7 @@ struct ReaderView: View {
             }
         }
         .onChange(of: book.id) { _, _ in
-            chapterIndex = 0
+            chapterIndex = EPUBLocation.decode(book.lastLocation)?.spineIndex ?? 0
             selection = nil
             currentLocation = nil
             bodyState.readerError = nil
@@ -433,6 +439,28 @@ private struct EPUBLocation: Codable, Hashable {
     static func decode(_ value: String?) -> EPUBLocation? {
         guard let value, let data = value.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(EPUBLocation.self, from: data)
+    }
+}
+
+private struct PDFLocation: Codable, Hashable {
+    let type: String
+    let pageIndex: Int
+    let chapterIndex: Int
+
+    init(pageIndex: Int, chapterIndex: Int) {
+        self.type = "pdf"
+        self.pageIndex = pageIndex
+        self.chapterIndex = chapterIndex
+    }
+
+    var encoded: String? {
+        guard let data = try? JSONEncoder().encode(self) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    static func decode(_ value: String?) -> PDFLocation? {
+        guard let value, let data = value.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(PDFLocation.self, from: data)
     }
 }
 
@@ -1568,6 +1596,7 @@ private struct PDFReaderBody: NSViewRepresentable {
         private var searchMatches: [PDFSelection] = []
         private var searchIndex = -1
         private var derivedChapterIndexFromPageTurn: Int?
+        private var restoredInitialLocation = false
 
         init(_ parent: PDFReaderBody) {
             self.parent = parent
@@ -1605,6 +1634,7 @@ private struct PDFReaderBody: NSViewRepresentable {
 
             parent.bodyState.readerError = nil
             refreshOutline(document: document)
+            restoreInitialLocationIfNeeded(document: document)
         }
 
         func refreshOutline() {
@@ -1667,6 +1697,30 @@ private struct PDFReaderBody: NSViewRepresentable {
             }
         }
 
+        private func restoreInitialLocationIfNeeded(document doc: PDFDocument) {
+            guard !restoredInitialLocation, let view, doc.pageCount > 0 else { return }
+            restoredInitialLocation = true
+
+            let pageIndex: Int
+            if let location = PDFLocation.decode(parent.book.lastLocation),
+               doc.page(at: location.pageIndex) != nil {
+                pageIndex = location.pageIndex
+            } else if parent.book.progress > 0 {
+                pageIndex = max(0, min(doc.pageCount - 1, Int(ceil(parent.book.progress * Double(doc.pageCount))) - 1))
+            } else {
+                return
+            }
+
+            guard let page = doc.page(at: pageIndex) else { return }
+            let nearest = pageMap.lastIndex(where: { $0.0 <= pageIndex }) ?? 0
+            derivedChapterIndexFromPageTurn = nearest
+            parent.chapterIndex = nearest
+            updatePageState(pageIndex: pageIndex, document: doc)
+            if view.currentPage != page {
+                view.go(to: page)
+            }
+        }
+
         private func pageRange(forChapterAt index: Int, document doc: PDFDocument) -> Range<Int> {
             let start = pageMap.indices.contains(index) ? pageMap[index].0 : 0
             let end = pageMap.indices.contains(index + 1) ? pageMap[index + 1].0 : doc.pageCount
@@ -1684,7 +1738,8 @@ private struct PDFReaderBody: NSViewRepresentable {
                 }
                 self.updatePageState(pageIndex: pageIndex, document: doc)
                 let progress = doc.pageCount > 0 ? Double(pageIndex + 1) / Double(doc.pageCount) : 0
-                self.parent.library.updateProgress(for: self.parent.book, progress: progress)
+                let location = PDFLocation(pageIndex: pageIndex, chapterIndex: nearest).encoded
+                self.parent.library.updateProgress(for: self.parent.book, progress: progress, location: location)
             }
         }
 
