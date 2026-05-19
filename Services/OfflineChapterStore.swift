@@ -148,6 +148,7 @@ final class LocalLibraryStore: ObservableObject {
     @Published private(set) var importState: ImportState = .idle
     @Published private(set) var highlights: [Highlight] = []
     @Published private(set) var bookmarks: [Bookmark] = []
+    @Published private(set) var readerPreferences: [UUID: ReaderPreferences] = [:]
     @Published private(set) var coverRefreshState: CoverRefreshState = .idle
     @Published var readingTheme: ReadingTheme = .paper {
         didSet { UserDefaults.standard.set(readingTheme.rawValue, forKey: Self.readingThemePreferenceKey) }
@@ -177,6 +178,7 @@ final class LocalLibraryStore: ObservableObject {
     private var scanTask: Task<Void, Never>?
     private var saveHighlightsTask: Task<Void, Never>?
     private var saveBookmarksTask: Task<Void, Never>?
+    private var saveReaderPreferencesTask: Task<Void, Never>?
     private var derivedDataTask: Task<Void, Never>?
     private var coverRefreshTask: Task<Void, Never>?
     private var saveReadingLogTask: Task<Void, Never>?
@@ -201,8 +203,52 @@ final class LocalLibraryStore: ObservableObject {
         backfillFinishedAt()
         loadHighlights()
         loadBookmarks()
+        loadReaderPreferences()
         loadReadingLog()
         scheduleDerivedDataRefresh()
+    }
+
+    // MARK: Reader preferences
+
+    func readerPreferences(for book: Book) -> ReaderPreferences {
+        readerPreferences[book.id] ?? {
+            var preferences = ReaderPreferences.default
+            preferences.theme = readingTheme
+            return preferences
+        }()
+    }
+
+    func updateReaderPreferences(for book: Book, _ preferences: ReaderPreferences) {
+        guard readerPreferences[book.id] != preferences else { return }
+        readerPreferences[book.id] = preferences
+        saveReaderPreferences()
+    }
+
+    private func loadReaderPreferences() {
+        guard let data = try? Data(contentsOf: readerPreferencesURL),
+              let decoded = try? decoder.decode([UUID: ReaderPreferences].self, from: data) else { return }
+        readerPreferences = decoded
+    }
+
+    private func saveReaderPreferences() {
+        let snapshot = readerPreferences
+        let url = readerPreferencesURL
+        saveReaderPreferencesTask?.cancel()
+        saveReaderPreferencesTask = Task {
+            try? await Task.sleep(for: .milliseconds(200))
+            await Self.writeReaderPreferences(snapshot, to: url)
+        }
+    }
+
+    private static func writeReaderPreferences(_ preferences: [UUID: ReaderPreferences], to url: URL) async {
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            let data = try encoder.encode(preferences)
+            try data.write(to: url, options: [.atomic])
+        } catch {
+            debugPrint("[ChickenLibrary] Reader preferences save failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: Highlights
@@ -780,6 +826,10 @@ final class LocalLibraryStore: ObservableObject {
 
     private var readingLogURL: URL {
         applicationSupportDirectory.appendingPathComponent("reading-log.json")
+    }
+
+    private var readerPreferencesURL: URL {
+        applicationSupportDirectory.appendingPathComponent("reader-preferences.json")
     }
 
     func updateProgress(for book: Book, progress: Double, location: String? = nil) {

@@ -151,3 +151,23 @@ struct Bookmark: Identifiable, Codable, Hashable {
         self.createdAt = createdAt
     }
 }
+
+// MARK: - Reader preferences
+
+struct ReaderPreferences: Codable, Hashable {
+    var theme: ReadingTheme
+    var fontSize: Double
+    var lineHeight: Double
+    var columnWidth: Double
+    var readingMode: String
+    var zenMode: Bool
+
+    static let `default` = ReaderPreferences(
+        theme: .paper,
+        fontSize: 17,
+        lineHeight: 1.78,
+        columnWidth: 620,
+        readingMode: "scroll",
+        zenMode: false
+    )
+}

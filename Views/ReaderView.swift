@@ -26,6 +26,7 @@ struct ReaderView: View {
     @State private var isZenMode = false
     @State private var readingMode: EPUBReadingMode = .scroll
     @State private var currentLocation: String?
+    @State private var seekRequest: ReaderSeekRequest?
 
     init(book: Book, onClose: @escaping () -> Void) {
         self.book = book
@@ -41,30 +42,33 @@ struct ReaderView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ReaderTopBar(
-                palette: palette,
-                book: book,
-                chapterTitle: bodyState.chapterTitle(at: chapterIndex),
-                chapterCount: bodyState.chapters.count,
-                chapterIndex: chapterIndex,
-                showChapters: $showChapters,
-                showHighlights: $showHighlights,
-                showTypography: $showTypography,
-                showSearch: $showSearch,
-                isZenMode: $isZenMode,
-                theme: $library.readingTheme,
-                isBookmarked: library.hasBookmark(book: book, chapterIndex: chapterIndex),
-                onToggleBookmark: {
-                    _ = library.toggleBookmark(
-                        book: book,
-                        chapterIndex: chapterIndex,
-                        title: bodyState.chapterTitle(at: chapterIndex),
-                        location: currentLocation ?? book.lastLocation
-                    )
-                },
-                onClose: onClose
-            )
-            .opacity(chromeDimmed && !hasDismissibleReaderChrome ? 0.34 : 1)
+            if !isZenMode {
+                ReaderTopBar(
+                    palette: palette,
+                    book: book,
+                    chapterTitle: bodyState.chapterTitle(at: chapterIndex),
+                    chapterCount: bodyState.chapters.count,
+                    chapterIndex: chapterIndex,
+                    showChapters: $showChapters,
+                    showHighlights: $showHighlights,
+                    showTypography: $showTypography,
+                    showSearch: $showSearch,
+                    isZenMode: $isZenMode,
+                    theme: $library.readingTheme,
+                    isBookmarked: library.hasBookmark(book: book, chapterIndex: chapterIndex),
+                    onToggleBookmark: {
+                        _ = library.toggleBookmark(
+                            book: book,
+                            chapterIndex: chapterIndex,
+                            title: bodyState.chapterTitle(at: chapterIndex),
+                            location: currentLocation ?? book.lastLocation
+                        )
+                    },
+                    onClose: onClose
+                )
+                .opacity(chromeDimmed && !hasDismissibleReaderChrome ? 0.34 : 1)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
             ZStack(alignment: .bottom) {
                 HStack(spacing: 0) {
@@ -91,6 +95,7 @@ struct ReaderView: View {
                             columnWidth: columnWidth,
                             readingMode: readingMode,
                             searchRequest: searchRequest,
+                            seekRequest: seekRequest,
                             onLocationChange: { currentLocation = $0 }
                         )
 
@@ -156,10 +161,10 @@ struct ReaderView: View {
                         pageReadout: bodyState.pageReadout(at: chapterIndex),
                         progressReadout: bodyState.progressReadout(at: chapterIndex),
                         timeReadout: bodyState.timeReadout(at: chapterIndex),
-                        isOnLastPage: bodyState.isOnLastPage(at: chapterIndex)
+                        isOnLastPage: bodyState.isOnLastPage(at: chapterIndex),
+                        onScrub: { seekRequest = ReaderSeekRequest(progress: $0) }
                     )
                     .opacity(chromeDimmed && !hasDismissibleReaderChrome ? 0.34 : 1)
-                    .allowsHitTesting(false)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
@@ -167,6 +172,13 @@ struct ReaderView: View {
         }
         .onHover { hovering in
             if hovering { wakeChromeBriefly() }
+        }
+        .onExitCommand {
+            if isZenMode {
+                isZenMode = false
+            } else {
+                onClose()
+            }
         }
         .background(palette.background.ignoresSafeArea())
         .animation(.easeInOut(duration: 0.4), value: library.readingTheme)
@@ -196,6 +208,7 @@ struct ReaderView: View {
             }
         }
         .onAppear {
+            applySavedReaderPreferences()
             library.markOpened(book)
             library.beginReadingSession()
             wakeChromeBriefly()
@@ -212,14 +225,17 @@ struct ReaderView: View {
             currentLocation = nil
         }
         .onChange(of: isZenMode) { _, isZen in
+            saveReaderPreferences()
             if isZen {
                 selection = nil
                 showHighlights = false
                 showSearch = false
+                showTypography = false
             }
         }
         .onChange(of: book.id) { _, _ in
             chapterIndex = EPUBLocation.decode(book.lastLocation)?.spineIndex ?? 0
+            applySavedReaderPreferences()
             selection = nil
             currentLocation = nil
             bodyState.readerError = nil
@@ -227,6 +243,11 @@ struct ReaderView: View {
             showSearch = false
             isZenMode = false
         }
+        .onChange(of: fontSize) { _, _ in saveReaderPreferences() }
+        .onChange(of: lineHeight) { _, _ in saveReaderPreferences() }
+        .onChange(of: columnWidth) { _, _ in saveReaderPreferences() }
+        .onChange(of: readingMode) { _, _ in saveReaderPreferences() }
+        .onChange(of: library.readingTheme) { _, _ in saveReaderPreferences() }
     }
 
     private var hasDismissibleReaderChrome: Bool {
@@ -260,6 +281,30 @@ struct ReaderView: View {
                 chromeDimmed = true
             }
         }
+    }
+
+    private func applySavedReaderPreferences() {
+        let preferences = library.readerPreferences(for: book)
+        fontSize = CGFloat(preferences.fontSize)
+        lineHeight = CGFloat(preferences.lineHeight)
+        columnWidth = CGFloat(preferences.columnWidth)
+        readingMode = EPUBReadingMode(rawValue: preferences.readingMode) ?? .scroll
+        isZenMode = preferences.zenMode
+        library.readingTheme = preferences.theme
+    }
+
+    private func saveReaderPreferences() {
+        library.updateReaderPreferences(
+            for: book,
+            ReaderPreferences(
+                theme: library.readingTheme,
+                fontSize: Double(fontSize),
+                lineHeight: Double(lineHeight),
+                columnWidth: Double(columnWidth),
+                readingMode: readingMode.rawValue,
+                zenMode: isZenMode
+            )
+        )
     }
 }
 
@@ -468,6 +513,11 @@ private struct ReaderSearchRequest: Equatable {
     let id = UUID()
     let query: String
     let backwards: Bool
+}
+
+private struct ReaderSeekRequest: Equatable {
+    let id = UUID()
+    let progress: Double
 }
 
 // MARK: - Top bar
@@ -1253,29 +1303,54 @@ private struct ReaderBottomBar: View {
     let progressReadout: String
     let timeReadout: String
     let isOnLastPage: Bool
+    let onScrub: (Double) -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var dragProgress: Double?
+
+    private var displayedProgress: Double {
+        min(1, max(0, dragProgress ?? progress))
+    }
 
     var body: some View {
         HStack(spacing: 14) {
-            Text("\(Int(round(progress * 100)))%")
+            Text("\(Int(round(displayedProgress * 100)))%")
                 .font(.chickenMono(11))
                 .foregroundStyle(palette.faint)
                 .frame(minWidth: 32, alignment: .leading)
                 .contentTransition(.numericText())
                 .animation(reduceMotion ? .none : .timingCurve(0.25, 1, 0.5, 1, duration: 0.28),
-                           value: progress)
+                           value: displayedProgress)
 
-            ZStack(alignment: .leading) {
-                Capsule().fill(palette.surfaceAlt).frame(height: 2)
-                GeometryReader { g in
+            GeometryReader { g in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(palette.surfaceAlt).frame(height: 3)
                     Capsule().fill(palette.muted)
-                        .frame(width: max(0, g.size.width * progress), height: 2)
-                        .animation(reduceMotion ? .none : .timingCurve(0.25, 1, 0.5, 1, duration: 0.28),
-                                   value: progress)
+                        .frame(width: max(0, g.size.width * displayedProgress), height: 3)
+                    Circle()
+                        .fill(palette.text)
+                        .frame(width: 10, height: 10)
+                        .offset(x: max(0, min(g.size.width - 10, g.size.width * displayedProgress - 5)))
+                        .opacity(dragProgress == nil ? 0.6 : 1)
                 }
-                .frame(height: 2)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let next = min(1, max(0, value.location.x / max(g.size.width, 1)))
+                            dragProgress = next
+                            onScrub(next)
+                        }
+                        .onEnded { value in
+                            let next = min(1, max(0, value.location.x / max(g.size.width, 1)))
+                            dragProgress = nil
+                            onScrub(next)
+                        }
+                )
             }
+            .frame(height: 24)
+            .animation(reduceMotion ? .none : .timingCurve(0.25, 1, 0.5, 1, duration: 0.28),
+                       value: displayedProgress)
 
             VStack(alignment: .trailing, spacing: 3) {
                 // The arrival moment: at the final page the readout switches to a
@@ -1334,6 +1409,7 @@ private struct ReaderBody: View {
     let columnWidth: CGFloat
     let readingMode: EPUBReadingMode
     let searchRequest: ReaderSearchRequest?
+    let seekRequest: ReaderSeekRequest?
     let onLocationChange: (String?) -> Void
 
     var body: some View {
@@ -1349,7 +1425,8 @@ private struct ReaderBody: View {
                         chapterIndex: $chapterIndex,
                         bodyState: $bodyState,
                         readingMode: readingMode,
-                        searchRequest: searchRequest
+                        searchRequest: searchRequest,
+                        seekRequest: seekRequest
                     )
                 case .text, .document, .unknown:
                     TextReaderBody(
@@ -1361,7 +1438,8 @@ private struct ReaderBody: View {
                         highlights: highlights,
                         fontSize: fontSize,
                         lineHeight: lineHeight,
-                        columnWidth: columnWidth
+                        columnWidth: columnWidth,
+                        seekRequest: seekRequest
                     )
                 case .epub:
                     EPUBReaderBody(
@@ -1374,6 +1452,7 @@ private struct ReaderBody: View {
                         columnWidth: columnWidth,
                         readingMode: readingMode,
                         searchRequest: searchRequest,
+                        seekRequest: seekRequest,
                         onLocationChange: onLocationChange
                     )
                 }
@@ -1418,6 +1497,7 @@ private struct PDFReaderBody: NSViewRepresentable {
     @Binding var bodyState: ReaderBodyState
     let readingMode: EPUBReadingMode
     let searchRequest: ReaderSearchRequest?
+    let seekRequest: ReaderSeekRequest?
     @EnvironmentObject private var library: LocalLibraryStore
 
     func makeNSView(context: Context) -> PDFView {
@@ -1448,6 +1528,7 @@ private struct PDFReaderBody: NSViewRepresentable {
         }
         context.coordinator.go(toIndex: chapterIndex)
         context.coordinator.performSearchIfNeeded(searchRequest)
+        context.coordinator.performSeekIfNeeded(seekRequest)
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -1595,6 +1676,7 @@ private struct PDFReaderBody: NSViewRepresentable {
         private var lastSearchQuery = ""
         private var searchMatches: [PDFSelection] = []
         private var searchIndex = -1
+        private var lastSeekID: UUID?
         private var derivedChapterIndexFromPageTurn: Int?
         private var restoredInitialLocation = false
 
@@ -1785,6 +1867,22 @@ private struct PDFReaderBody: NSViewRepresentable {
             view.setCurrentSelection(selection, animate: true)
             view.go(to: selection)
         }
+
+        func performSeekIfNeeded(_ request: ReaderSeekRequest?) {
+            guard let request, lastSeekID != request.id else { return }
+            lastSeekID = request.id
+            guard let view, let doc = view.document, doc.pageCount > 0 else { return }
+            let pageIndex = max(0, min(doc.pageCount - 1, Int(round(request.progress * Double(doc.pageCount - 1)))))
+            guard let page = doc.page(at: pageIndex) else { return }
+            view.go(to: page)
+            let nearest = pageMap.lastIndex(where: { $0.0 <= pageIndex }) ?? 0
+            derivedChapterIndexFromPageTurn = nearest
+            parent.chapterIndex = nearest
+            updatePageState(pageIndex: pageIndex, document: doc)
+            let progress = doc.pageCount > 0 ? Double(pageIndex + 1) / Double(doc.pageCount) : 0
+            let location = PDFLocation(pageIndex: pageIndex, chapterIndex: nearest).encoded
+            parent.library.updateProgress(for: parent.book, progress: progress, location: location)
+        }
     }
 }
 
@@ -1801,6 +1899,7 @@ private struct EPUBReaderBody: View {
     let columnWidth: CGFloat
     let readingMode: EPUBReadingMode
     let searchRequest: ReaderSearchRequest?
+    let seekRequest: ReaderSeekRequest?
     let onLocationChange: (String?) -> Void
 
     var body: some View {
@@ -1815,6 +1914,7 @@ private struct EPUBReaderBody: View {
             columnWidth: columnWidth,
             readingMode: readingMode,
             searchRequest: searchRequest,
+            seekRequest: seekRequest,
             onProgress: { progress, location in
                 onLocationChange(location)
                 library.updateProgress(for: book, progress: progress, location: location)
@@ -1835,6 +1935,7 @@ private struct EPUBWebReader: NSViewRepresentable {
     let columnWidth: CGFloat
     let readingMode: EPUBReadingMode
     let searchRequest: ReaderSearchRequest?
+    let seekRequest: ReaderSeekRequest?
     let onProgress: (Double, String?) -> Void
 
     func makeNSView(context: Context) -> WKWebView {
@@ -1854,6 +1955,7 @@ private struct EPUBWebReader: NSViewRepresentable {
         context.coordinator.applyTheme()
         context.coordinator.go(to: chapterIndex)
         context.coordinator.performSearchIfNeeded(searchRequest)
+        context.coordinator.performSeekIfNeeded(seekRequest)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -1873,6 +1975,7 @@ private struct EPUBWebReader: NSViewRepresentable {
         private var hasLoadedCombinedDocument = false
         private var restoredInitialLocation = false
         private var lastSearchID: UUID?
+        private var lastSeekID: UUID?
         private var isTornDown = false
         private var loadTask: Task<Void, Never>?
         private var lastAppliedThemeKey: String?
@@ -1973,7 +2076,7 @@ private struct EPUBWebReader: NSViewRepresentable {
                         self.restoredInitialLocation = true
                         self.currentChapterIndex = location.spineIndex
                         self.parent.chapterIndex = location.spineIndex
-                        self.scroll(to: location)
+                        self.scroll(to: location, retryCount: 4)
                     } else {
                         self.go(to: currentChapterIndex, force: true)
                     }
@@ -2150,6 +2253,18 @@ private struct EPUBWebReader: NSViewRepresentable {
                     } else {
                       const target = section.offsetTop + Math.max(0, section.scrollHeight - window.innerHeight * 0.75) * safeProgress;
                       window.scrollTo({ top: target, behavior: 'auto' });
+                    }
+                  };
+                  window.__chickenScrollToProgress = (progress, behavior = 'auto') => {
+                    const safeProgress = Math.max(0, Math.min(1, progress || 0));
+                    if (isHorizontalReader) {
+                      const { pageUnit, pageCount } = __chickenPageMetrics();
+                      __chickenScrollToPage(Math.round(safeProgress * Math.max(0, pageCount - 1)), behavior);
+                    } else {
+                      const doc = document.documentElement;
+                      const body = document.body;
+                      const length = Math.max(0, Math.max(doc.scrollHeight || 0, body.scrollHeight || 0) - window.innerHeight);
+                      window.scrollTo({ top: length * safeProgress, behavior });
                     }
                   };
                   var lastMessageAt = 0;
@@ -2426,6 +2541,32 @@ private struct EPUBWebReader: NSViewRepresentable {
             }
         }
 
+        func performSeekIfNeeded(_ request: ReaderSeekRequest?) {
+            guard let request, lastSeekID != request.id else { return }
+            lastSeekID = request.id
+            guard let webView else { return }
+            let progress = max(0, min(1, request.progress))
+            let script = """
+            if (window.__chickenScrollToProgress) {
+              window.__chickenScrollToProgress(\(progress), 'auto');
+              if (window.__chickenProgressListener) window.__chickenProgressListener();
+              true;
+            } else {
+              false;
+            }
+            """
+            webView.evaluateJavaScript(script) { [weak self] value, _ in
+                guard let self, !self.isTornDown else { return }
+                if (value as? Bool) != true {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                        guard let self, !self.isTornDown else { return }
+                        self.lastSeekID = nil
+                        self.performSeekIfNeeded(request)
+                    }
+                }
+            }
+        }
+
         private func restoreIndex(for publication: EPUBPublication?) -> Int {
             guard let publication else { return 0 }
             guard let location = EPUBLocation.decode(parent.book.lastLocation), locationIsValid(location) else {
@@ -2439,7 +2580,7 @@ private struct EPUBWebReader: NSViewRepresentable {
             return publication.spine[location.spineIndex].relativePath == location.href
         }
 
-        private func scroll(to location: EPUBLocation) {
+        private func scroll(to location: EPUBLocation, retryCount: Int = 0) {
             guard let webView else { return }
             let progress = max(0, min(1, location.progression))
             // Prefer page-number restore when the saved location has one. The
@@ -2461,7 +2602,14 @@ private struct EPUBWebReader: NSViewRepresentable {
             } else {
                 script = "window.__chickenScrollToLocation ? window.__chickenScrollToLocation(\(location.spineIndex), \(progress)) : document.getElementById('chapter-\(location.spineIndex)')?.scrollIntoView({ block: 'start' });"
             }
-            webView.evaluateJavaScript(script, completionHandler: nil)
+            webView.evaluateJavaScript(script) { [weak self, location] _, _ in
+                guard let self, !self.isTornDown else { return }
+                webView.evaluateJavaScript("window.__chickenProgressListener ? (window.__chickenProgressListener(), true) : false", completionHandler: nil)
+                guard retryCount > 0 else { return }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+                    self?.scroll(to: location, retryCount: retryCount - 1)
+                }
+            }
         }
 
         private static func javascriptString(_ value: String) -> String {
@@ -3152,6 +3300,7 @@ private struct TextReaderBody: View {
     let fontSize: CGFloat
     let lineHeight: CGFloat
     let columnWidth: CGFloat
+    let seekRequest: ReaderSeekRequest?
 
     @EnvironmentObject private var library: LocalLibraryStore
     @State private var content: String = ""
