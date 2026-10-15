@@ -12,6 +12,7 @@ struct ReaderLoader: View {
             if let book = library.book(id: bookID) {
                 ReaderView(book: book, library: library)
                     .id(bookID)
+                    .readingActivity(for: book, library: library)
             } else {
                 ContentUnavailableView(
                     "Book Unavailable",
@@ -140,11 +141,13 @@ struct ReaderView: View {
             case "typography": showTypography = true
             case "search": showSearch = true
             case "contents": showChapters = true
+            case "readaloud": model.readAloud.start()
             default: break
             }
         }
         #endif
         .onDisappear {
+            model.readAloud.stop()
             model.engine?.captureLocation()
             model.savePreferences()
             library.readerDidDisappear()
@@ -295,6 +298,14 @@ struct ReaderView: View {
                             HighlightPicker(model: model)
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
+                        if model.readAloud.state != .idle {
+                            ReadAloudBar(
+                                controller: model.readAloud,
+                                chapter: model.chapters.isEmpty ? book.title : model.chapterTitle,
+                                compact: isCompact
+                            )
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
                         if chromeVisible && model.error == nil {
                             ReaderProgressBar(model: model, compact: isCompact)
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -304,6 +315,7 @@ struct ReaderView: View {
                 .padding(.horizontal, isCompact ? 12 : 24)
                 .padding(.bottom, isCompact ? 4 : 14)
                 .animation(.smooth(duration: 0.25), value: model.selection)
+                .animation(.smooth(duration: 0.25), value: model.readAloud.state)
             }
     }
 
@@ -435,6 +447,15 @@ struct ReaderView: View {
                 }
                 Toggle(isOn: $model.isZen) {
                     Label("Zen Mode", systemImage: "rectangle.compress.vertical")
+                }
+                Divider()
+                if model.readAloud.state == .idle {
+                    Button("Read Aloud", systemImage: "speaker.wave.2") { model.readAloud.start() }
+                        .keyboardShortcut("r", modifiers: [.command, .option])
+                        .disabled(model.error != nil)
+                } else {
+                    Button("Stop Reading Aloud", systemImage: "speaker.slash") { model.readAloud.stop() }
+                        .keyboardShortcut("r", modifiers: [.command, .option])
                 }
             } label: {
                 Label("More", systemImage: "ellipsis")

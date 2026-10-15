@@ -104,6 +104,10 @@ struct EPUBStyle: Equatable {
         }
         mark.chicken-hl { border-radius: 2px; padding: 0 1px; }
         ::selection { background: rgba(189, 153, 87, 0.36); }
+        .chicken-speaking {
+          background: rgba(189, 153, 87, 0.13) !important; border-radius: 3px;
+          box-shadow: 0 0 0 0.3em rgba(189, 153, 87, 0.13); -webkit-box-decoration-break: clone;
+        }
         """
     }
 

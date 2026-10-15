@@ -4,7 +4,7 @@ import SwiftUI
 
 @main
 struct ChickenApp: App {
-    @State private var library = LibraryStore()
+    @State private var library = LibraryStore.shared
     @State private var router = AppRouter.shared
     @Environment(\.scenePhase) private var scenePhase
 
@@ -44,7 +44,12 @@ struct ChickenApp: App {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active: library.appDidBecomeActive()
-            case .background, .inactive: library.appDidResignActive()
+            case .background, .inactive:
+                library.appDidResignActive()
+                #if os(iOS)
+                // Today's minutes were just counted; the island shows them.
+                ReadingActivityController.shared.refresh()
+                #endif
             @unknown default: break
             }
         }
@@ -70,6 +75,8 @@ struct ChickenApp: App {
                 .readingTheme(library.preferences.theme)
                 .frame(width: 540, height: 620)
         }
+
+        MenuBarReading(library: library, router: router)
         #endif
     }
 }
@@ -124,6 +131,7 @@ struct ChickenCommands: Commands {
     let library: LibraryStore
     let router: AppRouter
     @Environment(\.openWindow) private var openWindow
+    @AppStorage(MenuBarReading.visibilityKey) private var showsMenuBarItem = true
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -147,6 +155,10 @@ struct ChickenCommands: Commands {
                 }
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
+
+            Divider()
+
+            Toggle("Show in Menu Bar", isOn: $showsMenuBarItem)
 
             Divider()
 

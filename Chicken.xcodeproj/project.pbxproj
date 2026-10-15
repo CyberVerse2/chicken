@@ -308,6 +308,7 @@
 				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Config/Chicken-iOS-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Chicken;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
+				"INFOPLIST_KEY_NSSupportsLiveActivities[sdk=iphone*]" = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -350,6 +351,7 @@
 				"INFOPLIST_FILE[sdk=iphonesimulator*]" = "Config/Chicken-iOS-Info.plist";
 				INFOPLIST_KEY_CFBundleDisplayName = Chicken;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.books";
+				"INFOPLIST_KEY_NSSupportsLiveActivities[sdk=iphone*]" = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

@@ -24,6 +24,7 @@ struct LibraryRootView: View {
     @Environment(\.openWindow) private var openWindow
     #endif
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
+    @Query private var highlights: [Highlight]
 
     @State private var tab: AppTab = LibraryRootView.initialTab
     /// Covers, the reader, and the details sheet share this so books zoom
@@ -102,8 +103,23 @@ struct LibraryRootView: View {
         }
         .overlay(alignment: .bottom) { ActivityToast() }
         .onOpenURL(perform: handle)
-        .onChange(of: router.pendingDestination, initial: true) { _, destination in
-            guard let destination else { return }
+        .spotlightIndexing(library: library, bookCount: books.count, highlightCount: highlights.count) { target in
+            switch target {
+            case .book(let id):
+                route(to: .book(id))
+            case .highlight(let id):
+                // Open the book at the highlighted passage.
+                guard let highlight = highlights.first(where: { $0.id == id }), let book = highlight.book else { return }
+                if let location = highlight.location { book.lastLocation = location }
+                library.save()
+                route(to: .book(book.id))
+            }
+        }
+        .onChange(of: router.pendingDestination, initial: true) {
+            // Read the router, not the value handed in: at launch several
+            // copies of this view can see the same destination before the
+            // first one clears it, and each would open its own window.
+            guard let destination = router.pendingDestination else { return }
             router.pendingDestination = nil
             route(to: destination)
         }

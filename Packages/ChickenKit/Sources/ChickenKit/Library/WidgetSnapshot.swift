@@ -26,12 +26,49 @@ public struct WidgetSnapshot: Codable, Sendable, Hashable {
     public let secondsToday: Int
     public let dailyGoalMinutes: Int
     public let theme: String
+    /// Seconds read on each of the last seven days, oldest first, today last.
+    /// Optional so snapshots written by older builds still decode.
+    public let lastSevenDays: [Int]?
+    /// Books finished this calendar year, and the year's goal.
+    public let finishedThisYear: Int?
+    public let annualGoal: Int?
+    /// The chapter you're in, when known.
+    public let chapter: String?
+    /// The day the snapshot was written, so a widget showing it the next
+    /// morning knows "today" has started over.
+    public let day: Date?
 
-    public init(currentBook: CurrentBook?, secondsToday: Int, dailyGoalMinutes: Int, theme: String) {
+    public init(
+        currentBook: CurrentBook?, secondsToday: Int, dailyGoalMinutes: Int, theme: String,
+        lastSevenDays: [Int]? = nil, finishedThisYear: Int? = nil, annualGoal: Int? = nil, chapter: String? = nil,
+        day: Date? = nil
+    ) {
         self.currentBook = currentBook
         self.secondsToday = secondsToday
         self.dailyGoalMinutes = dailyGoalMinutes
         self.theme = theme
+        self.lastSevenDays = lastSevenDays
+        self.finishedThisYear = finishedThisYear
+        self.annualGoal = annualGoal
+        self.chapter = chapter
+        self.day = day
+    }
+
+    /// Seconds read on each of the seven days ending on `date`, oldest
+    /// first, with today's minutes zeroed when the snapshot is from an
+    /// earlier day.
+    public func week(endingOn date: Date, calendar: Calendar = .current) -> [Int] {
+        let days = lastSevenDays ?? Array(repeating: 0, count: 6) + [secondsToday]
+        guard let written = day else { return days }
+        let shift = calendar.dateComponents([.day], from: calendar.startOfDay(for: written), to: calendar.startOfDay(for: date)).day ?? 0
+        guard shift > 0 else { return days }
+        return Array((days + Array(repeating: 0, count: min(shift, 7))).suffix(7))
+    }
+
+    /// Today's seconds, or zero when the snapshot is from an earlier day.
+    public func secondsToday(on date: Date, calendar: Calendar = .current) -> Int {
+        guard let written = day else { return secondsToday }
+        return calendar.isDate(written, inSameDayAs: date) ? secondsToday : 0
     }
 
     public static let appGroupIdentifier = "group.cyberverse.Chicken"

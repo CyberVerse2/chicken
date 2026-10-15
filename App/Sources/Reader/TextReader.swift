@@ -263,6 +263,64 @@ struct TextReader: PlatformViewRepresentable {
         func captureLocation() {
             report(force: true)
         }
+
+        // MARK: Reading aloud
+
+        private var displayedText: NSString {
+            #if os(macOS)
+            (textView?.string ?? "") as NSString
+            #else
+            (textView?.text ?? "") as NSString
+            #endif
+        }
+
+        /// The first character showing at the top of the view.
+        private var firstVisibleCharacter: Int {
+            guard let textView else { return 0 }
+            #if os(macOS)
+            guard let scrollView else { return 0 }
+            let point = NSPoint(x: textView.textContainerInset.width + 12, y: scrollView.contentView.bounds.minY + 12)
+            return textView.characterIndexForInsertion(at: point)
+            #else
+            let point = CGPoint(x: textView.textContainerInset.left + 12, y: textView.contentOffset.y + textView.adjustedContentInset.top + 12)
+            guard let position = textView.closestPosition(to: point) else { return 0 }
+            return textView.offset(from: textView.beginningOfDocument, to: position)
+            #endif
+        }
+
+        /// Paragraphs, from the one on screen. A passage's id is its range.
+        func readAloudPassages(after: String?) async -> [SpokenPassage] {
+            let text = displayedText
+            guard text.length > 0 else { return [] }
+            var start: Int
+            if let after, let range = Self.range(from: after) {
+                start = NSMaxRange(range)
+            } else {
+                start = text.paragraphRange(for: NSRange(location: min(firstVisibleCharacter, text.length - 1), length: 0)).location
+            }
+            var passages: [SpokenPassage] = []
+            while start < text.length && passages.count < 30 {
+                let range = text.paragraphRange(for: NSRange(location: start, length: 0))
+                let paragraph = text.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !paragraph.isEmpty {
+                    passages.append(SpokenPassage(id: "\(range.location):\(range.length)", text: paragraph))
+                }
+                start = NSMaxRange(range)
+            }
+            return passages
+        }
+
+        func revealPassage(_ id: String) {
+            guard let textView, let range = Self.range(from: id), NSMaxRange(range) <= displayedText.length else { return }
+            textView.scrollRangeToVisible(range)
+        }
+
+        func endReadingAloud() {}
+
+        private static func range(from id: String) -> NSRange? {
+            let parts = id.split(separator: ":").compactMap { Int($0) }
+            return parts.count == 2 ? NSRange(location: parts[0], length: parts[1]) : nil
+        }
     }
 }
 

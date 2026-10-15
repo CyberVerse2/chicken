@@ -248,6 +248,38 @@ struct PDFReader: PlatformViewRepresentable {
             direction > 0 ? view?.goToNextPage(nil) : view?.goToPreviousPage(nil)
         }
 
+        /// A page at a time, from the page on screen. Lines are rejoined
+        /// and end-of-line hyphens mended so the voice reads sentences.
+        func readAloudPassages(after: String?) async -> [SpokenPassage] {
+            guard let view, let document = view.document, document.pageCount > 0 else { return [] }
+            let start: Int
+            if let after, let index = Int(after) {
+                start = index + 1
+            } else {
+                start = view.currentPage.map { document.index(for: $0) } ?? 0
+            }
+            var passages: [SpokenPassage] = []
+            var index = start
+            while index < document.pageCount && passages.count < 3 {
+                if let raw = document.page(at: index)?.string {
+                    let text = raw
+                        .replacingOccurrences(of: "-\n", with: "")
+                        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !text.isEmpty { passages.append(SpokenPassage(id: String(index), text: text)) }
+                }
+                index += 1
+            }
+            return passages
+        }
+
+        func revealPassage(_ id: String) {
+            guard let view, let document = view.document, let index = Int(id), let page = document.page(at: index) else { return }
+            if view.currentPage != page { view.go(to: page) }
+        }
+
+        func endReadingAloud() {}
+
         func search(_ query: String, backwards: Bool) {
             guard let view, let document = view.document else { return }
             if query != searchQuery {

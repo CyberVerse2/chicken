@@ -283,6 +283,29 @@ struct EPUBReader: PlatformViewRepresentable {
             }
         }
 
+        // MARK: Reading aloud
+
+        func readAloudPassages(after: String?) async -> [SpokenPassage] {
+            guard isReady, let webView else { return [] }
+            let value = try? await webView.callAsyncJavaScript(
+                "return window.chicken ? window.chicken.readAloud(after, 30) : []",
+                arguments: ["after": after ?? NSNull()],
+                contentWorld: .page
+            )
+            return (value as? [[String: Any]] ?? []).compactMap { item in
+                guard let id = item["id"] as? String, let text = item["text"] as? String, !text.isEmpty else { return nil }
+                return SpokenPassage(id: id, text: text)
+            }
+        }
+
+        func revealPassage(_ id: String) {
+            call("chicken.revealPassage", id)
+        }
+
+        func endReadingAloud() {
+            call("chicken.endReadingAloud")
+        }
+
         // MARK: Navigation
 
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {

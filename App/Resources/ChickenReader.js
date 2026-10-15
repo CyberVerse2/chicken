@@ -448,6 +448,63 @@
   });
 
   // ---------------------------------------------------------------------
+  // Reading aloud. Passages are the book's leaf text blocks, in order;
+  // Swift asks for a batch starting at what's on screen, then the next
+  // batch, and reveals each passage as it's spoken.
+
+  const SPEAKABLE = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, dd, dt, figcaption, pre, td';
+  let speakable = null;
+  const speakableBlocks = () => {
+    if (!speakable) {
+      speakable = Array.from(document.querySelectorAll(`[data-chicken-spine-index] :is(${SPEAKABLE})`))
+        .filter((el) => !el.querySelector(SPEAKABLE) && (el.textContent || '').trim().length > 0);
+    }
+    return speakable;
+  };
+
+  const isOnScreen = (el) => {
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) return false;
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.right > 0 && rect.left < window.innerWidth;
+  };
+
+  const readAloud = (after, limit) => {
+    const blocks = speakableBlocks();
+    let start = 0;
+    if (after === null || after === undefined) {
+      const first = blocks.findIndex(isOnScreen);
+      start = first >= 0 ? first : 0;
+    } else {
+      start = Number(after) + 1;
+    }
+    return blocks.slice(start, start + (limit || 30)).map((el, offset) => ({
+      id: String(start + offset),
+      text: (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim(),
+    }));
+  };
+
+  const revealPassage = (id) => {
+    const el = speakableBlocks()[Number(id)];
+    if (!el) return;
+    document.querySelectorAll('.chicken-speaking').forEach((other) => other.classList.remove('chicken-speaking'));
+    el.classList.add('chicken-speaking');
+    if (!isOnScreen(el) || el.getBoundingClientRect().bottom > window.innerHeight) {
+      if (state.horizontal) {
+        const left = el.getBoundingClientRect().left + scrollX();
+        scrollToPage(Math.floor((left + 1) / metrics().pageUnit));
+      } else {
+        el.scrollIntoView({ block: 'start', behavior: state.reduceMotion ? 'auto' : 'smooth' });
+        window.scrollBy({ top: -window.innerHeight * 0.18 });
+      }
+    }
+    reportProgress(true);
+  };
+
+  const endReadingAloud = () => {
+    document.querySelectorAll('.chicken-speaking').forEach((el) => el.classList.remove('chicken-speaking'));
+  };
+
+  // ---------------------------------------------------------------------
 
   const configure = (config) => {
     const anchor = state.lastGlobalProgress;
@@ -480,6 +537,9 @@
     applyHighlights,
     clearSelection: () => window.getSelection()?.removeAllRanges(),
     snapshot,
+    readAloud,
+    revealPassage,
+    endReadingAloud,
   };
 
   post({ type: 'ready' });

@@ -57,6 +57,11 @@
 	<!-- iOS: Chicken copies opened files into its library rather than editing them in place. -->
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<false/>
+	<!-- Reading aloud keeps going with the screen locked. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 </dict>

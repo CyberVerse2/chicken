@@ -7,6 +7,11 @@ import WidgetKit
 struct ChickenWidgetBundle: WidgetBundle {
     var body: some Widget {
         ContinueReadingWidget()
+        ReadingGoalWidget()
+        ContinueReadingControl()
+        #if os(iOS)
+        ReadingLiveActivity()
+        #endif
     }
 }
 
@@ -17,15 +22,15 @@ struct ContinueReadingWidget: Widget {
                 .containerBackground(for: .widget) { WidgetColors(theme: entry.snapshot?.theme).background }
         }
         .configurationDisplayName("Continue Reading")
-        .description("The book you're reading and today's reading time.")
+        .description("The book you're reading, and your week of reading.")
         .supportedFamilies(Self.families)
     }
 
     private static var families: [WidgetFamily] {
         #if os(iOS)
-        [.systemSmall, .systemMedium, .accessoryRectangular, .accessoryCircular]
+        [.systemSmall, .systemMedium, .systemLarge, .accessoryRectangular, .accessoryCircular]
         #else
-        [.systemSmall, .systemMedium]
+        [.systemSmall, .systemMedium, .systemLarge]
         #endif
     }
 }
@@ -44,7 +49,11 @@ struct SnapshotProvider: TimelineProvider {
                 currentBook: .init(id: UUID(), title: "The Quiet Room", author: "A. Writer", progress: 0.42, coverTintIndex: 0, hasCover: false),
                 secondsToday: 1080,
                 dailyGoalMinutes: 30,
-                theme: "paper"
+                theme: "paper",
+                lastSevenDays: [1500, 2400, 0, 1900, 3100, 1200, 1080],
+                finishedThisYear: 4,
+                annualGoal: 12,
+                chapter: "Chapter Three"
             ),
             cover: nil
         )
@@ -75,9 +84,11 @@ struct SnapshotProvider: TimelineProvider {
 
 struct ContinueReadingView: View {
     @Environment(\.widgetFamily) private var family
+    @Environment(\.showsWidgetContainerBackground) private var showsBackground
     let entry: SnapshotEntry
 
-    private var colors: WidgetColors { WidgetColors(theme: entry.snapshot?.theme) }
+    /// StandBy and the Mac's desktop drop the background: draw for dark.
+    private var colors: WidgetColors { WidgetColors(theme: showsBackground ? entry.snapshot?.theme : "ink") }
     private var book: WidgetSnapshot.CurrentBook? { entry.snapshot?.currentBook }
 
     var body: some View {
@@ -87,6 +98,7 @@ struct ContinueReadingView: View {
                 case .accessoryRectangular: rectangular(book)
                 case .accessoryCircular: circular(book)
                 case .systemMedium: medium(book)
+                case .systemLarge: large(book)
                 default: small(book)
                 }
             } else {
@@ -135,12 +147,62 @@ struct ContinueReadingView: View {
                 Spacer(minLength: 6)
                 progress(book.progress)
                 if let snapshot = entry.snapshot {
-                    Text("\(snapshot.secondsToday / 60) of \(snapshot.dailyGoalMinutes) min read today")
+                    Text("\(snapshot.secondsToday(on: entry.date) / 60) of \(snapshot.dailyGoalMinutes) min read today")
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundStyle(colors.muted)
                 }
             }
             Spacer(minLength: 0)
+        }
+    }
+
+    /// The book, then the week behind it.
+    private func large(_ book: WidgetSnapshot.CurrentBook) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .top, spacing: 16) {
+                cover(book)
+                    .frame(width: 84, height: 126)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(book.title)
+                        .font(.custom("Superclarendon-Regular", size: 20))
+                        .foregroundStyle(colors.text)
+                        .lineLimit(3)
+                        .minimumScaleFactor(0.8)
+                    Text(book.author)
+                        .font(.custom("IowanOldStyle-Italic", size: 14))
+                        .foregroundStyle(colors.muted)
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
+                    if let chapter = entry.snapshot?.chapter, !chapter.isEmpty {
+                        Text(chapter)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(colors.text.opacity(0.8))
+                            .lineLimit(1)
+                    }
+                    HStack(spacing: 8) {
+                        progress(book.progress)
+                        Text("\(Int((book.progress * 100).rounded()))%")
+                            .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(colors.ribbon)
+                            .widgetAccentable()
+                    }
+                }
+                .frame(height: 126, alignment: .top)
+            }
+
+            Spacer(minLength: 14)
+            Rectangle().fill(colors.text.opacity(0.1)).frame(height: 1)
+            Spacer(minLength: 12)
+
+            if let snapshot = entry.snapshot {
+                WeekChart(snapshot: snapshot, date: entry.date, colors: colors)
+                Spacer(minLength: 10)
+                if let goal = snapshot.annualGoal, goal > 0 {
+                    Text("\(snapshot.finishedThisYear ?? 0) of \(goal) books finished this year")
+                        .font(.custom("IowanOldStyle-Italic", size: 12))
+                        .foregroundStyle(colors.muted)
+                }
+            }
         }
     }
 

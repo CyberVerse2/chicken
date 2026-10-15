@@ -25,7 +25,12 @@ extension LibraryStore {
                 },
                 secondsToday: self.readingSecondsToday,
                 dailyGoalMinutes: self.preferences.dailyGoalMinutes,
-                theme: self.preferences.theme.rawValue
+                theme: self.preferences.theme.rawValue,
+                lastSevenDays: self.lastSevenDays.map(\.seconds),
+                finishedThisYear: self.booksFinished().count,
+                annualGoal: self.preferences.annualBookGoal,
+                chapter: book?.lastChapterTitle,
+                day: Calendar.current.startOfDay(for: .now)
             )
             guard snapshot != self.lastPublishedSnapshot else { return }
             self.lastPublishedSnapshot = snapshot
@@ -33,7 +38,7 @@ extension LibraryStore {
             await Task.detached(priority: .utility) {
                 snapshot.save(coverJPEG: coverURL.flatMap { CoverRenderer.thumbnailJPEG(from: $0) })
             }.value
-            WidgetCenter.shared.reloadTimelines(ofKind: WidgetSnapshot.widgetKind)
+            WidgetCenter.shared.reloadAllTimelines()
         }
     }
 }

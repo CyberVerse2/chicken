@@ -56,6 +56,19 @@ protocol ReaderEngine: AnyObject {
     func refreshHighlights()
     /// Flush the precise current position before the reader closes.
     func captureLocation()
+
+    /// Text to read aloud: a batch of passages starting at what's on
+    /// screen, or just after the passage `after`. Empty at the end.
+    func readAloudPassages(after: String?) async -> [SpokenPassage]
+    /// Brings a passage into view as it starts being read.
+    func revealPassage(_ id: String)
+    func endReadingAloud()
+}
+
+/// A stretch of the book read aloud as one utterance, usually a paragraph.
+struct SpokenPassage: Equatable {
+    let id: String
+    let text: String
 }
 
 /// State for one open book: navigation, typography, and what the engine
@@ -65,6 +78,8 @@ final class ReaderModel {
     let book: Book
     @ObservationIgnored let library: LibraryStore
     @ObservationIgnored weak var engine: ReaderEngine?
+    /// Reads the book aloud from the paragraph on screen.
+    @ObservationIgnored private(set) lazy var readAloud = ReadAloudController(model: self)
 
     // Structure and position, reported by the engine.
     var chapters: [ReaderChapter] = [] {
@@ -103,7 +118,8 @@ final class ReaderModel {
         columnWidth = preferences?.columnWidth ?? ReaderPreferences.default.columnWidth
         typeface = preferences?.typeface.flatMap(ReaderTypeface.init(rawValue:)) ?? .default
         readingMode = preferences.flatMap { ReadingMode(rawValue: $0.readingMode) } ?? defaultMode
-        isZen = preferences?.zenMode ?? false
+        // A Focus set to hide the controls opens every book that way.
+        isZen = (preferences?.zenMode ?? false) || ReadingFocus.hidesControls
         chapterIndex = EPUBLocation.decode(book.lastLocation)?.spineIndex
             ?? PDFLocation.decode(book.lastLocation)?.chapterIndex
             ?? 0
@@ -191,6 +207,9 @@ final class ReaderModel {
     func reportProgress(_ progress: Double, location: String?) {
         if let location { currentLocation = location }
         library.updateProgress(for: book, progress: progress, location: location)
+        #if os(iOS)
+        ReadingActivityController.shared.refresh()
+        #endif
     }
 
     /// Remembers the chapter you're in, so Home can name it.
@@ -200,6 +219,9 @@ final class ReaderModel {
         guard book.lastChapterTitle != title else { return }
         book.lastChapterTitle = title
         library.save()
+        #if os(iOS)
+        ReadingActivityController.shared.refresh()
+        #endif
     }
 
     func resetPosition() {
