@@ -59,6 +59,7 @@ struct NotebookView: View {
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.hard, for: .top)
         .background(palette.background.ignoresSafeArea())
+        .bookSelectionKeys()
         .pageTitle("Notebook")
         .toolbar { LibraryToolbar() }
     }
@@ -148,6 +149,7 @@ private struct NotebookBookSection: View {
                     BookCover(book: book, style: .mini)
                         .frame(width: 34, height: 51)
                         .coverTransitionSource(book.id)
+                        .selectionRing(for: book.id, gap: 3)
                         .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(book.title)
@@ -167,6 +169,7 @@ private struct NotebookBookSection: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .openOnDoubleClick(book.id)
 
             VStack(alignment: .leading, spacing: 26) {
                 ForEach(highlights) { highlight in

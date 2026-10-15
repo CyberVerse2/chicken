@@ -2,6 +2,7 @@ import ChickenKit
 import SwiftUI
 
 struct BookGrid: View {
+    @Environment(AppRouter.self) private var router
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var typeSize
     let books: [Book]
@@ -20,9 +21,17 @@ struct BookGrid: View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: sizeClass == .compact ? 34 : 46) {
             ForEach(books) { book in
                 BookTile(book: book, ledgeOverhang: spacing / 2)
+                    .id(book.id)
             }
         }
         .coverCollection("grid", books: books.map(\.id))
+        #if os(macOS)
+        // How many tiles fit per row, so ↑ and ↓ move by a row.
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width in
+            let minimum: CGFloat = typeSize.isAccessibilitySize ? 200 : 140
+            router.gridColumns = max(1, Int((width + spacing) / (minimum + spacing)))
+        }
+        #endif
     }
 }
 
@@ -47,6 +56,7 @@ private struct BookTile: View {
                 BookCover(book: book, style: .tile)
                     .aspectRatio(2.0 / 3.0, contentMode: .fit)
                     .coverTransitionSource(book.id)
+                    .selectionRing(for: book.id, gap: 5)
                     .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
                     .offset(y: hovering ? -6 : 0)
                     .background(alignment: .bottom) {
@@ -75,6 +85,7 @@ private struct BookTile: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .openOnDoubleClick(book.id)
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.25), value: hovering)
         .bookContextMenu(book)

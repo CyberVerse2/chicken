@@ -117,13 +117,21 @@ struct LibraryRootView: View {
             MacSidebar(selection: $tab, reading: reading)
                 .navigationSplitViewColumnWidth(min: 200, ideal: 236, max: 320)
         } detail: {
-            switch tab {
-            case .home: NavigationStack { HomeView() }
-            case .library: NavigationStack { BooksView() }
-            case .notebook: NavigationStack { NotebookView() }
-            case .search: NavigationStack { SearchView() }
-            case .book(let id): NavigationStack { BookDetailView(bookID: id, isPage: true) }.id(id)
+            Group {
+                switch tab {
+                case .home: NavigationStack { HomeView() }
+                case .library: NavigationStack { BooksView() }
+                case .notebook: NavigationStack { NotebookView() }
+                case .search: NavigationStack { SearchView() }
+                case .book(let id): NavigationStack { BookDetailView(bookID: id, isPage: true) }.id(id)
+                }
             }
+            .inspector(isPresented: inspectorShown) {
+                BookInspector()
+                    .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
+            }
+            .overlay { BookPreviewOverlay() }
+            .animation(.smooth(duration: 0.22), value: router.previewingBookID)
         }
         #else
         TabView(selection: $tab) {
@@ -161,11 +169,24 @@ struct LibraryRootView: View {
         #endif
     }
 
+    #if os(macOS)
+    /// The details panel, except on a book's own page where it would repeat it.
+    private var inspectorShown: Binding<Bool> {
+        Binding(
+            get: {
+                if case .book = tab { return false }
+                return router.showingInspector
+            },
+            set: { router.showingInspector = $0 }
+        )
+    }
+    #endif
+
     // MARK: Opening books
 
     private func select(_ id: UUID, in sequence: [UUID], from source: CoverSource?) {
         #if os(macOS)
-        open(id, from: source)
+        router.select(id, in: sequence, context: source?.context ?? "")
         #else
         router.showDetails(id, in: sequence, from: source)
         #endif
@@ -285,6 +306,11 @@ struct LibraryToolbar: ToolbarContent {
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")
             }
+            Button(router.showingInspector ? "Hide Details" : "Show Details", systemImage: "sidebar.trailing") {
+                withAnimation(.smooth(duration: 0.25)) { router.showingInspector.toggle() }
+            }
+            .keyboardShortcut("i", modifiers: .command)
+            .help("Show or hide book details (⌘I)")
             #else
             Button("Settings", systemImage: "gearshape") { router.showingSettings = true }
             #endif

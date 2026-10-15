@@ -86,6 +86,7 @@ struct HomeView: View {
             .frame(maxWidth: 1180, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
+        .bookSelectionKeys()
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.hard, for: .top)
         .background(palette.background.ignoresSafeArea())
@@ -152,13 +153,17 @@ struct BookShelf: View {
                 .foregroundStyle(palette.text)
                 .padding(.horizontal, gutter)
 
-            ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: sizeClass == .compact ? 18 : 26) {
-                    ForEach(books) { book in
-                        ShelfItem(book: book, width: coverWidth, showsProgress: showsProgress)
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal) {
+                    LazyHStack(alignment: .top, spacing: sizeClass == .compact ? 18 : 26) {
+                        ForEach(books) { book in
+                            ShelfItem(book: book, width: coverWidth, showsProgress: showsProgress)
+                                .id(book.id)
+                        }
                     }
+                    .scrollTargetLayout()
                 }
-                .scrollTargetLayout()
+                .followsSelection(in: "shelf-\(title)", proxy: proxy)
             }
             .scrollIndicators(.hidden)
             .scrollTargetBehavior(.viewAligned)
@@ -207,6 +212,7 @@ private struct ShelfItem: View {
                 BookCover(book: book, style: .tile)
                     .frame(width: width, height: width * 1.5)
                     .coverTransitionSource(book.id)
+                    .selectionRing(for: book.id, gap: 5)
                     .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
                     .offset(y: hovering ? -6 : 0)
                     .coverRibbon(inProgress)
@@ -232,6 +238,7 @@ private struct ShelfItem: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .openOnDoubleClick(book.id)
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.25), value: hovering)
         .bookContextMenu(book)

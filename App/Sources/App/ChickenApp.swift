@@ -21,6 +21,12 @@ struct ChickenApp: App {
         case "settings": AppRouter.shared.showingSettings = true
         case let value? where value.hasPrefix("detail:"):
             AppRouter.shared.detailBookID = UUID(uuidString: String(value.dropFirst(7)))
+        case let value? where value.hasPrefix("select:") || value.hasPrefix("preview:"):
+            // Mac: start with a Library book selected (and previewed).
+            let id = UUID(uuidString: String(value.split(separator: ":", maxSplits: 1)[1]))
+            AppRouter.shared.selectedBookID = id
+            AppRouter.shared.selectionContext = "grid"
+            if value.hasPrefix("preview:") { AppRouter.shared.previewingBookID = id }
         default: break
         }
         #endif
@@ -100,6 +106,44 @@ final class AppRouter {
     var showingImporter = false
     var showingDiscovery = false
     var showingSettings = false
+    // Mac: a clicked book is selected, and the details panel follows it.
+    var selectedBookID: UUID?
+    /// The books around the selection, in order, for the arrow keys.
+    var selectionSequence: [UUID] = []
+    var selectionContext = ""
+    /// Columns in the Library grid, so ↑ and ↓ move by a row.
+    var gridColumns = 1
+    var showingInspector = true
+    /// Book shown in the Space-bar preview.
+    var previewingBookID: UUID?
+
+    func select(_ id: UUID, in sequence: [UUID], context: String) {
+        selectedBookID = id
+        selectionSequence = sequence.contains(id) ? sequence : [id]
+        selectionContext = context
+    }
+
+    /// Steps the selection by `offset` books, or by rows with `vertical`.
+    func moveSelection(by offset: Int, vertical: Bool) {
+        guard let id = selectedBookID, let index = selectionSequence.firstIndex(of: id) else { return }
+        let step: Int
+        if vertical {
+            if selectionContext == "grid" {
+                step = offset * max(1, gridColumns)
+            } else if selectionContext.hasPrefix("shelf") || selectionContext == "hero" {
+                return
+            } else {
+                step = offset
+            }
+        } else {
+            step = offset
+        }
+        let target = index + step
+        guard selectionSequence.indices.contains(target) else { return }
+        selectedBookID = selectionSequence[target]
+        if previewingBookID != nil { previewingBookID = selectedBookID }
+    }
+
     /// Set by the "Continue Reading" intent; the library opens the book once it appears.
     var pendingDestination: ChickenLink.Destination?
 }

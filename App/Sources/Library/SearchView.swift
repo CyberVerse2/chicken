@@ -87,6 +87,7 @@ struct SearchView: View {
         }
         .scrollContentBackground(.hidden)
         .background(palette.background.ignoresSafeArea())
+        .bookSelectionKeys()
         .pageTitle("Search")
         .searchable(text: $query, prompt: "Titles, authors, highlights")
     }
@@ -131,6 +132,7 @@ private struct SearchBookRow: View {
                 BookCover(book: book, style: .mini)
                     .frame(width: 40, height: 60)
                     .coverTransitionSource(book.id)
+                    .selectionRing(for: book.id, gap: 3)
                     .shadow(color: palette.shadow, radius: 2, y: 1)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(book.title)
@@ -154,6 +156,7 @@ private struct SearchBookRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .openOnDoubleClick(book.id)
         .bookContextMenu(book)
     }
 

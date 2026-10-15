@@ -64,9 +64,10 @@ struct ContinueReadingCard: View {
         VStack(spacing: 0) {
             cover(width: 148)
                 .padding(.bottom, 34)
+            // Sized as a caption to the cover above, which already shows the title.
             Text(book.title)
-                .font(.chickenDisplay(28))
-                .tracking(-0.5)
+                .font(.chickenDisplay(24))
+                .tracking(-0.4)
                 .foregroundStyle(palette.text)
                 .multilineTextAlignment(.center)
                 .lineLimit(3)
@@ -105,12 +106,14 @@ struct ContinueReadingCard: View {
             BookCover(book: book, style: .hero, showsClothText: false)
                 .frame(width: width, height: width * 1.5)
                 .coverTransitionSource(book.id)
+                .selectionRing(for: book.id, gap: 7)
                 .shadow(color: palette.shadow.opacity(0.9), radius: 2, x: 1, y: 1)
                 .shadow(color: palette.shadow, radius: hovering ? 30 : 22, x: 4, y: hovering ? 22 : 16)
                 .coverRibbon(mode == .continuing, length: width * 0.16, width: width * 0.075)
                 .rotation3DEffect(.degrees(hovering ? -6 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: 0.6)
         }
         .buttonStyle(.plain)
+        .openOnDoubleClick(book.id)
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.35), value: hovering)
         .accessibilityLabel("\(book.title) details")
@@ -128,17 +131,19 @@ struct ContinueReadingCard: View {
                     .foregroundStyle(palette.text)
                     .fontWeight(.semibold)
                 if let chapter = book.lastChapterTitle, !chapter.isEmpty, chapter != book.title {
-                    Text("· \(chapter)")
+                    Text("·")
+                    Text(chapter)
                         .lineLimit(1)
                 } else if let pages = book.pageCount, pages > 0 {
-                    Text("· p. \(max(1, Int((Double(pages) * book.progress).rounded()))) of \(pages)")
+                    Text("·")
+                    Text("p. \(max(1, Int((Double(pages) * book.progress).rounded()))) of \(pages)")
                 }
                 Spacer(minLength: 8)
                 if let left = book.estimatedPagesLeft {
                     Text(ReadingEstimate.duration(forPages: left) + " left")
                 }
             }
-            .font(.chickenMono(12))
+            .font(.chickenMono(13))
             .foregroundStyle(palette.muted)
         }
     }

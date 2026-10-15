@@ -5,10 +5,22 @@ import Foundation
 /// looking"), then letting them review what to import.
 extension LibraryStore {
     func addFolder(_ url: URL) {
-        guard let folder = WatchedFolder(url: url) else { return }
-        guard !folders.contains(where: { $0.path == folder.path }) else { return }
-        folders.append(folder)
+        addFolders([url])
+    }
+
+    /// Shares several folders at once and scans them together.
+    func addFolders(_ urls: [URL]) {
+        var added = false
+        for url in urls {
+            guard let folder = WatchedFolder(url: url) else { continue }
+            guard !folders.contains(where: { $0.path == folder.path }) else { continue }
+            folders.append(folder)
+            added = true
+        }
+        guard added else { return }
         WatchedFolder.save(folders, to: paths)
+        scanTask?.cancel()
+        scanState = .idle
         scanFolders()
     }
 

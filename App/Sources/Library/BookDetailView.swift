@@ -91,6 +91,8 @@ struct BookDetailView: View {
     @Environment(\.coverContext) private var coverContext
     let bookID: UUID
     var isPage = false
+    /// In the Mac's details panel: narrower, and nothing to dismiss.
+    var inInspector = false
     @State private var summaryExpanded = false
     @State private var confirmingRemoval = false
 
@@ -128,14 +130,14 @@ struct BookDetailView: View {
                     highlights(book)
                 }
             }
-            .padding(.horizontal, sizeClass == .compact ? 20 : 36)
+            .padding(.horizontal, sizeClass == .compact || inInspector ? 20 : 36)
             .padding(.bottom, 40)
             .frame(maxWidth: 640)
             .frame(maxWidth: .infinity)
         }
         .confirmationDialog("Remove \u{201C}\(book.title)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
             Button("Remove", role: .destructive) {
-                dismiss()
+                if !inInspector { dismiss() }
                 library.delete(book)
             }
         } message: {
@@ -148,7 +150,7 @@ struct BookDetailView: View {
     /// sheet closes and the book gets its window.
     private func read(_ book: Book) {
         #if os(macOS)
-        dismiss()
+        if !inInspector && !isPage { dismiss() }
         #endif
         openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id))
     }
@@ -157,7 +159,7 @@ struct BookDetailView: View {
         VStack(spacing: 18) {
             Button { read(book) } label: {
                 BookCover(book: book, style: .hero)
-                    .frame(width: 168, height: 252)
+                    .frame(width: inInspector ? 150 : 168, height: inInspector ? 225 : 252)
                     .coverTransitionSource(book.id)
                     .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
                     .shadow(color: palette.shadow, radius: 22, x: 4, y: 16)
@@ -165,11 +167,11 @@ struct BookDetailView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Read \(book.title)")
-            .padding(.top, isPage ? 36 : 12)
+            .padding(.top, isPage || inInspector ? 36 : 12)
             .padding(.bottom, 10)
             VStack(spacing: 8) {
                 Text(book.title)
-                    .font(.chickenDisplay(sizeClass == .compact ? 27 : 32))
+                    .font(.chickenDisplay(sizeClass == .compact || inInspector ? 25 : 32))
                     .tracking(-0.5)
                     .foregroundStyle(palette.text)
                     .multilineTextAlignment(.center)
