@@ -1,6 +1,6 @@
 # Chicken
 
-Chicken is a local-first macOS reading app for PDF, EPUB, and personal document libraries.
+Chicken is a local-first reading app for Mac, iPad, and iPhone, for PDF, EPUB, and personal document libraries.
 
 ## Launch Positioning
 

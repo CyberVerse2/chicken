@@ -2,7 +2,7 @@
 
 ## Style
 
-Chicken is a personal reading room rendered as a macOS app. The interface should feel composed and quiet — a literary surface, not a SaaS dashboard or a Kindle storefront. Typography carries the mood; chrome stays out of the way. Three reading themes — paper, sepia, ink — sit on equal footing and switch from inside the reader.
+Chicken is a personal reading room on Mac, iPad, and iPhone. The interface should feel composed and quiet — a literary surface, not a SaaS dashboard or a Kindle storefront. Typography carries the mood; chrome stays out of the way. Three reading themes — paper, sepia, ink — sit on equal footing and switch from inside the reader.
 
 ## Color
 
@@ -65,14 +65,18 @@ A literary serif for reading and titles, a clean sans for chrome and metadata.
 - Brand lockup: app icon mark plus serif "Chicken" title. Keep it compact and stable in the library header.
 - Drop cap on the first paragraph of a chapter: serif, ~3.4× body size, sits flush left, paragraph wraps around it.
 
+## Liquid Glass
+
+Glass is for controls, never for content. It appears only on things that float above the page or library: toolbars (system), the reader's progress capsule, the highlight picker, the in-book search bar, typography steppers, and primary/secondary buttons (`.glassProminent` tinted with the theme's ink, and `.glass`). Pages, covers, cards, and panels stay solid theme surfaces, so the reading surface is calm and glass reads as "something you can touch". Glass follows the theme's color scheme: Ink gets dark glass, Paper and Sepia get light glass. Related controls sit in a `GlassEffectContainer` so they blend into each other.
+
 ## Layout
 
-The app is a single window with two surfaces:
+Two surfaces:
 
-1. **Library** — sticky header (wordmark, search, theme switch, settings), then a "Continue reading" hero card for the most recently opened book, then a grid of book covers in `auto-fill, minmax(180pt, 1fr)`. Footer carries quiet counts.
-2. **Reader** — three columns: a chapter sidebar on the left (~220pt), a centered reading column with `maxWidth = columnWidth`, a highlights panel on the right (~280pt). A slim top bar carries the back button, book title, and tool toggles. A 2pt progress bar lives at the bottom.
+1. **Library**: a navigation toolbar (add books, view options, settings) with system search, then a "Continue reading" hero card, the yearly goal, and an adaptive cover grid (170–220pt columns on regular width, 140–200pt on compact). A quiet footer carries counts and "Stored on this device".
+2. **Reader**: on the Mac each book opens in its own window. On iPad and iPhone it opens full screen. A contents sidebar (~270pt) appears on regular width and becomes a sheet on compact. Highlights and bookmarks live in an inspector, which also becomes a sheet on compact. The reading column is centered at `columnWidth`. The floating glass progress capsule sits at the bottom. On iPhone and iPad, a tap in the middle of the page hides and shows the chrome.
 
-Both side panels are toggleable from the top bar. The typography popover floats over the reader column and never pushes content. Reduce-motion is respected — transitions on theme, panel show/hide, and column width changes use short opacity/position fades only.
+The typography popover floats over the reader and never pushes content; on iPhone it becomes a half-height sheet. Reduce-motion is respected — transitions on theme, panel show/hide, and column width changes use short opacity/position fades only.
 
 ## Components
 
@@ -80,10 +84,11 @@ Both side panels are toggleable from the top bar. The typography popover floats 
 - **Library card (hero)** — rounded surface, cover on the left at 200pt, chapter eyebrow + serif title + italic author + slim progress bar + "Continue reading" primary button + meta line (time-left, highlights count).
 - **Reading goal card** — sits between the Continue card and the grid. Small-caps eyebrow `Reading goal · YYYY` on the left, large serif `n` of `m` on the right (tabular numerals). Hairline meter underneath. Italic caption beneath the meter ("3 books to go", "Goal met. Read on for the joy of it."). Below, a horizontal row of finished-this-year books at 78pt cover width with a `MMM` month tag — quiet, scannable, never celebratory. Goal is set by a stepper in the Settings popover and persists in UserDefaults.
 - **Library tile** — cover, title (serif 500, 15pt), author (serif italic 13pt), then a hairline progress meter or "Read"/"Unread" tag and a highlight count.
-- **Reader top bar** — back button, centered book/chapter label, icon toggles for chapters / typography / theme / highlights, a time-left readout.
+- **Reader toolbar**: system toolbar with Contents, Search, Text & Layout, Bookmark, Highlights, and a More menu (theme, zen mode). On compact width, Search and Bookmark move into More.
+- **Progress capsule**: glass capsule with percent, a scrubber, "page N of M", and chapter / time-left readouts. On the last page the readout turns to serif italic: "the last page".
 - **Chapter list item** — small caps "Chapter N" eyebrow, serif title, page range. Active item has a 2pt accent bar on the leading edge.
 - **Highlight rail item** — left bar in the highlight color, the quoted text in serif at 13pt, optional italic note underneath, footer with "Ch. N · timestamp" and a remove icon.
-- **Highlight selection popover** — small dark pill that floats above the selection with four 24×24pt color swatches.
+- **Highlight picker**: interactive glass capsule above the progress bar while text is selected, with four 24pt color swatches and Copy.
 - **Typography popover** — surface card with three steppers (size 13–24, line height 1.4–2.2, column width 480–820), a three-up theme picker, and a "Reset to defaults" tonal button.
 - **Buttons** — primary uses the active theme's text color as fill with the background as label color. Secondary is a hairline border on a transparent surface. Both at 8pt radius.
 

@@ -6,17 +6,17 @@ product
 
 ## Users
 
-Chicken is for people who keep their own PDFs, EPUBs, and long-form documents on their Mac and want one calm place to discover, organize, and read them. They may be students, researchers, writers, professionals, or heavy readers with scattered files across Downloads, Documents, Desktop, iCloud Drive, and book folders.
+Chicken is for people who keep their own PDFs, EPUBs, and long-form documents on their Mac, iPad, or iPhone and want one calm place to discover, organize, and read them. They may be students, researchers, writers, professionals, or heavy readers with scattered files across Downloads, Documents, Desktop, iCloud Drive, and book folders.
 
 ## Product Purpose
 
-Chicken is a local-first macOS reading library. It scans user-approved folders for books and documents, helps users review and import what it finds, then gives them a focused reader for PDFs, EPUBs, and supported document formats. Success means users can open the app, find their existing books without manual busywork, read comfortably for long sessions, and keep progress, bookmarks, highlights, and preferences locally without needing an account.
+Chicken is a local-first reading library for Mac, iPad, and iPhone. It scans user-approved folders for books and documents, helps users review and import what it finds, then gives them a focused reader for PDFs, EPUBs, and supported document formats. Success means users can open the app, find their existing books without manual busywork, read comfortably for long sessions, and keep progress, bookmarks, highlights, and preferences locally without needing an account.
 
 ## Brand Personality
 
 quiet, private, scholarly
 
-Chicken should feel like a thoughtful desktop tool: composed, trustworthy, and built for reading rather than selling. The app should respect the user's files and attention. It should feel native to macOS without becoming generic.
+Chicken should feel like a thoughtful desktop tool: composed, trustworthy, and built for reading rather than selling. The app should respect the user's files and attention. It should feel native to each Apple platform without becoming generic.
 
 ## Anti-references
 

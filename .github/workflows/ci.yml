@@ -11,36 +11,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build and Test
-    runs-on: macos-15
-    timeout-minutes: 30
-
+  core:
+    name: ChickenKit tests
+    runs-on: macos-26
+    timeout-minutes: 20
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
+      - uses: actions/checkout@v4
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Run package tests
+        run: swift test --package-path Packages/ChickenKit
 
-      - name: Resolve packages
-        run: xcodebuild -resolvePackageDependencies -project Chicken.xcodeproj -scheme Chicken
-
-      - name: Build for macOS
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: macos-26
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [macOS, iOS Simulator]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+      - name: Build
         run: |
           set -euo pipefail
           xcodebuild build \
             -project Chicken.xcodeproj \
             -scheme Chicken \
             -configuration Release \
-            -destination 'generic/platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO
-
-      - name: Run unit tests
-        run: |
-          set -euo pipefail
-          xcodebuild test \
-            -project Chicken.xcodeproj \
-            -scheme Chicken \
-            -destination 'platform=macOS' \
+            -destination 'generic/platform=${{ matrix.platform }}' \
             CODE_SIGNING_ALLOWED=NO

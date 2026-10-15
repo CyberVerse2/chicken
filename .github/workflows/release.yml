@@ -21,7 +21,7 @@ concurrency:
 jobs:
   release:
     name: Build GitHub Release
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 45
 
     steps:
@@ -60,17 +60,8 @@ jobs:
 
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      - name: Resolve packages
-        run: xcodebuild -resolvePackageDependencies -project Chicken.xcodeproj -scheme Chicken
-
-      - name: Run unit tests
-        run: |
-          set -euo pipefail
-          xcodebuild test \
-            -project Chicken.xcodeproj \
-            -scheme Chicken \
-            -destination 'platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO
+      - name: Run package tests
+        run: swift test --package-path Packages/ChickenKit
 
       - name: Archive macOS app
         run: |
