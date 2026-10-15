@@ -13,6 +13,7 @@ struct ContinueReadingCard: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.coverContext) private var coverContext
     @Environment(\.bookSequence) private var bookSequence
+    @Environment(\.selectBook) private var selectBook
     let book: Book
     var mode: Mode = .continuing
 
@@ -99,7 +100,7 @@ struct ContinueReadingCard: View {
     // MARK: Parts
 
     private func cover(width: CGFloat) -> some View {
-        Button { openBook(book.id, from: source) } label: {
+        Button { selectBook(book.id, in: bookSequence, from: source) } label: {
             // A cloth cover goes blank here: the title is set right beside it.
             BookCover(book: book, style: .hero, showsClothText: false)
                 .frame(width: width, height: width * 1.5)
@@ -112,7 +113,7 @@ struct ContinueReadingCard: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.35), value: hovering)
-        .accessibilityLabel("Open \(book.title)")
+        .accessibilityLabel("\(book.title) details")
     }
 
     private var actionTitle: String {

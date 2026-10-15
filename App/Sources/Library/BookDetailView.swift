@@ -6,8 +6,16 @@ import SwiftUI
 struct BookDetailPager: View {
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.coverNamespace) private var coverNamespace
     let ids: [UUID]
     @State private var current: UUID?
+    /// The book being read from this card, and the cover it zoomed from.
+    @State private var reading: ReaderRequest?
+
+    private struct ReaderRequest: Identifiable {
+        let id: UUID
+        let source: CoverSource?
+    }
 
     init(ids: [UUID], start: UUID) {
         self.ids = ids.contains(start) ? ids : [start]
@@ -51,10 +59,22 @@ struct BookDetailPager: View {
                 }
             }
         }
+        .coverCollection("detail", books: ids)
         #if os(macOS)
         .frame(minWidth: 560, idealWidth: 640, minHeight: 600, idealHeight: 720)
         #else
         .presentationDetents([.large])
+        .environment(\.openBook, OpenBookAction { id, source in
+            reading = ReaderRequest(id: id, source: source)
+        })
+        .fullScreenCover(item: $reading) { request in
+            if let coverNamespace {
+                ReaderLoader(bookID: request.id)
+                    .zoomTransition(from: request.source, in: coverNamespace)
+            } else {
+                ReaderLoader(bookID: request.id)
+            }
+        }
         #endif
     }
 }
@@ -68,6 +88,7 @@ struct BookDetailView: View {
     @Environment(\.openBook) private var openBook
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.coverContext) private var coverContext
     let bookID: UUID
     var isPage = false
     @State private var summaryExpanded = false
@@ -122,15 +143,30 @@ struct BookDetailView: View {
         }
     }
 
+    /// Opens the book from this page. On iPhone and iPad the reader zooms
+    /// out of the cover above and the card waits underneath; on the Mac the
+    /// sheet closes and the book gets its window.
+    private func read(_ book: Book) {
+        #if os(macOS)
+        dismiss()
+        #endif
+        openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id))
+    }
+
     private func hero(_ book: Book) -> some View {
         VStack(spacing: 18) {
-            BookCover(book: book, style: .hero)
-                .frame(width: 168, height: 252)
-                .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
-                .shadow(color: palette.shadow, radius: 22, x: 4, y: 16)
-                .coverRibbon(book.progress > 0 && !book.isFinished, length: 26, width: 12)
-                .padding(.top, isPage ? 36 : 12)
-                .padding(.bottom, 10)
+            Button { read(book) } label: {
+                BookCover(book: book, style: .hero)
+                    .frame(width: 168, height: 252)
+                    .coverTransitionSource(book.id)
+                    .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
+                    .shadow(color: palette.shadow, radius: 22, x: 4, y: 16)
+                    .coverRibbon(book.progress > 0 && !book.isFinished, length: 26, width: 12)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Read \(book.title)")
+            .padding(.top, isPage ? 36 : 12)
+            .padding(.bottom, 10)
             VStack(spacing: 8) {
                 Text(book.title)
                     .font(.chickenDisplay(sizeClass == .compact ? 27 : 32))
@@ -157,8 +193,7 @@ struct BookDetailView: View {
         GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
                 PrimaryActionButton(title: book.isFinished ? "Read again" : (book.progress > 0 ? "Continue reading" : "Begin reading"), systemImage: "arrow.right") {
-                    dismiss()
-                    openBook(book.id)
+                    read(book)
                 }
                 Menu {
                     Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {

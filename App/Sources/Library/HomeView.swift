@@ -192,6 +192,8 @@ private struct ShelfItem: View {
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
     @Environment(\.coverContext) private var coverContext
+    @Environment(\.bookSequence) private var bookSequence
+    @Environment(\.selectBook) private var selectBook
     let book: Book
     let width: CGFloat
     let showsProgress: Bool
@@ -200,7 +202,7 @@ private struct ShelfItem: View {
     private var inProgress: Bool { book.progress > 0 && !book.isFinished }
 
     var body: some View {
-        Button { openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
+        Button { selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
             VStack(alignment: .leading, spacing: 14) {
                 BookCover(book: book, style: .tile)
                     .frame(width: width, height: width * 1.5)

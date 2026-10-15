@@ -61,6 +61,7 @@ struct LibraryRootView: View {
         }
         .tint(palette.text)
         .environment(\.openBook, OpenBookAction(handler: open))
+        .environment(\.selectBook, SelectBookAction(handler: select))
         .environment(\.coverNamespace, coverNamespace)
         .sheet(isPresented: $router.showingDiscovery) {
             DiscoveryView()
@@ -69,6 +70,8 @@ struct LibraryRootView: View {
         .sheet(item: detailBook) { item in
             BookDetailPager(ids: router.detailSequence, start: item.id)
                 .environment(\.openBook, OpenBookAction(handler: open))
+                // Sheets don't inherit environment set on the presenter.
+                .environment(\.coverNamespace, coverNamespace)
                 .readingTheme(library.preferences.theme)
                 .zoomTransition(from: router.detailSource, in: coverNamespace)
         }
@@ -159,6 +162,14 @@ struct LibraryRootView: View {
     }
 
     // MARK: Opening books
+
+    private func select(_ id: UUID, in sequence: [UUID], from source: CoverSource?) {
+        #if os(macOS)
+        open(id, from: source)
+        #else
+        router.showDetails(id, in: sequence, from: source)
+        #endif
+    }
 
     private func open(_ id: UUID, from source: CoverSource? = nil) {
         #if os(macOS)

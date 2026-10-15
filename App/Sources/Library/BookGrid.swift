@@ -31,6 +31,8 @@ private struct BookTile: View {
     @Environment(\.openBook) private var openBook
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.coverContext) private var coverContext
+    @Environment(\.bookSequence) private var bookSequence
+    @Environment(\.selectBook) private var selectBook
     let book: Book
     /// Each tile's ledge reaches halfway into the gap on either side, so a
     /// row of tiles reads as one continuous shelf.
@@ -40,7 +42,7 @@ private struct BookTile: View {
     private var inProgress: Bool { book.progress > 0 && !book.isFinished }
 
     var body: some View {
-        Button { openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
+        Button { selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
             VStack(alignment: .leading, spacing: 14) {
                 BookCover(book: book, style: .tile)
                     .aspectRatio(2.0 / 3.0, contentMode: .fit)

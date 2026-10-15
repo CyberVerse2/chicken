@@ -8,7 +8,17 @@ struct CoverSource: Hashable {
     let bookID: UUID
 }
 
+/// What tapping a book's cover does: on iPhone and iPad its details card
+/// zooms open (swipeable through `sequence`); on the Mac the book opens.
+struct SelectBookAction {
+    let handler: (UUID, [UUID], CoverSource?) -> Void
+    func callAsFunction(_ id: UUID, in sequence: [UUID], from source: CoverSource?) {
+        handler(id, sequence, source)
+    }
+}
+
 extension EnvironmentValues {
+    @Entry var selectBook = SelectBookAction { _, _, _ in }
     /// Shared by every cover and by the reader and details presentations.
     @Entry var coverNamespace: Namespace.ID?
     /// Names the shelf, grid, or list a cover belongs to.

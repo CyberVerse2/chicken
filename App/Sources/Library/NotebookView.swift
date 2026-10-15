@@ -136,12 +136,14 @@ private struct NotebookBookSection: View {
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
     @Environment(\.coverContext) private var coverContext
+    @Environment(\.bookSequence) private var bookSequence
+    @Environment(\.selectBook) private var selectBook
     let book: Book
     let highlights: [Highlight]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Button { openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
+            Button { selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
                 HStack(alignment: .center, spacing: 14) {
                     BookCover(book: book, style: .mini)
                         .frame(width: 34, height: 51)

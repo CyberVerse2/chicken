@@ -120,11 +120,13 @@ private struct SearchBookRow: View {
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
     @Environment(\.coverContext) private var coverContext
+    @Environment(\.bookSequence) private var bookSequence
+    @Environment(\.selectBook) private var selectBook
     let book: Book
     let query: String
 
     var body: some View {
-        Button { openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
+        Button { selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
             HStack(spacing: 16) {
                 BookCover(book: book, style: .mini)
                     .frame(width: 40, height: 60)
