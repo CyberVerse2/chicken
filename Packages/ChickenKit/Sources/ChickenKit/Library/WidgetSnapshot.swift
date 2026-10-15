@@ -26,14 +26,12 @@ public struct WidgetSnapshot: Codable, Sendable, Hashable {
     public let secondsToday: Int
     public let dailyGoalMinutes: Int
     public let theme: String
-    public let updatedAt: Date
 
-    public init(currentBook: CurrentBook?, secondsToday: Int, dailyGoalMinutes: Int, theme: String, updatedAt: Date = Date()) {
+    public init(currentBook: CurrentBook?, secondsToday: Int, dailyGoalMinutes: Int, theme: String) {
         self.currentBook = currentBook
         self.secondsToday = secondsToday
         self.dailyGoalMinutes = dailyGoalMinutes
         self.theme = theme
-        self.updatedAt = updatedAt
     }
 
     public static let appGroupIdentifier = "group.cyberverse.Chicken"

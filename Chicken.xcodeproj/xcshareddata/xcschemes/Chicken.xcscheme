@@ -1,11 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Scheme
-   LastUpgradeVersion = "1640"
+   LastUpgradeVersion = "2700"
    version = "1.7">
    <BuildAction
       parallelizeBuildables = "YES"
-      buildImplicitDependencies = "YES"
-      buildArchitectures = "Automatic">
+      buildImplicitDependencies = "YES">
       <BuildActionEntries>
          <BuildActionEntry
             buildForTesting = "YES"
@@ -15,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "70CC44472F55E07E0099DF4E"
+               BlueprintIdentifier = "0C1C00000000000000000020"
                BuildableName = "Chicken.app"
                BlueprintName = "Chicken"
                ReferencedContainer = "container:Chicken.xcodeproj">
@@ -27,18 +26,16 @@
       buildConfiguration = "Debug"
       selectedDebuggerIdentifier = "Xcode.DebuggerFoundation.Debugger.LLDB"
       selectedLauncherIdentifier = "Xcode.DebuggerFoundation.Launcher.LLDB"
-      shouldUseLaunchSchemeArgsEnv = "YES"
-      shouldAutocreateTestPlan = "YES">
+      shouldUseLaunchSchemeArgsEnv = "YES">
       <Testables>
          <TestableReference
-            skipped = "NO"
-            parallelizable = "YES">
+            skipped = "NO">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "70CC44562F55E0800099DF4E"
-               BuildableName = "ChickenTests.xctest"
-               BlueprintName = "ChickenTests"
-               ReferencedContainer = "container:Chicken.xcodeproj">
+               BlueprintIdentifier = "ChickenKitTests"
+               BuildableName = "ChickenKitTests"
+               BlueprintName = "ChickenKitTests"
+               ReferencedContainer = "container:Packages/ChickenKit">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -57,7 +54,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "70CC44472F55E07E0099DF4E"
+            BlueprintIdentifier = "0C1C00000000000000000020"
             BuildableName = "Chicken.app"
             BlueprintName = "Chicken"
             ReferencedContainer = "container:Chicken.xcodeproj">
@@ -74,7 +71,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "70CC44472F55E07E0099DF4E"
+            BlueprintIdentifier = "0C1C00000000000000000020"
             BuildableName = "Chicken.app"
             BlueprintName = "Chicken"
             ReferencedContainer = "container:Chicken.xcodeproj">

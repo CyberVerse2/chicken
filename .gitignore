@@ -1,14 +1,8 @@
 .DS_Store
 .build/
+.swiftpm/
 build/
 DerivedData/
 *.xcuserstate
 xcuserdata/
-backend/node_modules/
-backend/dist/
-backend/.env
 dist/
-.build/
-.swiftpm/
-DerivedData/
-xcuserdata/

@@ -1,0 +1,255 @@
+import ChickenKit
+import Foundation
+import Observation
+
+/// Flow of the reading surface. Stored by raw value in `ReaderPreferences`.
+enum ReadingMode: String, CaseIterable, Identifiable {
+    case scroll
+    case paged
+    case spread
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .scroll: return "Scroll"
+        case .paged: return "Pages"
+        case .spread: return "Spread"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .scroll: return "scroll"
+        case .paged: return "book.pages"
+        case .spread: return "book"
+        }
+    }
+
+    var isHorizontal: Bool { self != .scroll }
+}
+
+struct ReaderChapter: Identifiable, Hashable {
+    let id: Int
+    let title: String
+    var subtitle: String?
+    var level: Int = 0
+}
+
+/// Text the reader has selected, waiting for a highlight color.
+struct ReaderSelection: Equatable {
+    let text: String
+    let chapterIndex: Int
+    let location: String?
+}
+
+/// What a format-specific reader (PDF, EPUB, text) must do on request. The
+/// model holds the engine weakly; engines register themselves when created.
+@MainActor
+protocol ReaderEngine: AnyObject {
+    func goToChapter(_ index: Int)
+    func seek(to progress: Double)
+    func jump(to location: String?, chapterIndex: Int)
+    func turnPage(_ direction: Int)
+    func search(_ query: String, backwards: Bool)
+    func clearSelection()
+    func refreshHighlights()
+    /// Flush the precise current position before the reader closes.
+    func captureLocation()
+}
+
+/// State for one open book: navigation, typography, and what the engine
+/// reports back. Views observe it; engines update it.
+@Observable
+final class ReaderModel {
+    let book: Book
+    @ObservationIgnored let library: LibraryStore
+    @ObservationIgnored weak var engine: ReaderEngine?
+
+    // Structure and position, reported by the engine.
+    var chapters: [ReaderChapter] = []
+    var chapterIndex: Int
+    var totalPages: Int?
+    var currentPage: Int?
+    var chapterProgress: Double?
+    var chapterPage: Int?
+    var chapterPageCount: Int?
+    var error: String?
+    var selection: ReaderSelection?
+    var currentLocation: String?
+
+    // Typography and flow.
+    var fontSize: Double
+    var lineHeight: Double
+    var columnWidth: Double
+    var readingMode: ReadingMode
+    var isZen: Bool
+
+    /// Chapter changes the engine reported itself; avoids echoing a
+    /// navigation request back to the engine that caused it.
+    @ObservationIgnored private var engineReportedChapter: Int?
+
+    init(book: Book, library: LibraryStore, defaultMode: ReadingMode) {
+        self.book = book
+        self.library = library
+        let preferences = book.preferences
+        fontSize = preferences?.fontSize ?? ReaderPreferences.default.fontSize
+        lineHeight = preferences?.lineHeight ?? ReaderPreferences.default.lineHeight
+        columnWidth = preferences?.columnWidth ?? ReaderPreferences.default.columnWidth
+        readingMode = preferences.flatMap { ReadingMode(rawValue: $0.readingMode) } ?? defaultMode
+        isZen = preferences?.zenMode ?? false
+        chapterIndex = EPUBLocation.decode(book.lastLocation)?.spineIndex
+            ?? PDFLocation.decode(book.lastLocation)?.chapterIndex
+            ?? 0
+    }
+
+    // MARK: Requests from the UI
+
+    func selectChapter(_ index: Int) {
+        guard chapters.indices.contains(index) else { return }
+        selection = nil
+        chapterIndex = index
+        engine?.goToChapter(index)
+    }
+
+    func seek(to progress: Double) {
+        engine?.seek(to: min(max(progress, 0), 1))
+    }
+
+    func jump(toHighlight highlight: Highlight) {
+        selection = nil
+        engine?.jump(to: highlight.location, chapterIndex: highlight.chapterIndex)
+    }
+
+    func jump(toBookmark bookmark: Bookmark) {
+        selection = nil
+        engine?.jump(to: bookmark.location, chapterIndex: bookmark.chapterIndex)
+    }
+
+    func addHighlight(color: HighlightColor) {
+        guard let selection else { return }
+        library.addHighlight(to: book, chapterIndex: selection.chapterIndex, text: selection.text, color: color, location: selection.location ?? currentLocation)
+        self.selection = nil
+        engine?.clearSelection()
+        engine?.refreshHighlights()
+    }
+
+    func removeHighlight(_ highlight: Highlight) {
+        library.removeHighlight(highlight)
+        engine?.refreshHighlights()
+    }
+
+    func toggleBookmark() {
+        library.toggleBookmark(in: book, chapterIndex: chapterIndex, title: chapterTitle, location: currentLocation ?? book.lastLocation)
+    }
+
+    var isBookmarked: Bool { library.bookmark(in: book, chapterIndex: chapterIndex) != nil }
+
+    func resetTypography() {
+        fontSize = ReaderPreferences.default.fontSize
+        lineHeight = ReaderPreferences.default.lineHeight
+        columnWidth = ReaderPreferences.default.columnWidth
+    }
+
+    func savePreferences() {
+        library.setPreferences(
+            ReaderPreferences(
+                theme: library.preferences.theme.rawValue,
+                fontSize: fontSize,
+                lineHeight: lineHeight,
+                columnWidth: columnWidth,
+                readingMode: readingMode.rawValue,
+                zenMode: isZen
+            ),
+            for: book
+        )
+    }
+
+    // MARK: Reports from the engine
+
+    func engineDidChangeChapter(_ index: Int) {
+        guard index != chapterIndex else { return }
+        engineReportedChapter = index
+        chapterIndex = index
+    }
+
+    /// True when `chapterIndex` changed because the engine said so.
+    func consumeEngineChapterChange(_ index: Int) -> Bool {
+        guard engineReportedChapter == index else { return false }
+        engineReportedChapter = nil
+        return true
+    }
+
+    func reportProgress(_ progress: Double, location: String?) {
+        if let location { currentLocation = location }
+        library.updateProgress(for: book, progress: progress, location: location)
+    }
+
+    func resetPosition() {
+        totalPages = nil
+        currentPage = nil
+        chapterProgress = nil
+        chapterPage = nil
+        chapterPageCount = nil
+    }
+
+    // MARK: Readouts
+
+    var chapterTitle: String {
+        chapters.indices.contains(chapterIndex) ? chapters[chapterIndex].title : book.title
+    }
+
+    var overallProgress: Double {
+        if let totalPages, totalPages > 0, let currentPage {
+            return min(1, max(0, Double(currentPage) / Double(totalPages)))
+        }
+        if chapters.isEmpty { return book.progress }
+        return Double(chapterIndex + 1) / Double(chapters.count)
+    }
+
+    var isOnLastPage: Bool {
+        guard let totalPages, totalPages > 0, let currentPage else { return false }
+        return currentPage >= totalPages
+    }
+
+    var pageReadout: String {
+        if let totalPages, totalPages > 0, let currentPage {
+            return currentPage >= totalPages ? "the last page" : "page \(currentPage) of \(totalPages)"
+        }
+        guard !chapters.isEmpty else { return "" }
+        return "section \(chapterIndex + 1) of \(chapters.count)"
+    }
+
+    var chapterReadout: String {
+        let fraction: Double
+        if let chapterProgress {
+            fraction = chapterProgress
+        } else if let chapterPage, let chapterPageCount, chapterPageCount > 0 {
+            fraction = Double(chapterPage) / Double(chapterPageCount)
+        } else {
+            return ""
+        }
+        return "chapter \(Int((min(1, max(0, fraction)) * 100).rounded()))%"
+    }
+
+    var timeReadout: String {
+        var parts: [String] = []
+        if let pages = chapterPagesRemaining {
+            parts.append("\(ReadingEstimate.duration(forPages: pages)) left in chapter")
+        }
+        if let totalPages, totalPages > 0, let currentPage {
+            parts.append("\(ReadingEstimate.duration(forPages: max(0, totalPages - currentPage))) left in book")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private var chapterPagesRemaining: Int? {
+        if let chapterPage, let chapterPageCount, chapterPageCount > 0 {
+            return max(0, chapterPageCount - chapterPage)
+        }
+        if let chapterPageCount, chapterPageCount > 0, let chapterProgress {
+            return max(0, Int((Double(chapterPageCount) * (1 - min(1, max(0, chapterProgress)))).rounded(.up)))
+        }
+        return nil
+    }
+}

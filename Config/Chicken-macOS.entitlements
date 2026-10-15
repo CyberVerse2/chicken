@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Read books and folders the user picks; Chicken copies files into its own library. -->
+	<key>com.apple.security.files.user-selected.read-only</key>
+	<true/>
+	<!-- Remember shared book folders across launches. -->
+	<key>com.apple.security.files.bookmarks.app-scope</key>
+	<true/>
+	<!-- WebKit's EPUB renderer runs in helper processes that need this even for local files. Chicken makes no network requests. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.cyberverse.Chicken</string>
+	</array>
+</dict>
+</plist>
