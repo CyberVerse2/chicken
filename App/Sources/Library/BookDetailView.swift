@@ -1,5 +1,8 @@
 import ChickenKit
 import SwiftUI
+#if os(macOS)
+import AppKit
+#endif
 
 /// Details for a run of books, one per page: swipe sideways to the next
 /// book on the shelf, as in a printed catalogue.
@@ -135,11 +138,41 @@ extension BookDetailPager {
             .scrollPosition(id: $current, anchor: .center)
             .scrollIndicators(.hidden)
             .scrollClipDisabled()
+            // Tapping a peeking neighbour slides it into the middle.
+            .simultaneousGesture(SpatialTapGesture().onEnded { tap in
+                tapNeighbour(at: tap.location.x, width: geometry.size.width, cardWidth: cardWidth, gap: gap, margin: compact ? 12 : 24)
+            })
             // The cards run past the bottom of the screen.
             .ignoresSafeArea(edges: .bottom)
         }
         // The library shows through behind the cards, dimmed.
         .background(Color.black.opacity(0.4).ignoresSafeArea())
+    }
+}
+
+extension BookDetailPager {
+    /// Brings the previous or next book to the middle when the tap lands on
+    /// its card at the edge rather than on the card in the middle.
+    fileprivate func tapNeighbour(at x: CGFloat, width: CGFloat, cardWidth: CGFloat, gap: CGFloat, margin: CGFloat) {
+        guard let current, let index = ids.firstIndex(of: current) else { return }
+        let left: CGFloat
+        if index == 0 {
+            left = margin
+        } else if index == ids.count - 1 {
+            left = width - margin - cardWidth
+        } else {
+            left = (width - cardWidth) / 2
+        }
+        let target: Int
+        if x < left - gap / 2 {
+            target = index - 1
+        } else if x > left + cardWidth + gap / 2 {
+            target = index + 1
+        } else {
+            return
+        }
+        guard ids.indices.contains(target) else { return }
+        withAnimation(.smooth(duration: 0.4)) { self.current = ids[target] }
     }
 }
 
@@ -172,6 +205,25 @@ private struct CardSnapping: ScrollTargetBehavior {
     }
 }
 
+/// Buttons on the Mac card's colour band: a white capsule for the main
+/// action, a translucent one beside it.
+private struct BandButtonStyle: ButtonStyle {
+    let prominent: Bool
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(prominent ? Color.black.opacity(0.85) : Color.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(prominent ? Color.white.opacity(hovering ? 0.9 : 1) : Color.white.opacity(hovering ? 0.24 : 0.16)))
+            .opacity(configuration.isPressed ? 0.75 : 1)
+            .contentShape(Capsule())
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.15), value: hovering)
+    }
+}
+
 /// About a book: cover, description, where you are, and what's in it.
 /// One page of `BookDetailPager`, or a page of its own when a book is
 /// picked in the Mac sidebar.
@@ -184,12 +236,14 @@ struct BookDetailView: View {
     @Environment(\.coverContext) private var coverContext
     let bookID: UUID
     var isPage = false
-    /// In the Mac's details panel: narrower, and nothing to dismiss.
-    var inInspector = false
-    /// On an iPad card: room above the cover, inside the card's edge.
+    /// On an iPhone or iPad card: room above the cover, inside the card's edge.
     var inCard = false
+    /// The Mac's card: cover on the left, title and actions beside it.
+    var wide = false
     @State private var summaryExpanded = false
     @State private var confirmingRemoval = false
+    /// The Mac card's header colour, from the book's cover.
+    @State private var coverHue: CoverHue?
 
     var body: some View {
         if isPage {
@@ -204,9 +258,15 @@ struct BookDetailView: View {
     private var page: some View {
         Group {
             if let book = library.book(id: bookID) {
-                if isPage || inInspector {
+                if isPage {
                     content(book)
                         .background(palette.background.ignoresSafeArea())
+                } else if wide {
+                    // The Mac card: colour band on top, plain surface below,
+                    // and the book's actions pinned in the top-right corner.
+                    content(book)
+                        .background(palette.surface)
+                        .overlay(alignment: .topTrailing) { moreMenu(book) }
                 } else {
                     // A card takes its colour from the book's cover.
                     content(book)
@@ -221,25 +281,42 @@ struct BookDetailView: View {
 
     private func content(_ book: Book) -> some View {
         ScrollView {
-            VStack(spacing: 28) {
-                hero(book)
-                actions(book)
-                if let summary = book.summary, !summary.isEmpty {
-                    summarySection(summary)
+            if wide {
+                // The Mac card: a band of the cover's colour holding the
+                // cover and actions, then the rest on a plain surface.
+                VStack(spacing: 0) {
+                    wideHero(book)
+                        .padding(.horizontal, 64)
+                        .padding(.top, 72)
+                        .padding(.bottom, 40)
+                        .frame(maxWidth: .infinity)
+                        .background(coverHue?.band ?? palette.surfaceAlt)
+                        .animation(.easeInOut(duration: 0.3), value: coverHue)
+                    sections(book)
+                        .padding(.horizontal, 64)
+                        .padding(.top, 32)
+                        .padding(.bottom, 44)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                details(book)
-                if book.highlightCount > 0 {
-                    highlights(book)
+            } else {
+                VStack(spacing: 28) {
+                    hero(book)
+                    actions(book)
+                    sections(book)
                 }
+                .padding(.horizontal, sizeClass == .compact ? 20 : 36)
+                .padding(.bottom, 40)
+                .frame(maxWidth: 640)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.horizontal, sizeClass == .compact || inInspector ? 20 : 36)
-            .padding(.bottom, 40)
-            .frame(maxWidth: 640)
-            .frame(maxWidth: .infinity)
+        }
+        .task(id: wide ? book.id : nil) {
+            guard wide else { return }
+            coverHue = await CoverTintModifier.hue(for: book, library: library)
         }
         .confirmationDialog("Remove \u{201C}\(book.title)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
             Button("Remove", role: .destructive) {
-                if !inInspector { dismiss() }
+                if !wide { dismiss() }
                 library.delete(book)
             }
         } message: {
@@ -249,11 +326,8 @@ struct BookDetailView: View {
 
     /// Opens the book from this page. On iPhone and iPad the reader zooms
     /// out of the cover above and the card waits underneath; on the Mac the
-    /// sheet closes and the book gets its window.
+    /// book gets its own window and the card stays put.
     private func read(_ book: Book) {
-        #if os(macOS)
-        if !inInspector && !isPage { dismiss() }
-        #endif
         openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id))
     }
 
@@ -261,7 +335,7 @@ struct BookDetailView: View {
         VStack(spacing: 18) {
             Button { read(book) } label: {
                 BookCover(book: book, style: .hero)
-                    .frame(width: inInspector ? 150 : 168, height: inInspector ? 225 : 252)
+                    .frame(width: 168, height: 252)
                     .coverTransitionSource(book.id)
                     .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
                     .shadow(color: palette.shadow, radius: 22, x: 4, y: 16)
@@ -269,11 +343,11 @@ struct BookDetailView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Read \(book.title)")
-            .padding(.top, isPage || inInspector ? 36 : (inCard ? 76 : 12))
+            .padding(.top, isPage ? 36 : (inCard ? 76 : 12))
             .padding(.bottom, 10)
             VStack(spacing: 8) {
                 Text(book.title)
-                    .font(.chickenDisplay(sizeClass == .compact || inInspector ? 25 : 32))
+                    .font(.chickenDisplay(sizeClass == .compact ? 25 : 32))
                     .tracking(-0.5)
                     .foregroundStyle(palette.text)
                     .multilineTextAlignment(.center)
@@ -291,6 +365,125 @@ struct BookDetailView: View {
                     .foregroundStyle(book.progress > 0 && !book.isFinished ? palette.ribbon : palette.muted)
             }
         }
+    }
+
+    @ViewBuilder
+    private func sections(_ book: Book) -> some View {
+        VStack(spacing: 28) {
+            if let summary = book.summary, !summary.isEmpty {
+                summarySection(summary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            details(book)
+            if book.highlightCount > 0 {
+                highlights(book)
+            }
+        }
+    }
+
+    /// The Mac card's header, on the cover-coloured band: the cover on the
+    /// left; title and author at its top, and an inset panel with where you
+    /// are and how to read at its foot, as in Books on the Mac.
+    private func wideHero(_ book: Book) -> some View {
+        HStack(alignment: .top, spacing: 40) {
+            Button { read(book) } label: {
+                BookCover(book: book, style: .hero)
+                    .frame(width: 200, height: 300)
+                    .shadow(color: .black.opacity(0.3), radius: 2, x: 1, y: 1)
+                    .shadow(color: .black.opacity(0.35), radius: 22, x: 4, y: 16)
+                    .coverRibbon(book.progress > 0 && !book.isFinished, length: 30, width: 13)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Read \(book.title)")
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(book.title)
+                    .font(.chickenDisplay(32))
+                    .tracking(-0.5)
+                    .foregroundStyle(Self.bandText)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(book.displayAuthor)
+                    .font(.chickenSerif(18, italic: true))
+                    .foregroundStyle(Self.bandText.opacity(0.75))
+                Spacer(minLength: 24)
+                readingPanel(book)
+            }
+            .frame(maxWidth: .infinity, minHeight: 300, alignment: .topLeading)
+        }
+    }
+
+    /// Light text on the Mac card's colour band, in every theme.
+    private static let bandText = Color.hex(0xF7F1E6)
+
+    /// The inset panel on the band: format and where you are on the left,
+    /// reading actions on the right.
+    private func readingPanel(_ book: Book) -> some View {
+        HStack(alignment: .center, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(panelTitle(book))
+                    .font(.chickenUI(15, weight: .semibold))
+                    .foregroundStyle(Self.bandText)
+                Text(progressText(book))
+                    .font(.chickenUI(13))
+                    .foregroundStyle(Self.bandText.opacity(0.75))
+                if book.progress > 0 && !book.isFinished {
+                    ProgressLine(progress: book.progress, height: 3)
+                        .frame(maxWidth: 220)
+                        .padding(.top, 4)
+                }
+            }
+            Spacer(minLength: 12)
+            VStack(spacing: 8) {
+                Button { read(book) } label: {
+                    Text(book.isFinished ? "Read again" : (book.progress > 0 ? "Continue reading" : "Begin reading"))
+                        .font(.chickenUI(14, weight: .semibold))
+                        .frame(minWidth: 150)
+                }
+                .buttonStyle(BandButtonStyle(prominent: true))
+                Button { library.setFinished(!book.isFinished, for: book) } label: {
+                    Label(book.isFinished ? "Mark as unread" : "Mark as finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark")
+                        .font(.chickenUI(13, weight: .medium))
+                        .frame(minWidth: 150)
+                }
+                .buttonStyle(BandButtonStyle(prominent: false))
+            }
+        }
+        .padding(20)
+        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.white.opacity(0.1)))
+    }
+
+    /// The Mac card's top-right menu: the book's other actions.
+    private func moreMenu(_ book: Book) -> some View {
+        Menu {
+            Button("Read", systemImage: "book") { read(book) }
+            Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {
+                library.setFinished(!book.isFinished, for: book)
+            }
+            #if os(macOS)
+            Button("Show in Finder", systemImage: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([library.fileURL(for: book)])
+            }
+            #endif
+            Divider()
+            Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
+        } label: {
+            Label("More", systemImage: "ellipsis")
+                .labelStyle(.iconOnly)
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Self.bandText)
+                .frame(width: 22, height: 22)
+        }
+        .menuIndicator(.hidden)
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .controlSize(.extraLarge)
+        .padding(18)
+    }
+
+    private func panelTitle(_ book: Book) -> String {
+        var parts = [book.format.label]
+        if let pages = book.pageCount, pages > 0 { parts.append("\(pages) pages") }
+        return parts.joined(separator: " · ")
     }
 
     private func actions(_ book: Book) -> some View {

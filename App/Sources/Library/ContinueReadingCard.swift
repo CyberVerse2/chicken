@@ -106,14 +106,12 @@ struct ContinueReadingCard: View {
             BookCover(book: book, style: .hero, showsClothText: false)
                 .frame(width: width, height: width * 1.5)
                 .coverTransitionSource(book.id)
-                .selectionRing(for: book.id, gap: 7)
                 .shadow(color: palette.shadow.opacity(0.9), radius: 2, x: 1, y: 1)
                 .shadow(color: palette.shadow, radius: hovering ? 30 : 22, x: 4, y: hovering ? 22 : 16)
                 .coverRibbon(mode == .continuing, length: width * 0.16, width: width * 0.075)
                 .rotation3DEffect(.degrees(hovering ? -6 : 0), axis: (x: 0, y: 1, z: 0), anchor: .leading, perspective: 0.6)
         }
         .buttonStyle(.plain)
-        .openOnDoubleClick(book.id)
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.35), value: hovering)
         .accessibilityLabel("\(book.title) details")

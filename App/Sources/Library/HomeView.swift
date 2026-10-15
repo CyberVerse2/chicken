@@ -86,7 +86,6 @@ struct HomeView: View {
             .frame(maxWidth: 1180, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
-        .bookSelectionKeys()
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.hard, for: .top)
         .background(palette.background.ignoresSafeArea())
@@ -143,38 +142,110 @@ struct BookShelf: View {
     let books: [Book]
     let gutter: CGFloat
     var showsProgress = false
+    @State private var position = ScrollPosition(edge: .leading)
+    @State private var scroll = ShelfScroll()
+    @State private var hovering = false
 
     private var coverWidth: CGFloat { sizeClass == .compact ? 108 : 132 }
 
+    /// Room above the covers on the Mac, where the shelf clips, so a cover
+    /// lifting on hover isn't cut off.
+    private var headroom: CGFloat { Platform.isMac ? 10 : 0 }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 18 - headroom) {
             Text(title)
                 .font(.chickenDisplay(sizeClass == .compact ? 19 : 22))
                 .foregroundStyle(palette.text)
                 .padding(.horizontal, gutter)
 
-            ScrollViewReader { proxy in
-                ScrollView(.horizontal) {
-                    LazyHStack(alignment: .top, spacing: sizeClass == .compact ? 18 : 26) {
-                        ForEach(books) { book in
-                            ShelfItem(book: book, width: coverWidth, showsProgress: showsProgress)
-                                .id(book.id)
-                        }
+            ScrollView(.horizontal) {
+                LazyHStack(alignment: .top, spacing: sizeClass == .compact ? 18 : 26) {
+                    ForEach(books) { book in
+                        ShelfItem(book: book, width: coverWidth, showsProgress: showsProgress)
                     }
-                    .scrollTargetLayout()
                 }
-                .followsSelection(in: "shelf-\(title)", proxy: proxy)
+                .scrollTargetLayout()
             }
-            .scrollIndicators(.hidden)
+            // `.hidden` still shows a bar on the Mac with a mouse attached.
+            .scrollIndicators(.never)
             .scrollTargetBehavior(.viewAligned)
-            .contentMargins(.horizontal, gutter, for: .scrollContent)
-            .scrollClipDisabled()
-            .background(alignment: .top) {
-                ShelfLedge().offset(y: coverWidth * 1.5)
+            .scrollPosition($position)
+            .onScrollGeometryChange(for: ShelfScroll.self) { geometry in
+                ShelfScroll(
+                    offset: geometry.contentOffset.x + geometry.contentInsets.leading,
+                    visible: geometry.containerSize.width,
+                    content: geometry.contentSize.width + geometry.contentInsets.leading + geometry.contentInsets.trailing
+                )
+            } action: { _, new in
+                scroll = new
             }
+            .contentMargins(.horizontal, gutter, for: .scrollContent)
+            .contentMargins(.top, headroom, for: .scrollContent)
+            // iPhone and iPad let covers spill past the edges as they
+            // scroll; the Mac clips so they stop at the details panel.
+            .scrollClipDisabled(!Platform.isMac)
+            .background(alignment: .top) {
+                ShelfLedge().offset(y: coverWidth * 1.5 + headroom)
+            }
+            #if os(macOS)
+            .overlay { pageButtons }
+            .onHover { hovering = $0 }
+            #endif
             .coverCollection("shelf-\(title)", books: books.map(\.id))
         }
     }
+
+    #if os(macOS)
+    /// Mac: arrows at either end of the shelf on hover, as in Music and the
+    /// App Store, since a mouse can't scroll sideways.
+    private var pageButtons: some View {
+        HStack {
+            pageButton(systemImage: "chevron.left", label: "Scroll back", enabled: scroll.canGoBack) {
+                page(by: -1)
+            }
+            Spacer()
+            pageButton(systemImage: "chevron.right", label: "Scroll forward", enabled: scroll.canGoForward) {
+                page(by: 1)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: coverWidth * 1.5)
+        .padding(.top, headroom)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .opacity(hovering ? 1 : 0)
+        .animation(.easeOut(duration: 0.15), value: hovering)
+    }
+
+    private func pageButton(systemImage: String, label: String, enabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(label, systemImage: systemImage, action: action)
+            .labelStyle(.iconOnly)
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundStyle(palette.text)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .controlSize(.large)
+            .opacity(enabled ? 1 : 0)
+            .allowsHitTesting(enabled)
+    }
+
+    /// Scrolls by most of a shelf's width.
+    private func page(by direction: CGFloat) {
+        let step = max(scroll.visible - coverWidth, coverWidth)
+        let target = min(max(0, scroll.offset + direction * step), max(0, scroll.content - scroll.visible))
+        withAnimation(.smooth(duration: 0.4)) { position.scrollTo(x: target) }
+    }
+    #endif
+}
+
+/// Where a shelf is scrolled to, for its page buttons.
+nonisolated struct ShelfScroll: Equatable {
+    var offset: CGFloat = 0
+    var visible: CGFloat = 0
+    var content: CGFloat = 0
+
+    var canGoBack: Bool { offset > 2 }
+    var canGoForward: Bool { offset + visible < content - 2 }
 }
 
 /// The lip of a shelf: a hairline catching light over a soft shadow.
@@ -212,7 +283,6 @@ private struct ShelfItem: View {
                 BookCover(book: book, style: .tile)
                     .frame(width: width, height: width * 1.5)
                     .coverTransitionSource(book.id)
-                    .selectionRing(for: book.id, gap: 5)
                     .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
                     .offset(y: hovering ? -6 : 0)
                     .coverRibbon(inProgress)
@@ -238,7 +308,6 @@ private struct ShelfItem: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .openOnDoubleClick(book.id)
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.25), value: hovering)
         .bookContextMenu(book)

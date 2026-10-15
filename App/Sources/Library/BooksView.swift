@@ -84,7 +84,6 @@ struct BooksView: View {
     private var visible: [Book] { sort.sorted(books.filter(filter.includes)) }
 
     var body: some View {
-        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
                 PageHeader(title: "Library")
@@ -111,9 +110,6 @@ struct BooksView: View {
             .padding(.bottom, 80)
             .frame(maxWidth: 1240, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
-        }
-        .bookSelectionKeys()
-        .followsSelection(in: "grid", proxy: proxy)
         }
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.hard, for: .top)
@@ -168,7 +164,7 @@ struct FilterChips: View {
             }
             .padding(.bottom, 2)
         }
-        .scrollIndicators(.hidden)
+        .scrollIndicators(.never)
         .contentMargins(.horizontal, sizeClass == .compact ? 20 : 44, for: .scrollContent)
         .scrollClipDisabled()
         .background(alignment: .bottom) {

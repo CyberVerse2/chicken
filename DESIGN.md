@@ -18,7 +18,6 @@ The ochre ribbon means "this is where you are". It is used only for that, so it 
 - Progress meters and the reader's scrubber fill with ribbon ochre.
 - A bookmarked page gets a ribbon draped over its top edge.
 - The active chapter in Contents, the selected Library/Notebook filter, and the selected theme/typeface are marked with ribbon.
-- The "Where you left off" eyebrow is set in ribbon.
 
 Don't use the ribbon for decoration, errors, or general emphasis.
 
@@ -67,12 +66,16 @@ The egg is a secondary motif, used in three places:
 
 ## Layout
 
-- **Home**: date eyebrow, Superclarendon greeting, and an italic line about today's reading. Then the book you're in, set out on the page rather than boxed in a card: a large cover with its ribbon, title, author, progress, and one "Continue reading" button. After that come shelves (Also reading, Recently added, Waiting on the shelf), the goals row, and a footer saying everything is kept on this device.
-- **Shelves and grid**: covers stand on a shelf ledge (a hairline over a soft shadow) that runs edge to edge. In the Library grid each tile's ledge reaches into the gutters, so every row reads as one shelf.
+- **Home**: a Superclarendon greeting, then the book you're in, set out on the page rather than boxed in a card: a large cover with its ribbon, title, author, a progress line naming the current chapter, and one "Continue reading" button. After that come the goals row and the shelves (Also reading, Recently added, Waiting on the shelf). Copy is kept to what the screen doesn't already show.
+- **Shelves and grid**: covers stand on a shelf ledge (a hairline over a soft shadow) that runs edge to edge. In the Library grid each tile's ledge reaches into the gutters, so every row reads as one shelf. On the Mac, shelves show no scrollbar: ‹ › page buttons appear at the ends on hover, and covers stop at the page edge.
 - **Filters** (Library, Notebook) are quiet text tabs with a ribbon underline, not chips.
-- **Pages** (Library, Notebook, Search) open with `PageHeader`: eyebrow, display title, italic subtitle. Secondary screens (Settings, Find Books, details) use `ChickenPage` and `ChickenSection`.
-- **iPhone Home** shows the brand lockup (icon tile and "Chicken" in Superclarendon Bold) in the navigation bar. On iPad and Mac it heads the sidebar.
-- **Reader**: unchanged structure. There's a Contents sidebar or sheet, a highlights inspector, and a floating glass progress capsule. Typography lives in a popover (a sheet on iPhone) with a live sample, the typeface picker, size and spacing steppers, layout, and theme.
+- **Pages** (Library, Notebook, Search) open with `PageHeader`, a display title alone. Secondary screens (Settings, Find Books) use `ChickenPage` and `ChickenSection`.
+- **Sidebar**: on the Mac, `MacSidebar` holds the lockup, Home / Library / Notebook / Search, a Reading list (mini cover, title, ribbon meter), and today's reading at the foot, on the theme's own surface. On iPad the tab sidebar carries the same Reading list and meter. iPhone uses a tab bar and shows the lockup on Home.
+- **Book details**: tapping or clicking a cover opens the book's card, never the book itself. Reading starts from the card (its cover or Continue reading).
+  - *iPhone and iPad*: full-height cards over the dimmed library, each filled with its book's colour (`CoverTint`) and holding its own close button. The neighbouring books peek in at the edges, and tapping one brings it to the middle; the current card centres, the first and last sit against the edges, and a swipe moves one card. The card zooms out of the tapped cover, and the reader zooms out of the card's cover.
+  - *Mac*: one large card (`MacBookCard`) over the blurred window, with the books before and after standing smaller at either side; clicking one slides it into the middle. Its header is a band of the cover's colour with the cover on the left, the title at its top, and an inset panel (format, progress, Continue reading, Mark as finished) at its foot; ••• sits top right. The rest of the details sit below on a plain surface. ← → step, Return reads, Escape closes.
+- **Reader**: a Contents sidebar or sheet, a highlights inspector, and a floating glass progress capsule. Typography lives in a popover (a sheet on iPhone) with a live sample, the typeface picker, size and spacing steppers, layout, and theme. On iPhone and iPad, tapping the middle of the page shows or hides the controls (and leaves zen); the edges turn pages, and pages turn with a swipe in either direction.
+- **Scrollbars** on the Mac are the thin overlay kind that show only while scrolling, whatever pointing device is attached.
 
 ## Liquid Glass
 

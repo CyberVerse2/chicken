@@ -26,12 +26,6 @@ struct LibraryRootView: View {
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
 
     @State private var tab: AppTab = LibraryRootView.initialTab
-    #if os(macOS)
-    /// The details panel waits until the window has restored its saved
-    /// layout: adding the column during restoration sends AppKit's split
-    /// view into a constraint loop and the app aborts at launch.
-    @State private var windowSettled = false
-    #endif
     /// Covers, the reader, and the details sheet share this so books zoom
     /// open from wherever they were tapped (iPhone and iPad).
     @Namespace private var coverNamespace
@@ -134,16 +128,16 @@ struct LibraryRootView: View {
                 case .book(let id): NavigationStack { BookDetailView(bookID: id, isPage: true) }.id(id)
                 }
             }
-            .inspector(isPresented: inspectorShown) {
-                BookInspector()
-                    .inspectorColumnWidth(min: 300, ideal: 340, max: 440)
-            }
-            .overlay { BookPreviewOverlay() }
-            .animation(.smooth(duration: 0.22), value: router.previewingBookID)
+            .overlay { MacBookCard() }
+            #if DEBUG
             .task {
-                try? await Task.sleep(for: .milliseconds(150))
-                windowSettled = true
+                // `CHICKEN_DEBUG_PANEL=detail:<id>` opens a card with no shelf
+                // behind it; give it the whole library to step through.
+                if router.detailBookID != nil, router.detailSequence.isEmpty {
+                    router.detailSequence = books.map(\.id)
+                }
             }
+            #endif
         }
         #else
         TabView(selection: $tab) {
@@ -181,27 +175,10 @@ struct LibraryRootView: View {
         #endif
     }
 
-    #if os(macOS)
-    /// The details panel, except on a book's own page where it would repeat it.
-    private var inspectorShown: Binding<Bool> {
-        Binding(
-            get: {
-                if case .book = tab { return false }
-                return windowSettled && router.showingInspector
-            },
-            set: { router.showingInspector = $0 }
-        )
-    }
-    #endif
-
     // MARK: Opening books
 
     private func select(_ id: UUID, in sequence: [UUID], from source: CoverSource?) {
-        #if os(macOS)
-        router.select(id, in: sequence, context: source?.context ?? "")
-        #else
         router.showDetails(id, in: sequence, from: source)
-        #endif
     }
 
     private func open(_ id: UUID, from source: CoverSource? = nil) {
@@ -216,19 +193,16 @@ struct LibraryRootView: View {
         #endif
     }
 
-    /// On iPhone and iPad the detail cards present over the dimmed library
-    /// with nothing of their own behind them; the Mac uses a sheet.
-    private var showsDetailsFullScreen: Bool {
-        #if os(iOS)
-        true
-        #else
-        false
-        #endif
-    }
+    /// On iPhone and iPad the detail cards present full screen over the
+    /// dimmed library. (The Mac draws its own card in the window instead.)
+    private var showsDetailsFullScreen: Bool { true }
 
     private func detailBook(presentedFullScreen: Bool) -> Binding<IdentifiedBook?> {
         Binding(
-            get: { presentedFullScreen == showsDetailsFullScreen ? router.detailBookID.map(IdentifiedBook.init) : nil },
+            get: {
+                guard !Platform.isMac, presentedFullScreen == showsDetailsFullScreen else { return nil }
+                return router.detailBookID.map(IdentifiedBook.init)
+            },
             set: { if presentedFullScreen == showsDetailsFullScreen { router.detailBookID = $0?.id } }
         )
     }
@@ -339,11 +313,6 @@ struct LibraryToolbar: ToolbarContent {
             SettingsLink {
                 Label("Settings", systemImage: "gearshape")
             }
-            Button(router.showingInspector ? "Hide Details" : "Show Details", systemImage: "sidebar.trailing") {
-                withAnimation(.smooth(duration: 0.25)) { router.showingInspector.toggle() }
-            }
-            .keyboardShortcut("i", modifiers: .command)
-            .help("Show or hide book details (⌘I)")
             #else
             Button("Settings", systemImage: "gearshape") { router.showingSettings = true }
             #endif

@@ -21,6 +21,13 @@ nonisolated struct CoverHue: Equatable, Sendable {
         }
     }
 
+    /// A strong band of the cover's colour that carries light text in any
+    /// theme, as the header of a card on the Mac.
+    var band: Color {
+        let saturation = min(max(self.saturation * 1.3, 0), 0.72)
+        return Color(hue: hue, saturation: saturation, brightness: saturation < 0.12 ? 0.3 : 0.4)
+    }
+
     init(hue: Double, saturation: Double) {
         self.hue = hue
         self.saturation = saturation
@@ -105,7 +112,7 @@ struct CoverTintModifier: ViewModifier {
     }
 
     @MainActor
-    private static func hue(for book: Book, library: LibraryStore) async -> CoverHue {
+    static func hue(for book: Book, library: LibraryStore) async -> CoverHue {
         let cloth = CoverHue(hex: CoverPreset.preset(for: book.coverTintIndex).clothHex)
         guard let url = library.coverURL(for: book) else { return cloth }
         if book.format == .pdf,
