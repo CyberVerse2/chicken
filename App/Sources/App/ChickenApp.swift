@@ -131,7 +131,6 @@ struct ChickenCommands: Commands {
     let library: LibraryStore
     let router: AppRouter
     @Environment(\.openWindow) private var openWindow
-    @AppStorage(MenuBarReading.visibilityKey) private var showsMenuBarItem = true
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -155,10 +154,6 @@ struct ChickenCommands: Commands {
                 }
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
-
-            Divider()
-
-            Toggle("Show in Menu Bar", isOn: $showsMenuBarItem)
 
             Divider()
 

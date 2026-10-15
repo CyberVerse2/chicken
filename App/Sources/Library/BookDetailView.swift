@@ -415,41 +415,74 @@ struct BookDetailView: View {
     /// Light text on the Mac card's colour band, in every theme.
     private static let bandText = Color.hex(0xF7F1E6)
 
-    /// The inset panel on the band: format and where you are on the left,
-    /// reading actions on the right.
+    /// The inset panel on the band answers "where was I?": the chapter
+    /// you're in and what's left, then one way back in. Marking a book
+    /// finished happens by reaching the end, or from the ••• menu.
     private func readingPanel(_ book: Book) -> some View {
         HStack(alignment: .center, spacing: 20) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(panelTitle(book))
-                    .font(.chickenUI(15, weight: .semibold))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(panelHeadline(book))
+                    .font(.chickenSerif(17, weight: .medium))
                     .foregroundStyle(Self.bandText)
-                Text(progressText(book))
-                    .font(.chickenUI(13))
-                    .foregroundStyle(Self.bandText.opacity(0.75))
+                    .lineLimit(1)
+                if let detail = panelDetail(book) {
+                    Text(detail)
+                        .font(.chickenUI(13))
+                        .foregroundStyle(Self.bandText.opacity(0.7))
+                        .monospacedDigit()
+                }
                 if book.progress > 0 && !book.isFinished {
-                    ProgressLine(progress: book.progress, height: 3)
-                        .frame(maxWidth: 220)
-                        .padding(.top, 4)
+                    // Light on the band whatever the cover's colour; the
+                    // app's ProgressLine track is a dark theme colour here.
+                    GeometryReader { geometry in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Self.bandText.opacity(0.2))
+                            Capsule().fill(Self.bandText)
+                                .frame(width: max(3, geometry.size.width * min(book.progress, 1)))
+                        }
+                    }
+                    .frame(maxWidth: 240)
+                    .frame(height: 3)
+                    .padding(.top, 6)
+                    .accessibilityHidden(true)
                 }
             }
             Spacer(minLength: 12)
-            VStack(spacing: 8) {
-                Button { read(book) } label: {
-                    Text(book.isFinished ? "Read again" : (book.progress > 0 ? "Continue reading" : "Begin reading"))
-                        .font(.chickenUI(14, weight: .semibold))
-                        .frame(minWidth: 150)
-                }
-                .buttonStyle(BandButtonStyle(prominent: true))
-                Button { library.setFinished(!book.isFinished, for: book) } label: {
-                    Label(book.isFinished ? "Mark as unread" : "Mark as finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark")
-                        .font(.chickenUI(13, weight: .medium))
-                        .frame(minWidth: 150)
-                }
-                .buttonStyle(BandButtonStyle(prominent: false))
+            Button { read(book) } label: {
+                Text(book.isFinished ? "Read again" : (book.progress > 0 ? "Continue reading" : "Begin reading"))
+                    .font(.chickenUI(14, weight: .semibold))
+                    .frame(minWidth: 160)
             }
+            .buttonStyle(BandButtonStyle(prominent: true))
         }
         .padding(20)
         .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.white.opacity(0.1)))
+    }
+
+    /// Where you are: the chapter, or the book's state when there's none.
+    private func panelHeadline(_ book: Book) -> String {
+        if book.isFinished { return "Finished" }
+        if book.progress == 0 { return "Not started" }
+        if let chapter = book.lastChapterTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !chapter.isEmpty {
+            return chapter
+        }
+        return "\(Int((book.progress * 100).rounded()))% read"
+    }
+
+    /// How far and how much is left, the book's length before you start,
+    /// or when you finished it. Nothing when there's nothing real to say.
+    private func panelDetail(_ book: Book) -> String? {
+        if book.isFinished {
+            return book.finishedAt.map { $0.formatted(.dateTime.month(.wide).day().year()) }
+        }
+        if book.progress == 0 {
+            guard let pages = book.pageCount, pages > 0 else { return nil }
+            return "\(pages) pages · about \(ReadingEstimate.duration(forPages: pages))"
+        }
+        var parts: [String] = []
+        if book.lastChapterTitle?.isEmpty == false { parts.append("\(Int((book.progress * 100).rounded()))% read") }
+        if let left = book.estimatedPagesLeft { parts.append("\(ReadingEstimate.duration(forPages: left)) left") }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// The Mac card's top-right menu: the book's other actions.
@@ -478,12 +511,6 @@ struct BookDetailView: View {
         .buttonBorderShape(.circle)
         .controlSize(.extraLarge)
         .padding(18)
-    }
-
-    private func panelTitle(_ book: Book) -> String {
-        var parts = [book.format.label]
-        if let pages = book.pageCount, pages > 0 { parts.append("\(pages) pages") }
-        return parts.joined(separator: " · ")
     }
 
     private func actions(_ book: Book) -> some View {

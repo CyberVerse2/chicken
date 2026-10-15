@@ -6,16 +6,15 @@ import SwiftUI
 
 /// Chicken in the menu bar: the house egg, filling up as you read toward
 /// today's goal. Click it for the book you're in and the others on the go,
-/// one click from their pages.
+/// one click from their pages. Hide it from System Settings › Menu Bar.
+/// (Binding `isInserted` to a setting loops forever on macOS 26: the status
+/// item saves its own visibility and SwiftUI writes it straight back.)
 struct MenuBarReading: Scene {
     let library: LibraryStore
     let router: AppRouter
-    @AppStorage(MenuBarReading.visibilityKey) private var isInserted = true
-
-    static let visibilityKey = "Chicken.showsMenuBarItem"
 
     var body: some Scene {
-        MenuBarExtra(isInserted: $isInserted) {
+        MenuBarExtra {
             MenuBarPanel()
                 .environment(library)
                 .environment(router)
@@ -144,13 +143,6 @@ private struct MenuBarPanel: View {
                 }
                 .buttonStyle(MenuRowStyle())
                 Spacer()
-                Button {
-                    UserDefaults.standard.set(false, forKey: MenuBarReading.visibilityKey)
-                } label: {
-                    Image(systemName: "eye.slash")
-                }
-                .buttonStyle(MenuRowStyle())
-                .help("Hide from the menu bar. Show it again from the Reading menu.")
             }
             .padding(8)
         }
