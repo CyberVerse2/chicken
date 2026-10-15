@@ -1,6 +1,6 @@
 # Release Process
 
-Chicken ships as one App Store app (universal purchase) for macOS, iPadOS, and iOS, bundle ID `cyberverse.Chicken`, team `V6Y7WXX6Z5`. The widget is `cyberverse.Chicken.widget`; both share the App Group `group.cyberverse.Chicken`.
+Chicken ships as one App Store app (universal purchase) for macOS, iPadOS, and iOS, bundle ID `cyberverse.Chicken`, team `V6Y7WXX6Z5`. The widget is `cyberverse.Chicken.widget`; both share the App Group `group.cyberverse.Chicken`. The app syncs through the iCloud container `iCloud.cyberverse.Chicken` (CloudKit for the database, iCloud Documents for book files and covers).
 
 ## Versioning
 
@@ -14,8 +14,9 @@ Chicken ships as one App Store app (universal purchase) for macOS, iPadOS, and i
 
 Before the first submission:
 
-- Check the sandbox entitlements in `Config/Chicken-macOS.entitlements`. `network.client` is there only because WebKit's EPUB renderer needs it; Chicken makes no network requests. Say so in the review notes if asked.
-- Privacy details: no data collected.
+- Check the sandbox entitlements in `Config/Chicken-macOS.entitlements`. `network.client` is there because WebKit's EPUB renderer needs it; Chicken's only network use is iCloud sync. Say so in the review notes if asked.
+- Privacy details: no data collected. Books and reading data sync through the user's own iCloud account, which Apple doesn't count as collection by the developer.
+- In the [CloudKit Console](https://icloud.developer.apple.com), deploy the development schema for `iCloud.cyberverse.Chicken` to production. Debug builds create and update the schema as they sync; release builds can't, so do this again whenever a model gains a property.
 - Test the Mac upgrade path by installing a signed build on a machine that has a Chicken 1.x library. The first launch should show "Brought over N books…" in the library.
 
 ## GitHub Releases

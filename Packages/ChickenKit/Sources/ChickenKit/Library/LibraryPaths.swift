@@ -5,9 +5,14 @@ import Foundation
 /// in place: `Application Support/Chicken/{Books,Covers,library.json,...}`.
 public struct LibraryPaths: Sendable {
     public let root: URL
+    /// Whether book files and covers live in iCloud and the database syncs
+    /// through CloudKit. Only the standard library syncs: test libraries and
+    /// `CHICKEN_LIBRARY_ROOT` clones stay on this device.
+    public let syncsWithICloud: Bool
 
-    public init(root: URL) {
+    public init(root: URL, syncsWithICloud: Bool = false) {
         self.root = root
+        self.syncsWithICloud = syncsWithICloud
     }
 
     public static func standard(fileManager: FileManager = .default) -> LibraryPaths {
@@ -20,9 +25,9 @@ public struct LibraryPaths: Sendable {
         if let override = ProcessInfo.processInfo.environment["CHICKEN_LIBRARY_ROOT"], !override.isEmpty {
             return LibraryPaths(root: URL(fileURLWithPath: override, isDirectory: true))
         }
-        return LibraryPaths(root: base.appendingPathComponent("Chicken Development", isDirectory: true))
+        return LibraryPaths(root: base.appendingPathComponent("Chicken Development", isDirectory: true), syncsWithICloud: true)
         #else
-        return LibraryPaths(root: base.appendingPathComponent("Chicken", isDirectory: true))
+        return LibraryPaths(root: base.appendingPathComponent("Chicken", isDirectory: true), syncsWithICloud: true)
         #endif
     }
 

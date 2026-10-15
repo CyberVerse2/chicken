@@ -43,7 +43,7 @@ final class ReadingActivityController {
         writeCover(for: book, library: library)
         let attributes = ReadingActivityAttributes(
             bookID: book.id,
-            title: book.title,
+            title: book.displayTitle,
             author: book.displayAuthor,
             coverTintIndex: book.coverTintIndex,
             theme: library.preferences.theme.rawValue

@@ -122,6 +122,16 @@ struct EPUBStyle: Equatable {
         #endif
     }
 
+    /// iPhone and iPad scroll the columns by hand (the web view pages them);
+    /// on the Mac they move only by script.
+    private static var columnOverflow: String {
+        #if os(iOS)
+        "overflow-x: auto !important; overflow-y: hidden !important;"
+        #else
+        "overflow: hidden !important;"
+        #endif
+    }
+
     private func columnsCSS(count: Int, inset: String) -> String {
         """
         html, body { width: 100vw !important; max-width: none !important; }
@@ -132,7 +142,7 @@ struct EPUBStyle: Equatable {
           \(count == 1 ? "column-width: 100vw !important; column-count: auto !important;" : "column-count: \(count) !important;")
           column-gap: 0 !important;
           column-fill: auto !important;
-          overflow: hidden !important;
+          \(Self.columnOverflow)
           overscroll-behavior: none !important;
         }
         .chicken-spine-section {

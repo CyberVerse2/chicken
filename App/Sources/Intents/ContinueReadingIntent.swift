@@ -51,7 +51,7 @@ struct OpenLastHighlightIntent: AppIntent {
         if let location = highlight.location { book.lastLocation = location }
         library.save()
         AppRouter.shared.pendingDestination = .book(book.id)
-        return .result(dialog: "Opening \(book.title).")
+        return .result(dialog: "Opening \(book.displayTitle).")
     }
 }
 
@@ -100,7 +100,7 @@ struct MarkBookFinishedIntent: AppIntent {
         library.setFinished(true, for: stored)
         let finished = library.booksFinished().count
         let goal = library.preferences.annualBookGoal
-        return .result(dialog: "Marked \(stored.title) as finished. That's \(finished) of \(goal) this year.")
+        return .result(dialog: "Marked \(stored.displayTitle) as finished. That's \(finished) of \(goal) this year.")
     }
 }
 

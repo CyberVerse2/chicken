@@ -150,7 +150,7 @@ private struct NotebookBookSection: View {
                         .coverTransitionSource(book.id)
                         .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(book.title)
+                        Text(book.displayTitle)
                             .font(.chickenDisplay(19))
                             .foregroundStyle(palette.text)
                             .lineLimit(2)

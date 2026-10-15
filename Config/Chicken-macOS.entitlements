@@ -10,12 +10,29 @@
 	<!-- Remember shared book folders across launches. -->
 	<key>com.apple.security.files.bookmarks.app-scope</key>
 	<true/>
-	<!-- WebKit's EPUB renderer runs in helper processes that need this even for local files. Chicken makes no network requests. -->
+	<!-- WebKit's EPUB renderer runs in helper processes that need this even for local files. Chicken's own network use is iCloud sync. -->
 	<key>com.apple.security.network.client</key>
 	<true/>
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>group.cyberverse.Chicken</string>
 	</array>
+	<!-- iCloud sync: the library database through CloudKit, book files and covers through the app's iCloud container. -->
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.cyberverse.Chicken</string>
+	</array>
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+		<string>CloudDocuments</string>
+	</array>
+	<key>com.apple.developer.ubiquity-container-identifiers</key>
+	<array>
+		<string>iCloud.cyberverse.Chicken</string>
+	</array>
+	<!-- CloudKit pushes changes made on other devices. -->
+	<key>com.apple.developer.aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>

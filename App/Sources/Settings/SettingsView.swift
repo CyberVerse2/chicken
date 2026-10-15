@@ -66,15 +66,15 @@ struct SettingsView: View {
             ChickenSection("Privacy") {
                 ChickenRow(isLast: true) {
                     HStack(alignment: .top, spacing: 14) {
-                        Image(systemName: "lock")
+                        Image(systemName: privacy.icon)
                             .font(.system(size: 18, weight: .light))
                             .foregroundStyle(palette.muted)
                             .frame(width: 26)
                         VStack(alignment: .leading, spacing: 6) {
-                            Text("Everything stays on this device")
+                            Text(privacy.title)
                                 .font(.chickenSerif(16, weight: .semibold))
                                 .foregroundStyle(palette.text)
-                            Text("No account, no tracking, nothing sent anywhere. \(books.count) books · \(library.librarySizeDescription())")
+                            Text("\(privacy.detail) \(books.count) books · \(library.librarySizeDescription())")
                                 .font(.chickenUI(13))
                                 .foregroundStyle(palette.muted)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -97,6 +97,17 @@ struct SettingsView: View {
         .toolbar { SheetDoneButton { dismiss() } }
         #endif
         .animation(.easeInOut(duration: 0.3), value: library.preferences.theme)
+    }
+
+    private var privacy: (icon: String, title: String, detail: String) {
+        switch library.iCloudStatus {
+        case .on:
+            return ("icloud", "Synced with your iCloud", "Books, progress, and highlights sync through your own iCloud account. No Chicken account, no tracking.")
+        case .unavailable:
+            return ("icloud.slash", "Everything stays on this device", "To sync with your other devices, sign in to iCloud and turn it on for Chicken.")
+        case .off, .checking:
+            return ("lock", "Everything stays on this device", "No account, no tracking, nothing sent anywhere.")
+        }
     }
 
     private var coverDetail: String {

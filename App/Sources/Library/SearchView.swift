@@ -133,7 +133,7 @@ private struct SearchBookRow: View {
                     .coverTransitionSource(book.id)
                     .shadow(color: palette.shadow, radius: 2, y: 1)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(book.title)
+                    Text(book.displayTitle)
                         .font(.chickenSerif(16, weight: .semibold))
                         .foregroundStyle(palette.text)
                         .lineLimit(2)

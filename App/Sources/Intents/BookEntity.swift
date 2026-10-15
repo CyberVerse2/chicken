@@ -41,7 +41,7 @@ struct BookEntity: AppEntity, IndexedEntity {
     @MainActor
     init(_ book: Book, library: LibraryStore = .shared, includeCover: Bool = false) {
         id = book.id
-        title = book.title
+        title = book.displayTitle
         author = book.displayAuthor
         progress = book.progress
         coverThumbnail = includeCover ? library.coverURL(for: book).flatMap { CoverRenderer.thumbnailJPEG(from: $0, maxPixelSize: 120) } : nil
@@ -57,7 +57,7 @@ struct BookQuery: EntityStringQuery {
     @MainActor
     func entities(matching string: String) async throws -> [BookEntity] {
         let books = LibraryStore.shared.allBooks().filter {
-            $0.title.localizedStandardContains(string) || $0.displayAuthor.localizedStandardContains(string)
+            $0.displayTitle.localizedStandardContains(string) || $0.displayAuthor.localizedStandardContains(string)
         }
         return books.prefix(20).map { BookEntity($0, includeCover: true) }
     }

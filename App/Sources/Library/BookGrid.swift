@@ -58,7 +58,7 @@ private struct BookTile: View {
                     .coverRibbon(inProgress)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(book.title)
+                    Text(book.displayTitle)
                         .font(.chickenSerif(sizeClass == .compact ? 13.5 : 15, weight: .semibold))
                         .foregroundStyle(palette.text)
                         .lineLimit(2)
@@ -79,7 +79,7 @@ private struct BookTile: View {
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.25), value: hovering)
         .bookContextMenu(book)
-        .accessibilityLabel("\(book.title) by \(book.displayAuthor)")
+        .accessibilityLabel("\(book.displayTitle) by \(book.displayAuthor)")
         .accessibilityValue(statusText)
     }
 
@@ -152,7 +152,7 @@ private struct BookContextMenu: ViewModifier {
                     .environment(library)
                     .readingTheme(.paper)
             }
-            .confirmationDialog("Remove \u{201C}\(book.title)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
+            .confirmationDialog("Remove \u{201C}\(book.displayTitle)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) { library.delete(book) }
             } message: {
                 Text("Chicken's copy, highlights, and bookmarks for this book will be deleted. The original file is not affected.")

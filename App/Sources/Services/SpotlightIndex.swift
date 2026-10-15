@@ -18,27 +18,59 @@ final class SpotlightIndex {
     private static let highlightPrefix = "highlight:"
 
     private var pending: Task<Void, Never>?
-    private var lastSignature: Int?
+    /// What's in the index, by item identifier, as of the last pass. Nil
+    /// until the first pass of this launch, which rebuilds it whole.
+    private var indexed: [String: Int]?
 
     private init() {}
 
-    /// Rebuilds the index shortly after the library changes. Cheap enough
-    /// to run whole: a few hundred small items.
+    /// Updates the index shortly after the library changes, re-indexing only
+    /// the books and highlights that changed. Cover thumbnails are made off
+    /// the main actor: there can be hundreds of them.
     func refresh(library: LibraryStore) {
         pending?.cancel()
         pending = Task { [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled, let self else { return }
             let books = library.allBooks()
-            let signature = Self.signature(of: books)
-            guard signature != self.lastSignature else { return }
-            self.lastSignature = signature
 
-            let items = books.map { self.item(for: $0, library: library) }
-                + books.flatMap { book in (book.highlights ?? []).map { self.item(for: $0, in: book) } }
+            var signatures: [String: Int] = [:]
+            var bookItems: [(item: CSSearchableItem, coverURL: URL?)] = []
+            var highlightItems: [CSSearchableItem] = []
+            for book in books {
+                let identifier = Self.bookPrefix + book.id.uuidString
+                signatures[identifier] = Self.signature(of: book)
+                if self.indexed?[identifier] != signatures[identifier] {
+                    bookItems.append((self.item(for: book), library.coverURL(for: book)))
+                }
+                for highlight in book.highlights ?? [] {
+                    let identifier = Self.highlightPrefix + highlight.id.uuidString
+                    signatures[identifier] = Self.signature(of: highlight, in: book)
+                    if self.indexed?[identifier] != signatures[identifier] {
+                        highlightItems.append(self.item(for: highlight, in: book))
+                    }
+                }
+            }
+            let removed = self.indexed.map { Array(Set($0.keys).subtracting(signatures.keys)) } ?? []
+            guard self.indexed == nil || !bookItems.isEmpty || !highlightItems.isEmpty || !removed.isEmpty else { return }
+
+            let coverURLs = bookItems.map(\.coverURL)
+            let thumbnails = await Task.detached(priority: .utility) {
+                coverURLs.map { $0.flatMap { CoverRenderer.thumbnailJPEG(from: $0, maxPixelSize: 160) } }
+            }.value
+            guard !Task.isCancelled else { return }
+            for (entry, thumbnail) in zip(bookItems, thumbnails) {
+                entry.item.attributeSet.thumbnailData = thumbnail
+            }
+
             let index = CSSearchableIndex.default()
-            try? await index.deleteSearchableItems(withDomainIdentifiers: [Self.bookDomain, Self.highlightDomain])
-            try? await index.indexSearchableItems(items)
+            if self.indexed == nil {
+                try? await index.deleteSearchableItems(withDomainIdentifiers: [Self.bookDomain, Self.highlightDomain])
+            } else if !removed.isEmpty {
+                try? await index.deleteSearchableItems(withIdentifiers: removed)
+            }
+            try? await index.indexSearchableItems(bookItems.map(\.item) + highlightItems)
+            self.indexed = signatures
         }
     }
 
@@ -61,10 +93,12 @@ final class SpotlightIndex {
 
     // MARK: Items
 
-    private func item(for book: Book, library: LibraryStore) -> CSSearchableItem {
+    /// Everything but the cover thumbnail, which `refresh` adds off the
+    /// main actor.
+    private func item(for book: Book) -> CSSearchableItem {
         let attributes = CSSearchableItemAttributeSet(contentType: .content)
-        attributes.title = book.title
-        attributes.displayName = book.title
+        attributes.title = book.displayTitle
+        attributes.displayName = book.displayTitle
         attributes.authorNames = book.author.map { [$0] }
         attributes.creator = book.author
         attributes.publishers = book.publisher.map { [$0] }
@@ -80,14 +114,13 @@ final class SpotlightIndex {
         attributes.textContent = book.summary
         attributes.keywords = ["book", book.format.label] + (book.author.map { [$0] } ?? [])
         attributes.lastUsedDate = book.lastOpenedAt
-        attributes.thumbnailData = library.coverURL(for: book).flatMap { CoverRenderer.thumbnailJPEG(from: $0, maxPixelSize: 160) }
 
         let item = CSSearchableItem(
             uniqueIdentifier: Self.bookPrefix + book.id.uuidString,
             domainIdentifier: Self.bookDomain,
             attributeSet: attributes
         )
-        item.associateAppEntity(BookEntity(book, library: library), priority: book.lastOpenedAt == nil ? 1 : 10)
+        item.associateAppEntity(BookEntity(book), priority: book.lastOpenedAt == nil ? 1 : 10)
         return item
     }
 
@@ -98,11 +131,11 @@ final class SpotlightIndex {
         attributes.displayName = attributes.title
         attributes.textContent = highlight.text + (highlight.note.isEmpty ? "" : "\n" + highlight.note)
         attributes.contentDescription = highlight.note.isEmpty
-            ? "Highlighted in \(book.title)"
-            : "\(highlight.note) — \(book.title)"
+            ? "Highlighted in \(book.displayTitle)"
+            : "\(highlight.note) — \(book.displayTitle)"
         attributes.authorNames = book.author.map { [$0] }
         attributes.contentCreationDate = highlight.createdAt
-        attributes.keywords = ["highlight", "quote", book.title]
+        attributes.keywords = ["highlight", "quote", book.displayTitle]
         return CSSearchableItem(
             uniqueIdentifier: Self.highlightPrefix + highlight.id.uuidString,
             domainIdentifier: Self.highlightDomain,
@@ -110,20 +143,25 @@ final class SpotlightIndex {
         )
     }
 
-    /// Changes when anything Spotlight shows changes.
-    private static func signature(of books: [Book]) -> Int {
+    /// Changes when anything Spotlight shows for the book changes.
+    private static func signature(of book: Book) -> Int {
         var hasher = Hasher()
-        for book in books {
-            hasher.combine(book.id)
-            hasher.combine(book.title)
-            hasher.combine(book.author)
-            hasher.combine(Int((book.progress * 100).rounded()))
-            hasher.combine(book.coverImageName)
-            for highlight in book.highlights ?? [] {
-                hasher.combine(highlight.id)
-                hasher.combine(highlight.note)
-            }
-        }
+        hasher.combine(book.title)
+        hasher.combine(book.author)
+        hasher.combine(book.publisher)
+        hasher.combine(book.summary)
+        hasher.combine(Int((book.progress * 100).rounded()))
+        hasher.combine(book.lastOpenedAt)
+        hasher.combine(book.coverImageName)
+        return hasher.finalize()
+    }
+
+    private static func signature(of highlight: Highlight, in book: Book) -> Int {
+        var hasher = Hasher()
+        hasher.combine(highlight.text)
+        hasher.combine(highlight.note)
+        hasher.combine(book.title)
+        hasher.combine(book.author)
         return hasher.finalize()
     }
 }

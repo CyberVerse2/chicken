@@ -127,11 +127,18 @@ struct EPUBReader: PlatformViewRepresentable {
                 "background": ReaderPalette.css(style.palette.backgroundHex),
                 "css": style.css,
                 "preservePosition": preservePosition,
+                "nativeSwipe": Platform.isMac ? false : style.mode.isHorizontal,
             ]
             call("chicken.configure", config)
             #if os(iOS)
-            webView?.scrollView.isScrollEnabled = !style.mode.isHorizontal
-            webView?.scrollView.bounces = !style.mode.isHorizontal
+            // Pages slide under your finger a screen at a time, as in Books;
+            // the columns are exactly one screen (or one spread) wide.
+            if let scrollView = webView?.scrollView {
+                scrollView.isScrollEnabled = true
+                scrollView.isPagingEnabled = style.mode.isHorizontal
+                scrollView.bounces = !style.mode.isHorizontal
+                scrollView.showsHorizontalScrollIndicator = false
+            }
             #endif
         }
 

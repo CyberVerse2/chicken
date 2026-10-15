@@ -206,10 +206,8 @@ final class ReaderModel {
 
     func reportProgress(_ progress: Double, location: String?) {
         if let location { currentLocation = location }
+        // Updates the Live Activity too, once the progress is written.
         library.updateProgress(for: book, progress: progress, location: location)
-        #if os(iOS)
-        ReadingActivityController.shared.refresh()
-        #endif
     }
 
     /// Remembers the chapter you're in, so Home can name it.
@@ -235,7 +233,7 @@ final class ReaderModel {
     // MARK: Readouts
 
     var chapterTitle: String {
-        chapters.indices.contains(chapterIndex) ? chapters[chapterIndex].title : book.title
+        chapters.indices.contains(chapterIndex) ? chapters[chapterIndex].title : book.displayTitle
     }
 
     var overallProgress: Double {

@@ -16,7 +16,7 @@ extension LibraryStore {
                 currentBook: book.map {
                     WidgetSnapshot.CurrentBook(
                         id: $0.id,
-                        title: $0.title,
+                        title: $0.displayTitle,
                         author: $0.displayAuthor,
                         progress: $0.progress,
                         coverTintIndex: $0.coverTintIndex,

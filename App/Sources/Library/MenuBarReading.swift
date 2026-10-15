@@ -198,7 +198,7 @@ private struct MenuBarPanel: View {
                 BookCover(book: book, style: .mini)
                     .frame(width: 56, height: 84)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(book.title)
+                    Text(book.displayTitle)
                         .font(.chickenDisplay(16))
                         .lineLimit(2)
                     Text(book.displayAuthor)
@@ -240,7 +240,7 @@ private struct MenuBarPanel: View {
             BookCover(book: book, style: .mini)
                 .frame(width: 22, height: 33)
             VStack(alignment: .leading, spacing: 1) {
-                Text(book.title)
+                Text(book.displayTitle)
                     .font(.chickenSerif(13))
                     .lineLimit(1)
                 Text(book.displayAuthor)

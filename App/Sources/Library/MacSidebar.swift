@@ -57,7 +57,7 @@ private struct MacSidebarBookRow: View {
                 .frame(width: 24, height: 36)
                 .shadow(color: palette.shadow, radius: 1.5, x: 0.5, y: 1)
             VStack(alignment: .leading, spacing: 5) {
-                Text(book.title)
+                Text(book.displayTitle)
                     .font(.chickenSerif(13, weight: .semibold))
                     .foregroundStyle(palette.text)
                     .lineLimit(1)
@@ -72,7 +72,7 @@ private struct MacSidebarBookRow: View {
         }
         .padding(.vertical, 4)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(book.title)
+        .accessibilityLabel(book.displayTitle)
         .accessibilityValue("\(Int((book.progress * 100).rounded())) percent read")
     }
 }

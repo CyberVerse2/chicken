@@ -48,10 +48,16 @@ struct ReaderView: View {
     @State private var coverTimedOut = false
     @State private var zenHover = false
     @State private var availableWidth: CGFloat = 1200
+    /// The book's file once it's on this device; nil while it downloads
+    /// from iCloud.
+    @State private var bookFile: URL?
+    @State private var downloadError: String?
+    @State private var downloadAttempt = 0
 
     init(book: Book, library: LibraryStore) {
         self.library = library
         _model = State(initialValue: ReaderModel(book: book, library: library, defaultMode: Self.defaultMode))
+        _bookFile = State(initialValue: library.readableFileURL(for: book))
     }
 
     private static var debugPanel: String? {
@@ -93,7 +99,7 @@ struct ReaderView: View {
             .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
             .toolbar { toolbar }
             .toolbarVisibility(chromeVisible ? .automatic : .hidden, for: Self.toolbarPlacement)
-            .navigationTitle(book.title)
+            .navigationTitle(book.displayTitle)
             #if os(macOS)
             .navigationSubtitle(model.chapters.isEmpty ? book.displayAuthor : model.chapterTitle)
             #else
@@ -207,7 +213,7 @@ struct ReaderView: View {
     /// the page meanwhile, so opening a book reads as its cover opening.
     private var isWaitingForFirstPage: Bool {
         guard book.format == .epub || book.format == .pdf else { return false }
-        return model.error == nil && model.currentPage == nil && model.chapterProgress == nil && !coverTimedOut
+        return bookFile != nil && model.error == nil && model.currentPage == nil && model.chapterProgress == nil && !coverTimedOut
     }
 
     private var readingSurface: some View {
@@ -301,7 +307,7 @@ struct ReaderView: View {
                         if model.readAloud.state != .idle {
                             ReadAloudBar(
                                 controller: model.readAloud,
-                                chapter: model.chapters.isEmpty ? book.title : model.chapterTitle,
+                                chapter: model.chapters.isEmpty ? book.displayTitle : model.chapterTitle,
                                 compact: isCompact
                             )
                                 .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -323,13 +329,12 @@ struct ReaderView: View {
     private var engineView: some View {
         if let error = model.error {
             ContentUnavailableView {
-                Label(book.title, systemImage: "exclamationmark.triangle")
+                Label(book.displayTitle, systemImage: "exclamationmark.triangle")
             } description: {
                 Text(error)
             }
             .foregroundStyle(palette.text)
-        } else {
-            let fileURL = library.fileURL(for: book)
+        } else if let fileURL = bookFile {
             switch book.format {
             case .pdf:
                 PDFReader(model: model, fileURL: fileURL, palette: palette, readingMode: model.readingMode, onTapCenter: toggleChrome)
@@ -344,7 +349,52 @@ struct ReaderView: View {
             case .text, .document, .unknown:
                 TextReader(model: model, fileURL: fileURL, palette: palette, fontSize: model.fontSize, lineHeight: model.lineHeight, columnWidth: model.columnWidth, typeface: model.typeface, onTapCenter: toggleChrome)
             }
+        } else {
+            downloadingView
+                .task(id: downloadAttempt) {
+                    downloadError = nil
+                    do {
+                        bookFile = try await library.downloadFile(for: book)
+                    } catch is CancellationError {
+                    } catch {
+                        downloadError = error.localizedDescription
+                    }
+                }
         }
+    }
+
+    /// The book's cover while its file comes down from iCloud.
+    private var downloadingView: some View {
+        VStack(spacing: 22) {
+            BookCover(book: book, style: .hero)
+                .frame(width: isCompact ? 160 : 200, height: isCompact ? 240 : 300)
+                .shadow(color: palette.shadow, radius: 24, x: 4, y: 16)
+                .opacity(downloadError == nil ? 1 : 0.6)
+            if let downloadError {
+                VStack(spacing: 12) {
+                    Text(downloadError)
+                        .font(.chickenUI(14))
+                        .foregroundStyle(palette.muted)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: 320)
+                    Button("Try Again") { downloadAttempt += 1 }
+                        .font(.chickenUI(13, weight: .medium))
+                        .foregroundStyle(palette.text)
+                        .buttonStyle(.glass)
+                }
+            } else {
+                Label {
+                    Text("Downloading from iCloud…")
+                } icon: {
+                    ProgressView().controlSize(.small)
+                }
+                .font(.chickenUI(13, weight: .medium))
+                .foregroundStyle(palette.muted)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(palette.background)
     }
 
     /// Two-page spreads need room; narrow layouts fall back to single pages.
@@ -382,7 +432,7 @@ struct ReaderView: View {
         #if os(iOS)
         ToolbarItem(placement: .principal) {
             VStack(spacing: 1) {
-                Text(book.title)
+                Text(book.displayTitle)
                     .font(.chickenSerif(15, weight: .medium))
                     .lineLimit(1)
                 if !model.chapters.isEmpty {

@@ -199,7 +199,7 @@ private struct DiscoveredRow: View {
                 .frame(width: 38, height: 54)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text(book.title)
+                Text(book.title.readableTitle)
                     .font(.chickenSerif(15, weight: .semibold))
                     .foregroundStyle(palette.text)
                     .lineLimit(2)

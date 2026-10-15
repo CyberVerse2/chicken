@@ -73,7 +73,7 @@ struct BookCover: View {
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {
-                    ClothCover(title: book.title, author: book.author, preset: preset, style: style, showsText: showsClothText)
+                    ClothCover(title: book.displayTitle, author: book.author, preset: preset, style: style, showsText: showsClothText)
                 }
             }
             .overlay { CoverFinish(style: style) }
@@ -84,7 +84,9 @@ struct BookCover: View {
                 topTrailingRadius: style.cornerRadius,
                 style: .continuous
             ))
-            .task(id: "\(book.coverImageName ?? "")-\(cacheGeneration)") {
+            // A cover still waiting on iCloud looks again when covers
+            // arrive; one already showing doesn't.
+            .task(id: "\(book.coverImageName ?? "")-\(cacheGeneration)-\(image == nil ? library.cloudFilesGeneration : 0)") {
                 guard let url = library.coverURL(for: book) else {
                     image = nil
                     return

@@ -174,9 +174,9 @@ final class ReadAloudController: NSObject {
     private func updateNowPlaying() {
         guard let model else { return }
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: model.chapters.isEmpty ? model.book.title : model.chapterTitle,
+            MPMediaItemPropertyTitle: model.chapters.isEmpty ? model.book.displayTitle : model.chapterTitle,
             MPMediaItemPropertyArtist: model.book.displayAuthor,
-            MPMediaItemPropertyAlbumTitle: model.book.title,
+            MPMediaItemPropertyAlbumTitle: model.book.displayTitle,
             MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
             MPNowPlayingInfoPropertyPlaybackRate: state == .playing ? 1.0 : 0.0,
             MPNowPlayingInfoPropertyPlaybackProgress: model.book.progress,

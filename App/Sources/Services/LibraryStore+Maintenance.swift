@@ -11,9 +11,12 @@ extension Notification.Name {
 /// could be extracted, and the manual "refresh covers" action.
 extension LibraryStore {
     func scheduleDerivedDataRefresh() {
+        // A book added on another device is checked there; skip any whose
+        // file is still in iCloud rather than download it for this.
         let pending = allBooks()
             .filter { !$0.derivedDataChecked && ($0.format == .pdf || $0.format == .epub) }
             .map { DerivedWork(id: $0.id, fileURL: fileURL(for: $0), format: $0.format, needsCover: $0.coverImageName == nil) }
+            .filter { CloudFolders.isDownloaded($0.fileURL) }
         guard !pending.isEmpty else { return }
 
         let covers = paths.covers
@@ -24,6 +27,7 @@ extension LibraryStore {
                 let results = chunk.map { $0.run(coversDirectory: covers) }
                 await MainActor.run { self?.applyDerived(results) }
             }
+            await MainActor.run { self?.moveFilesToICloud() }
         }
     }
 
@@ -44,14 +48,16 @@ extension LibraryStore {
     }
 
     /// Re-extracts every cover. Books whose source has no usable cover fall
-    /// back to the stylized cover.
+    /// back to the stylized cover. Books still in iCloud keep the cover they
+    /// have rather than being downloaded for this.
     func refreshAllCovers() {
         guard !coverRefreshState.isRefreshing else { return }
-        let books = allBooks().filter { $0.format == .pdf || $0.format == .epub }
+        let books = allBooks().filter { ($0.format == .pdf || $0.format == .epub) && readableFileURL(for: $0) != nil }
         guard !books.isEmpty else { return }
 
+        var staleCovers: [URL] = []
         for book in books {
-            if let url = coverURL(for: book) { try? FileManager.default.removeItem(at: url) }
+            staleCovers += storedFiles(of: book).filter { $0.lastPathComponent == book.coverImageName }
             book.coverImageName = nil
         }
         save()
@@ -62,6 +68,7 @@ extension LibraryStore {
         coverRefreshState = .refreshing(completed: 0, total: work.count)
 
         Task.detached(priority: .utility) { [weak self] in
+            staleCovers.forEach(CloudFolders.remove)
             var completed = 0
             var refreshed = 0
             for chunk in work.chunked(into: 6) {
@@ -81,6 +88,7 @@ extension LibraryStore {
             await MainActor.run {
                 self?.save()
                 self?.coverRefreshState = .finished(refreshed: total)
+                self?.moveFilesToICloud()
                 self?.publishWidgetSnapshot()
             }
             try? await Task.sleep(for: .seconds(3))

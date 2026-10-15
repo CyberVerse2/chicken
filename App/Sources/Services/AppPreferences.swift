@@ -21,6 +21,9 @@ final class AppPreferences {
         didSet { defaults.set(annualBookGoal, forKey: Keys.annualGoal) }
     }
 
+    /// Identifies this device's reading-time rows in the synced library.
+    let deviceID: String
+
     static let dailyGoalRange = 5...180
     static let annualGoalRange = 1...365
 
@@ -36,6 +39,12 @@ final class AppPreferences {
         dailyGoalMinutes = daily > 0 ? daily : 30
         let annual = defaults.integer(forKey: Keys.annualGoal)
         annualBookGoal = annual > 0 ? annual : 12
+        if let existing = defaults.string(forKey: Keys.deviceID) {
+            deviceID = existing
+        } else {
+            deviceID = UUID().uuidString
+            defaults.set(deviceID, forKey: Keys.deviceID)
+        }
     }
 
     // Same keys as Chicken 1.x so existing choices carry over.
@@ -43,5 +52,6 @@ final class AppPreferences {
         static let theme = "Chicken.readingTheme"
         static let dailyGoal = "Chicken.dailyReadingMinutesGoal"
         static let annualGoal = "Chicken.annualBookGoal"
+        static let deviceID = "Chicken.deviceID"
     }
 }

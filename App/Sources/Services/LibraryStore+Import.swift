@@ -77,6 +77,7 @@ extension LibraryStore {
                 self.importErrors = summaryErrors
                 self.importState = .finished(imported: imported, failed: failed)
                 self.save()
+                self.moveFilesToICloud()
                 self.publishWidgetSnapshot()
             }
             try? await Task.sleep(for: .seconds(2.5))

@@ -59,6 +59,9 @@ final class Book {
         set { preferencesData = newValue.flatMap { try? JSONEncoder().encode($0) } }
     }
 
+    /// The title as shown: all-caps titles become title case.
+    var displayTitle: String { title.readableTitle }
+
     var displayAuthor: String {
         guard let author, !author.isEmpty else { return "Unknown author" }
         return author
@@ -132,15 +135,20 @@ final class Bookmark {
     }
 }
 
-/// Seconds of active reading on one calendar day (`yyyy-MM-dd`).
+/// Seconds of active reading on one calendar day (`yyyy-MM-dd`), on one
+/// device. Each device keeps its own rows so two devices reading on the same
+/// day never overwrite each other's time; a day's total is the sum.
 @Model
 final class ReadingDay {
     var day: String = ""
     var seconds: Int = 0
+    /// `AppPreferences.deviceID`; nil for rows from before sync.
+    var device: String?
 
-    init(day: String, seconds: Int) {
+    init(day: String, seconds: Int, device: String? = nil) {
         self.day = day
         self.seconds = seconds
+        self.device = device
     }
 }
 

@@ -287,7 +287,7 @@ private struct ShelfItem: View {
                     .offset(y: hovering ? -6 : 0)
                     .coverRibbon(inProgress)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(book.title)
+                    Text(book.displayTitle)
                         .font(.chickenSerif(13.5, weight: .semibold))
                         .foregroundStyle(palette.text)
                         .lineLimit(2)
@@ -311,7 +311,7 @@ private struct ShelfItem: View {
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.25), value: hovering)
         .bookContextMenu(book)
-        .accessibilityLabel("\(book.title) by \(book.displayAuthor)")
+        .accessibilityLabel("\(book.displayTitle) by \(book.displayAuthor)")
     }
 }
 

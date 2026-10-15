@@ -314,7 +314,7 @@ struct BookDetailView: View {
             guard wide else { return }
             coverHue = await CoverTintModifier.hue(for: book, library: library)
         }
-        .confirmationDialog("Remove \u{201C}\(book.title)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
+        .confirmationDialog("Remove \u{201C}\(book.displayTitle)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
             Button("Remove", role: .destructive) {
                 if !wide { dismiss() }
                 library.delete(book)
@@ -342,11 +342,11 @@ struct BookDetailView: View {
                     .coverRibbon(book.progress > 0 && !book.isFinished, length: 26, width: 12)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Read \(book.title)")
+            .accessibilityLabel("Read \(book.displayTitle)")
             .padding(.top, isPage ? 36 : (inCard ? 76 : 12))
             .padding(.bottom, 10)
             VStack(spacing: 8) {
-                Text(book.title)
+                Text(book.displayTitle)
                     .font(.chickenDisplay(sizeClass == .compact ? 25 : 32))
                     .tracking(-0.5)
                     .foregroundStyle(palette.text)
@@ -394,10 +394,10 @@ struct BookDetailView: View {
                     .coverRibbon(book.progress > 0 && !book.isFinished, length: 30, width: 13)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Read \(book.title)")
+            .accessibilityLabel("Read \(book.displayTitle)")
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(book.title)
+                Text(book.displayTitle)
                     .font(.chickenDisplay(32))
                     .tracking(-0.5)
                     .foregroundStyle(Self.bandText)

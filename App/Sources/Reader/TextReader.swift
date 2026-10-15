@@ -74,7 +74,7 @@ struct TextReader: PlatformViewRepresentable {
             self.model = model
             super.init()
             model.engine = self
-            model.chapters = [ReaderChapter(id: 0, title: model.book.title)]
+            model.chapters = [ReaderChapter(id: 0, title: model.book.displayTitle)]
         }
 
         #if os(macOS)

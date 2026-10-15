@@ -177,7 +177,7 @@ struct LibraryRootView: View {
                         Tab(value: AppTab.book(book.id)) {
                             NavigationStack { BookDetailView(bookID: book.id, isPage: true) }
                         } label: {
-                            Label(book.title, systemImage: "bookmark.fill")
+                            Label(book.displayTitle, systemImage: "bookmark.fill")
                         }
                         .defaultVisibility(.hidden, for: .tabBar)
                     }

@@ -63,7 +63,9 @@ cp -cR ~/Library/Application\ Support/Chicken /tmp/chicken-dev-library
 
 ## Data and privacy
 
-Everything lives on the device: book copies in `Application Support/Chicken/Books`, covers in `Covers`, and the SwiftData store `Library.store`. The models avoid unique constraints and non-optional relationships so iCloud sync (CloudKit) can be turned on later without a schema migration; it is off today.
+The SwiftData store `Library.store` lives in `Application Support/Chicken` and syncs through the user's private CloudKit database, so progress, highlights, bookmarks, and reading time follow them across Mac, iPad, and iPhone. The models avoid unique constraints and non-optional relationships, as CloudKit requires. Book copies and covers live in Chicken's iCloud container (`iCloud.cyberverse.Chicken`, outside its Documents folder so iCloud Drive doesn't list them); other devices download a book when it's opened (`LibraryStore+ICloud.swift`). The same file added on two devices is merged into one book.
+
+Without iCloud (signed out, turned off for Chicken, or an unsigned build) nothing syncs: files stay in the local `Books` and `Covers` folders and everything else works the same. Debug builds sync with CloudKit's development environment and keep their files in a separate `Development` folder in the container; `CHICKEN_LIBRARY_ROOT` clones never sync.
 
 ### Upgrading from Chicken 1.x (Mac)
 

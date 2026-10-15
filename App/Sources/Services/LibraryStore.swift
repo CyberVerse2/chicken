@@ -24,6 +24,14 @@ final class LibraryStore {
     var folders: [WatchedFolder] = []
     var migrationSummary: String?
 
+    // iCloud. `cloud` is set once the container is reachable; until then,
+    // and whenever iCloud is off, files are found in the local folders.
+    var iCloudStatus: ICloudStatus = .off
+    var cloud: CloudFolders?
+    /// Bumped when covers arrive from iCloud, so covers waiting on a
+    /// download look again.
+    var cloudFilesGeneration = 0
+
     // Reading time, kept live while a reader is open.
     var readingSecondsToday = 0
     var lastSevenDays: [DayReading] = []
@@ -35,6 +43,15 @@ final class LibraryStore {
     @ObservationIgnored var derivedDataTask: Task<Void, Never>?
     @ObservationIgnored var widgetTask: Task<Void, Never>?
     @ObservationIgnored var lastPublishedSnapshot: WidgetSnapshot?
+    @ObservationIgnored var pendingProgress: (book: Book, progress: Double, location: String?)?
+    @ObservationIgnored var progressFlushTask: Task<Void, Never>?
+    @ObservationIgnored var cloudWatcher: CloudFileWatcher?
+    /// Covers in iCloud that are on this device, kept by `cloudWatcher` so
+    /// showing a cover never has to ask iCloud. Nil until its first report.
+    @ObservationIgnored var downloadedCloudCovers: Set<String>?
+    @ObservationIgnored var cloudObservers: [NSObjectProtocol] = []
+    @ObservationIgnored var cloudMoveTask: Task<Void, Never>?
+    @ObservationIgnored var cloudChangeTask: Task<Void, Never>?
 
     init(paths: LibraryPaths = .standard(), preferences: AppPreferences = AppPreferences(), inMemory: Bool = false) {
         self.paths = paths
@@ -43,7 +60,7 @@ final class LibraryStore {
         folders = WatchedFolder.load(from: paths)
         migrateLegacyLibraryIfNeeded()
         recomputeReadingStats()
-        scheduleDerivedDataRefresh()
+        connectToICloud()
         publishWidgetSnapshot()
         #if DEBUG
         seedDebugLibraryIfRequested()
@@ -57,6 +74,15 @@ final class LibraryStore {
             return try! ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
         }
         try? paths.createDirectories()
+        // Sync through the private CloudKit database when this build can.
+        // If CloudKit can't be set up, open the same store unsynced rather
+        // than treating it as unreadable.
+        if paths.syncsWithICloud && CloudFolders.isEnabledInThisBuild {
+            let synced = ModelConfiguration("Chicken", schema: schema, url: paths.store, cloudKitDatabase: .private(CloudFolders.containerID))
+            if let container = try? ModelContainer(for: schema, configurations: synced) {
+                return container
+            }
+        }
         let configuration = ModelConfiguration("Chicken", schema: schema, url: paths.store, cloudKitDatabase: .none)
         if let container = try? ModelContainer(for: schema, configurations: configuration) {
             return container
@@ -99,17 +125,30 @@ final class LibraryStore {
         return try? context.fetch(descriptor).first
     }
 
+    /// Where the book's file is: in the local folder until it has moved to
+    /// iCloud, then in iCloud, where it may still need downloading (see
+    /// `downloadIfNeeded`).
     func fileURL(for book: Book) -> URL {
-        paths.bookFile(named: book.storedFileName)
+        let local = paths.bookFile(named: book.storedFileName)
+        guard let cloud, !FileManager.default.fileExists(atPath: local.path) else { return local }
+        return cloud.books.appendingPathComponent(book.storedFileName)
     }
 
+    /// The cover image, if one exists and is on this device.
     func coverURL(for book: Book) -> URL? {
         guard let name = book.coverImageName else { return nil }
-        let url = paths.coverFile(named: name)
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        let local = paths.coverFile(named: name)
+        if FileManager.default.fileExists(atPath: local.path) { return local }
+        guard let cloud else { return nil }
+        let synced = cloud.covers.appendingPathComponent(name)
+        if let downloadedCloudCovers {
+            return downloadedCloudCovers.contains(name) ? synced : nil
+        }
+        return CloudFolders.isDownloaded(synced) ? synced : nil
     }
 
     func save() {
+        flushPendingProgress()
         guard context.hasChanges else { return }
         try? context.save()
     }
@@ -124,7 +163,35 @@ final class LibraryStore {
         publishWidgetSnapshot()
     }
 
+    /// Records where the reader is. Called on every page turn, so the book
+    /// itself is updated at most every 1.5 seconds: each change to it redraws
+    /// every view showing it (the library stays live behind the reader) and
+    /// queues it for iCloud. `save()` writes anything still waiting.
     func updateProgress(for book: Book, progress: Double, location: String?) {
+        if let pending = pendingProgress, pending.book !== book { flushPendingProgress() }
+        pendingProgress = (book, progress, location)
+        guard progressFlushTask == nil else { return }
+        progressFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.5))
+            guard !Task.isCancelled else { return }
+            self?.flushPendingProgress()
+        }
+    }
+
+    func flushPendingProgress() {
+        progressFlushTask?.cancel()
+        progressFlushTask = nil
+        guard let pending = pendingProgress else { return }
+        pendingProgress = nil
+        // The book may have been deleted, or merged into its duplicate.
+        guard pending.book.modelContext != nil, !pending.book.isDeleted else { return }
+        applyProgress(for: pending.book, progress: pending.progress, location: pending.location)
+        #if os(iOS)
+        ReadingActivityController.shared.refresh()
+        #endif
+    }
+
+    private func applyProgress(for book: Book, progress: Double, location: String?) {
         let clamped = min(max(progress, 0), 1)
         let now = Date()
         let wasFinished = book.isFinished
@@ -218,13 +285,25 @@ final class LibraryStore {
     // MARK: - Removing books
 
     func delete(_ book: Book) {
-        let fileURL = fileURL(for: book)
-        let coverURL = coverURL(for: book)
+        let files = storedFiles(of: book)
         context.delete(book)
         save()
-        try? FileManager.default.removeItem(at: fileURL)
-        if let coverURL { try? FileManager.default.removeItem(at: coverURL) }
+        Task.detached(priority: .utility) {
+            files.forEach(CloudFolders.remove)
+        }
         publishWidgetSnapshot()
+    }
+
+    /// The book's file and cover, wherever each is, including copies iCloud
+    /// knows about but hasn't downloaded.
+    func storedFiles(of book: Book) -> [URL] {
+        var files = [paths.bookFile(named: book.storedFileName)]
+        if let name = book.coverImageName { files.append(paths.coverFile(named: name)) }
+        if let cloud {
+            files.append(cloud.books.appendingPathComponent(book.storedFileName))
+            if let name = book.coverImageName { files.append(cloud.covers.appendingPathComponent(name)) }
+        }
+        return files.filter(CloudFolders.exists)
     }
 }
 
@@ -261,6 +340,15 @@ enum ScanState: Equatable {
         if case .scanning = self { return true }
         return false
     }
+}
+
+enum ICloudStatus: Equatable {
+    /// This library doesn't sync (tests, `CHICKEN_LIBRARY_ROOT` clones).
+    case off
+    case checking
+    /// Signed out of iCloud, or iCloud is turned off for Chicken.
+    case unavailable
+    case on
 }
 
 struct DayReading: Identifiable, Hashable {

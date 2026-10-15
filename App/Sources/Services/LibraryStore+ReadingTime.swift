@@ -22,6 +22,7 @@ extension LibraryStore {
 
     func appDidResignActive() {
         pauseReadingSession()
+        save()
     }
 
     private func resumeReadingSession() {
@@ -55,12 +56,13 @@ extension LibraryStore {
 
     func addReadingSeconds(_ seconds: Int, toDay day: String) {
         guard seconds > 0 else { return }
-        var descriptor = FetchDescriptor<ReadingDay>(predicate: #Predicate { $0.day == day })
+        let device: String? = preferences.deviceID
+        var descriptor = FetchDescriptor<ReadingDay>(predicate: #Predicate { $0.day == day && $0.device == device })
         descriptor.fetchLimit = 1
         if let existing = try? context.fetch(descriptor).first {
             existing.seconds += seconds
         } else {
-            context.insert(ReadingDay(day: day, seconds: seconds))
+            context.insert(ReadingDay(day: day, seconds: seconds, device: device))
         }
     }
 

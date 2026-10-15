@@ -11,6 +11,10 @@
   const state = {
     horizontal: false,
     spread: false,
+    // iPhone and iPad: the web view pages natively, so the page slides
+    // under your finger and taps slide it too.
+    nativeSwipe: false,
+    scriptScrollUntil: 0,
     background: '#F5F1E8',
     turnIndex: null,
     turning: false,
@@ -63,13 +67,16 @@
     const target = Math.max(0, Math.min(m.pageCount - 1, Math.round(page)));
     const turn = Math.max(0, Math.min(m.turnCount - 1, Math.round((target * m.pageUnit) / m.turnUnit)));
     state.turnIndex = turn;
+    // While a scripted slide runs, `turnIndex` is where it's going; a second
+    // tap mid-slide counts from there.
+    if (behavior === 'smooth') state.scriptScrollUntil = Date.now() + 700;
     const left = state.spread ? turn * m.turnUnit : target * m.pageUnit;
     window.scrollTo({ left: Math.min(m.maxX, left), top: 0, behavior });
   };
 
   const targetPageForTurn = (direction) => {
     const m = metrics();
-    if (!state.spread) return Math.max(0, Math.min(m.pageCount - 1, currentPage() + direction));
+    if (!state.spread && !state.nativeSwipe) return Math.max(0, Math.min(m.pageCount - 1, currentPage() + direction));
     const spread = Math.max(0, Math.min(m.turnCount - 1, currentTurn() + direction));
     return Math.round((spread * m.turnUnit) / m.pageUnit);
   };
@@ -91,6 +98,10 @@
   const turnPage = async (direction) => {
     if (!state.horizontal) {
       window.scrollBy({ top: window.innerHeight * 0.88 * direction, behavior: state.reduceMotion ? 'auto' : 'smooth' });
+      return;
+    }
+    if (state.nativeSwipe) {
+      scrollToPage(targetPageForTurn(direction), state.reduceMotion ? 'auto' : 'smooth');
       return;
     }
     if (state.turning) return;
@@ -387,8 +398,10 @@
     }
     if (!state.horizontal || elapsed > 700) return;
     // Pages turn with a swipe either way: sideways like a book, or up and
-    // down like scrolling.
+    // down like scrolling. Sideways is the web view's own paging when it
+    // has it.
     if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.4) {
+      if (state.nativeSwipe) return;
       turnPage(dx < 0 ? 1 : -1);
     } else if (Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx) * 1.4) {
       turnPage(dy < 0 ? 1 : -1);
@@ -429,7 +442,10 @@
   };
 
   window.addEventListener('scroll', () => {
-    reportProgress();
+    // A page sliding under a finger reports once it settles, not on the way,
+    // and the finger, not the script, now says which page this is.
+    if (state.nativeSwipe && Date.now() > state.scriptScrollUntil) state.turnIndex = null;
+    if (!state.nativeSwipe) reportProgress();
     clearTimeout(snapTimer);
     snapTimer = setTimeout(() => { snapToPage(); reportProgress(true); }, 180);
   }, { passive: true });
@@ -511,6 +527,7 @@
     const modeChanged = state.horizontal !== config.horizontal || state.spread !== config.spread;
     state.horizontal = config.horizontal;
     state.spread = config.spread;
+    state.nativeSwipe = Boolean(config.nativeSwipe);
     state.background = config.background;
     state.turnIndex = null;
     let style = document.getElementById('chicken-reader-style');

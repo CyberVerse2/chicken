@@ -35,7 +35,7 @@ struct ContinueReadingCard: View {
         HStack(alignment: .center, spacing: 52) {
             cover(width: 210)
             VStack(alignment: .leading, spacing: 0) {
-                Text(book.title)
+                Text(book.displayTitle)
                     .font(.chickenDisplay(40))
                     .tracking(-0.8)
                     .foregroundStyle(palette.text)
@@ -65,7 +65,7 @@ struct ContinueReadingCard: View {
             cover(width: 148)
                 .padding(.bottom, 34)
             // Sized as a caption to the cover above, which already shows the title.
-            Text(book.title)
+            Text(book.displayTitle)
                 .font(.chickenDisplay(24))
                 .tracking(-0.4)
                 .foregroundStyle(palette.text)
@@ -114,7 +114,7 @@ struct ContinueReadingCard: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .animation(.smooth(duration: 0.35), value: hovering)
-        .accessibilityLabel("\(book.title) details")
+        .accessibilityLabel("\(book.displayTitle) details")
     }
 
     private var actionTitle: String {
