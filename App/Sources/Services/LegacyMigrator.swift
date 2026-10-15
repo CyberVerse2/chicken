@@ -8,7 +8,11 @@ import SwiftData
 /// cover files are already where the new store expects them, so only the
 /// catalog needs converting. The JSON files are left untouched.
 enum LegacyMigrator {
-    static let completedKey = "Chicken.legacyMigrationCompleted"
+    /// Marker kept beside the library (not in UserDefaults) so it travels
+    /// with the data it describes.
+    static func markerURL(in paths: LibraryPaths) -> URL {
+        paths.root.appendingPathComponent(".legacy-migrated")
+    }
 
     struct Result {
         let books: Int
@@ -17,11 +21,9 @@ enum LegacyMigrator {
     }
 
     static func run(in context: ModelContext, paths: LibraryPaths) throws -> Result? {
-        guard !UserDefaults.standard.bool(forKey: completedKey) else { return nil }
-        guard LegacyLibrary.catalogExists(in: paths.root) else {
-            UserDefaults.standard.set(true, forKey: completedKey)
-            return nil
-        }
+        let marker = markerURL(in: paths)
+        guard !FileManager.default.fileExists(atPath: marker.path) else { return nil }
+        guard LegacyLibrary.catalogExists(in: paths.root) else { return nil }
 
         let existing = Set(((try? context.fetch(FetchDescriptor<Book>())) ?? []).map(\.id))
         let legacy = try LegacyLibrary.load(from: paths.root)
@@ -88,7 +90,7 @@ enum LegacyMigrator {
         }
 
         try context.save()
-        UserDefaults.standard.set(true, forKey: completedKey)
+        try? Data().write(to: marker)
         return Result(books: booksByID.count, highlights: highlightCount, bookmarks: bookmarkCount)
     }
 }

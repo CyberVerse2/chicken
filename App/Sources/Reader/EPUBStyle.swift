@@ -29,26 +29,18 @@ struct EPUBStyle: Equatable {
             }
             """
         case .paged:
-            layout = """
-            html {
-              --chicken-page-width: min(\(Int(columnWidth))px, calc(100vw - 48px));
-              --chicken-column-gap: 48px;
-              --chicken-page-inset: clamp(16px, 5vw, 84px);
-            }
-            """ + columnsCSS
+            // One full-width column per screen; the reading measure comes
+            // from per-page padding so page turns are exactly one viewport.
+            // (Sized by width: WebKit ignores `column-count: 1` entirely.)
+            layout = columnsCSS(count: 1, inset: "max(24px, calc((100vw - \(Int(columnWidth))px) / 2))")
         case .spread:
-            layout = """
-            html {
-              --chicken-column-gap: clamp(72px, 7vw, 160px);
-              --chicken-page-width: calc((100vw - var(--chicken-column-gap)) / 2);
-              --chicken-page-inset: clamp(40px, 4.6vw, 104px);
-            }
+            layout = columnsCSS(count: 2, inset: "clamp(28px, 4vw, 80px)") + """
             .chicken-spine-section h1, .chicken-spine-section h2, .chicken-spine-section h3,
             .chicken-spine-section h4, .chicken-spine-section h5, .chicken-spine-section h6,
             .chicken-spine-section header, .chicken-spine-section figure, .chicken-spine-section table {
               break-inside: avoid-column;
             }
-            """ + columnsCSS
+            """
         }
 
         return """
@@ -110,21 +102,24 @@ struct EPUBStyle: Equatable {
         """
     }
 
-    private var columnsCSS: String {
+    private func columnsCSS(count: Int, inset: String) -> String {
         """
+        html, body { width: 100vw !important; max-width: none !important; }
         body {
-          max-width: none !important;
           height: 100vh !important;
-          padding: calc(28px + env(safe-area-inset-top)) 0 calc(72px + env(safe-area-inset-bottom)) !important;
-          column-width: var(--chicken-page-width) !important;
-          column-gap: var(--chicken-column-gap) !important;
+          margin: 0 !important;
+          padding: calc(28px + env(safe-area-inset-top)) 0 calc(76px + env(safe-area-inset-bottom)) !important;
+          \(count == 1 ? "column-width: 100vw !important; column-count: auto !important;" : "column-count: \(count) !important;")
+          column-gap: 0 !important;
           column-fill: auto !important;
           overflow: hidden !important;
           overscroll-behavior: none !important;
         }
         .chicken-spine-section {
-          padding-left: var(--chicken-page-inset) !important;
-          padding-right: var(--chicken-page-inset) !important;
+          padding-left: \(inset) !important;
+          padding-right: \(inset) !important;
+          margin: 0 !important;
+          min-height: 0 !important;
           -webkit-box-decoration-break: clone;
           box-decoration-break: clone;
           break-before: column;

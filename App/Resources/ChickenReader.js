@@ -17,6 +17,7 @@
     lastWheelTurn: 0,
     lastProgressPost: 0,
     lastGlobalProgress: 0,
+    restored: false,
     reduceMotion: window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
   };
 
@@ -30,19 +31,19 @@
   // Pagination. Horizontal modes lay the book out in CSS columns; each
   // column is a virtual page and spreads advance two at a time.
 
+  // Columns are exactly one viewport wide (half in spread mode), so a page
+  // is the viewport width and a turn is one or two pages.
   const metrics = () => {
-    const style = getComputedStyle(document.body);
-    const columnWidth = parseFloat(style.getPropertyValue('--chicken-page-width')) || parseFloat(style.columnWidth) || window.innerWidth;
-    const gap = parseFloat(style.getPropertyValue('--chicken-column-gap')) || parseFloat(style.columnGap) || 64;
-    const pageUnit = Math.max(200, columnWidth + gap);
-    const turnUnit = state.spread ? pageUnit * 2 : pageUnit;
-    const maxX = Math.max(0, Math.max(doc().scrollWidth || 0, document.body.scrollWidth || 0) - window.innerWidth);
+    const width = window.innerWidth;
+    const pageUnit = state.spread ? width / 2 : width;
+    const turnUnit = state.spread ? width : pageUnit;
+    const maxX = Math.max(0, Math.max(doc().scrollWidth || 0, document.body.scrollWidth || 0) - width);
     return {
       pageUnit,
       turnUnit,
       maxX,
-      pageCount: Math.max(1, Math.ceil((maxX + pageUnit) / pageUnit)),
-      turnCount: Math.max(1, Math.ceil((maxX + turnUnit) / turnUnit)),
+      pageCount: Math.max(1, Math.round((maxX + width) / pageUnit)),
+      turnCount: Math.max(1, Math.round((maxX + width) / turnUnit)),
     };
   };
 
@@ -110,14 +111,34 @@
   // ---------------------------------------------------------------------
   // Position reporting.
 
+  // Page span of a section in horizontal modes. A chapter that flows over
+  // several columns has one client rect per column fragment.
+  const sectionPages = (section) => {
+    const rects = Array.from(section.getClientRects()).filter((r) => r.width > 0 || r.height > 0);
+    const { pageUnit } = metrics();
+    if (!rects.length) {
+      const start = Math.round(section.offsetLeft / pageUnit);
+      return { start, end: start };
+    }
+    const left = Math.min(...rects.map((r) => r.left)) + scrollX();
+    const right = Math.max(...rects.map((r) => r.right)) + scrollX();
+    const start = Math.max(0, Math.floor((left + 1) / pageUnit));
+    const end = Math.max(start, Math.floor((right - 1) / pageUnit));
+    return { start, end };
+  };
+
   const activeSection = () => {
     const all = sections();
     let active = all[0];
+    if (state.horizontal) {
+      const page = currentPage();
+      for (const section of all) {
+        if (sectionPages(section).start <= page) active = section; else break;
+      }
+      return { all, active };
+    }
     for (const section of all) {
-      const rect = section.getBoundingClientRect();
-      const leading = state.horizontal ? rect.left : rect.top;
-      const threshold = state.horizontal ? window.innerWidth * 0.42 : window.innerHeight * 0.34;
-      if (leading <= threshold) active = section; else break;
+      if (section.getBoundingClientRect().top <= window.innerHeight * 0.34) active = section; else break;
     }
     return { all, active };
   };
@@ -132,12 +153,12 @@
 
   const sectionProgress = (section) => {
     if (!section) return 0;
-    const position = state.horizontal ? scrollX() : scrollY();
-    const start = state.horizontal ? section.offsetLeft : section.offsetTop;
-    const length = state.horizontal
-      ? Math.max(1, section.scrollWidth - window.innerWidth * 0.75)
-      : Math.max(1, section.scrollHeight - window.innerHeight * 0.75);
-    return Math.max(0, Math.min(1, (position - start) / length));
+    if (state.horizontal) {
+      const { start, end } = sectionPages(section);
+      return end <= start ? 0 : Math.max(0, Math.min(1, (currentPage() - start) / (end - start)));
+    }
+    const length = Math.max(1, section.scrollHeight - window.innerHeight * 0.75);
+    return Math.max(0, Math.min(1, (scrollY() - section.offsetTop) / length));
   };
 
   const snapshot = () => {
@@ -151,10 +172,9 @@
       page = currentPage();
       pageCount = m.pageCount;
       if (active) {
-        const first = Math.round(active.offsetLeft / m.pageUnit);
-        const nextFirst = next ? Math.round(next.offsetLeft / m.pageUnit) : pageCount;
-        chapterPageCount = Math.max(1, nextFirst - first);
-        pageWithinSpine = Math.max(0, Math.min(chapterPageCount - 1, page - first));
+        const { start, end } = sectionPages(active);
+        chapterPageCount = Math.max(1, end - start + 1);
+        pageWithinSpine = Math.max(0, Math.min(chapterPageCount - 1, page - start));
       }
     } else {
       page = Math.floor(scrollY() / verticalUnit);
@@ -193,8 +213,8 @@
     if (!section) return;
     const p = Math.max(0, Math.min(1, progress || 0));
     if (state.horizontal) {
-      const target = section.offsetLeft + Math.max(0, section.scrollWidth - window.innerWidth * 0.75) * p;
-      scrollToPage(Math.round(target / metrics().pageUnit));
+      const { start, end } = sectionPages(section);
+      scrollToPage(start + Math.round((end - start) * p));
     } else {
       const target = section.offsetTop + Math.max(0, section.scrollHeight - window.innerHeight * 0.75) * p;
       window.scrollTo({ top: target, behavior: 'auto' });
@@ -213,19 +233,22 @@
     reportProgress(true);
   };
 
+  // Restores by spine item and progress within it, which survives changes
+  // in font size, window size, or reading mode. A saved page number is used
+  // only when it still falls inside the same spine item.
   const restore = (location) => {
     if (!location) return;
+    scrollToSection(location.spineIndex, location.progression);
     if (state.horizontal && Number.isFinite(location.pageNumber)) {
-      scrollToPage(Math.max(0, location.pageNumber - 1));
-      // Pagination may differ from when the page was saved (new font size or
-      // window size); if we didn't land in the right spine item, fall back.
-      if (sectionIndex(activeSection().active) !== location.spineIndex) {
-        scrollToSection(location.spineIndex, location.progression);
+      const section = document.getElementById(`chapter-${location.spineIndex}`);
+      const target = location.pageNumber - 1;
+      if (section) {
+        const { start, end } = sectionPages(section);
+        if (target >= start && target <= end) scrollToPage(target);
       }
-      reportProgress(true);
-    } else {
-      scrollToSection(location.spineIndex, location.progression);
     }
+    state.restored = true;
+    reportProgress(true);
   };
 
   const search = (query, backwards) => {
@@ -395,6 +418,7 @@
   let resizeTimer = null;
   let resizeAnchor = null;
   window.addEventListener('resize', () => {
+    if (!state.restored) return;
     if (resizeAnchor === null) resizeAnchor = state.lastGlobalProgress;
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => {
@@ -421,7 +445,7 @@
     style.textContent = config.css;
     doc().style.background = config.background;
     document.body.style.background = config.background;
-    if (modeChanged || config.preservePosition) {
+    if (state.restored && (modeChanged || config.preservePosition)) {
       requestAnimationFrame(() => scrollToProgress(anchor));
     }
   };

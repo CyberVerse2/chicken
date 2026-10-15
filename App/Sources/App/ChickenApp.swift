@@ -1,4 +1,5 @@
 import ChickenKit
+import SwiftData
 import SwiftUI
 
 @main
@@ -7,11 +8,21 @@ struct ChickenApp: App {
     @State private var router = AppRouter.shared
     @Environment(\.scenePhase) private var scenePhase
 
+    init() {
+        #if DEBUG
+        // `CHICKEN_DEBUG_OPEN=continue` or a book UUID opens a reader at launch.
+        if let target = ProcessInfo.processInfo.environment["CHICKEN_DEBUG_OPEN"] {
+            AppRouter.shared.pendingDestination = UUID(uuidString: target).map(ChickenLink.Destination.book) ?? .continueReading
+        }
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup("Library", id: SceneID.library) {
             LibraryRootView()
                 .environment(library)
                 .environment(router)
+                .modelContainer(library.container)
                 .readingTheme(library.preferences.theme)
         }
         #if os(macOS)
@@ -33,6 +44,7 @@ struct ChickenApp: App {
                 ReaderLoader(bookID: bookID)
                     .environment(library)
                     .environment(router)
+                    .modelContainer(library.container)
             }
         }
         .defaultSize(width: 1240, height: 860)
@@ -41,6 +53,8 @@ struct ChickenApp: App {
         Settings {
             SettingsView()
                 .environment(library)
+                .environment(router)
+                .modelContainer(library.container)
                 .readingTheme(library.preferences.theme)
                 .frame(width: 540, height: 620)
         }

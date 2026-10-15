@@ -31,7 +31,9 @@ final class Book {
     var lastLocation: String?
     /// Stamped when progress first reaches 100%; powers "books this year".
     var finishedAt: Date?
-    var preferences: ReaderPreferences?
+    /// JSON-encoded `ReaderPreferences`. Stored as plain data rather than a
+    /// composite attribute, which SwiftData decodes unreliably.
+    var preferencesData: Data?
 
     @Relationship(deleteRule: .cascade, inverse: \Highlight.book)
     var highlights: [Highlight]? = []
@@ -48,6 +50,11 @@ final class Book {
     }
 
     var format: BookFormat { BookFormat(rawValue: formatRaw) ?? .unknown }
+
+    var preferences: ReaderPreferences? {
+        get { preferencesData.flatMap { try? JSONDecoder().decode(ReaderPreferences.self, from: $0) } }
+        set { preferencesData = newValue.flatMap { try? JSONEncoder().encode($0) } }
+    }
 
     var displayAuthor: String {
         guard let author, !author.isEmpty else { return "Unknown author" }

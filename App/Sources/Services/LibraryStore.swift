@@ -66,7 +66,7 @@ final class LibraryStore {
             let url = URL(fileURLWithPath: paths.store.path + suffix)
             try? FileManager.default.moveItem(at: url, to: URL(fileURLWithPath: url.path + ".unreadable-\(stamp)"))
         }
-        UserDefaults.standard.removeObject(forKey: LegacyMigrator.completedKey)
+        try? FileManager.default.removeItem(at: LegacyMigrator.markerURL(in: paths))
         do {
             return try ModelContainer(for: schema, configurations: configuration)
         } catch {

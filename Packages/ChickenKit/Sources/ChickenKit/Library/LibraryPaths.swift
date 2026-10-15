@@ -13,7 +13,17 @@ public struct LibraryPaths: Sendable {
     public static func standard(fileManager: FileManager = .default) -> LibraryPaths {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
+        #if DEBUG
+        // Development builds never open the real library by accident: they
+        // use their own folder unless pointed at one (e.g. a scratch clone)
+        // with CHICKEN_LIBRARY_ROOT.
+        if let override = ProcessInfo.processInfo.environment["CHICKEN_LIBRARY_ROOT"], !override.isEmpty {
+            return LibraryPaths(root: URL(fileURLWithPath: override, isDirectory: true))
+        }
+        return LibraryPaths(root: base.appendingPathComponent("Chicken Development", isDirectory: true))
+        #else
         return LibraryPaths(root: base.appendingPathComponent("Chicken", isDirectory: true))
+        #endif
     }
 
     public var books: URL { root.appendingPathComponent("Books", isDirectory: true) }

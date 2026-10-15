@@ -31,6 +31,7 @@ struct ChaptersList: View {
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
             .onAppear { proxy.scrollTo(model.chapterIndex, anchor: .center) }
+            .onChange(of: model.chapters.count) { proxy.scrollTo(model.chapterIndex, anchor: .center) }
             .onChange(of: model.chapterIndex) { _, index in
                 withAnimation(.easeInOut(duration: 0.18)) { proxy.scrollTo(index, anchor: .center) }
             }
@@ -51,11 +52,6 @@ private struct ChapterRow: View {
                     .fill(isActive ? palette.text : .clear)
                     .frame(width: 2)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(chapter.level > 0 ? "Section \(chapter.id + 1)" : "Chapter \(chapter.id + 1)")
-                        .font(.chickenUI(10, weight: .medium))
-                        .tracking(1.2)
-                        .textCase(.uppercase)
-                        .foregroundStyle(palette.faint)
                     Text(chapter.title)
                         .font(.chickenSerif(14, weight: isActive ? .medium : .regular))
                         .foregroundStyle(isActive ? palette.text : palette.muted)

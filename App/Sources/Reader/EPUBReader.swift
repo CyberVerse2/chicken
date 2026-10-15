@@ -204,8 +204,9 @@ struct EPUBReader: PlatformViewRepresentable {
                publication.spine.indices.contains(location.spineIndex),
                publication.spine[location.spineIndex].locationHref == location.href {
                 restore(location)
-            } else if model.chapterIndex > 0 {
-                call("chicken.scrollToSection", model.chapterIndex, 0)
+            } else {
+                let start = EPUBLocation(href: "", spineIndex: model.chapterIndex, progression: 0, globalProgression: 0)
+                restore(start, attempts: 1)
             }
         }
 

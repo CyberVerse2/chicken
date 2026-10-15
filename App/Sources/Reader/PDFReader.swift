@@ -73,6 +73,11 @@ struct PDFReader: PlatformViewRepresentable {
         private var searchMatches: [PDFSelection] = []
         private var searchIndex = -1
         private var observers: [NSObjectProtocol] = []
+        /// Page to show once the view has a real size. Until the saved
+        /// position is restored, page changes aren't reported as progress,
+        /// so opening a book can never overwrite where the reader left off.
+        private var pendingRestorePage: Int?
+        private var isRestoring = true
 
         init(model: ReaderModel) {
             self.model = model
@@ -84,6 +89,7 @@ struct PDFReader: PlatformViewRepresentable {
             self.view = view
             self.onTapCenter = onTapCenter
             view.onTapCenter = { [weak self] in self?.onTapCenter() }
+            view.onLayout = { [weak self] in self?.performPendingRestore() }
             let center = NotificationCenter.default
             observers.append(center.addObserver(forName: .PDFViewPageChanged, object: view, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.pageChanged() }
@@ -126,31 +132,39 @@ struct PDFReader: PlatformViewRepresentable {
                 }
             }
             if let root = document.outlineRoot { walk(root, level: 0) }
-            if entries.isEmpty {
+            let hasOutline = !entries.isEmpty
+            if !hasOutline {
                 entries = (0..<min(document.pageCount, 500)).map { ($0, "Page \($0 + 1)") }
             }
             outline = entries.map { (page: $0.0, title: $0.1) }
-            model.chapters = outline.enumerated().map { index, entry in
-                ReaderChapter(id: index, title: entry.title, subtitle: "Page \(entry.page + 1)")
-            }
+            model.chapters = Self.chapters(from: outline, hasOutline: hasOutline)
         }
 
         private func restoreInitialLocation(_ document: PDFDocument) {
-            let pageIndex: Int
             if let location = PDFLocation.decode(model.book.lastLocation), document.page(at: location.pageIndex) != nil {
-                pageIndex = location.pageIndex
+                pendingRestorePage = location.pageIndex
             } else if model.book.progress > 0 {
-                pageIndex = max(0, min(document.pageCount - 1, Int((model.book.progress * Double(document.pageCount)).rounded(.up)) - 1))
+                pendingRestorePage = max(0, min(document.pageCount - 1, Int((model.book.progress * Double(document.pageCount)).rounded(.up)) - 1))
             } else {
-                updatePageState(pageIndex: 0, document: document)
-                return
+                pendingRestorePage = 0
             }
-            if let page = document.page(at: pageIndex) {
-                // Defer until the view has laid out, or PDFKit ignores the jump.
-                DispatchQueue.main.async { [weak self] in
-                    self?.view?.go(to: page)
-                    self?.updatePageState(pageIndex: pageIndex, document: document)
-                }
+            performPendingRestore()
+        }
+
+        private func performPendingRestore() {
+            guard let pageIndex = pendingRestorePage, let view, let document = view.document,
+                  view.bounds.width > 0, view.bounds.height > 0,
+                  let page = document.page(at: pageIndex) else { return }
+            pendingRestorePage = nil
+            view.go(to: page)
+            updatePageState(pageIndex: pageIndex, document: document)
+            // PDFKit can settle on a neighbouring page while it finishes
+            // laying out; re-assert once, then start reporting.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                guard let self, let view = self.view else { return }
+                if view.currentPage != page { view.go(to: page) }
+                self.isRestoring = false
+                self.updatePageState(pageIndex: pageIndex, document: document)
             }
         }
 
@@ -165,7 +179,7 @@ struct PDFReader: PlatformViewRepresentable {
         }
 
         private func pageChanged() {
-            guard let view, let document = view.document, let page = view.currentPage else { return }
+            guard !isRestoring, let view, let document = view.document, let page = view.currentPage else { return }
             let pageIndex = document.index(for: page)
             updatePageState(pageIndex: pageIndex, document: document)
             let chapter = chapter(forPage: pageIndex)
@@ -279,6 +293,15 @@ struct PDFReader: PlatformViewRepresentable {
             pageChanged()
         }
 
+        /// Chapter entries for the contents list.
+        private static func chapters(from outline: [(page: Int, title: String)], hasOutline: Bool) -> [ReaderChapter] {
+            outline.enumerated().map { index, entry in
+                hasOutline
+                    ? ReaderChapter(id: index, title: entry.title, subtitle: "Page \(entry.page + 1)")
+                    : ReaderChapter(id: index, title: entry.title)
+            }
+        }
+
         static let annotationTag = "chicken-highlight"
     }
 }
@@ -288,6 +311,7 @@ struct PDFReader: PlatformViewRepresentable {
 final class ChickenPDFView: PDFView {
     var usesDiscreteTurns = false
     var onTapCenter: () -> Void = {}
+    var onLayout: () -> Void = {}
 
     private var isPaired: Bool { displayMode == .twoUp || displayMode == .twoUpContinuous }
 
@@ -321,6 +345,11 @@ final class ChickenPDFView: PDFView {
     private var lastTurn = Date.distantPast
 
     override var acceptsFirstResponder: Bool { true }
+
+    override func layout() {
+        super.layout()
+        onLayout()
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -356,6 +385,11 @@ final class ChickenPDFView: PDFView {
         recognizer.cancelsTouchesInView = false
         return recognizer
     }()
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        onLayout()
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
