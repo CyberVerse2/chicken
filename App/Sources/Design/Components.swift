@@ -140,12 +140,6 @@ struct SecondaryActionButton: View {
 }
 
 extension Date {
-    var relativeDescription: String {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter.localizedString(for: self, relativeTo: Date())
-    }
-
     var shortRelativeDescription: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .abbreviated

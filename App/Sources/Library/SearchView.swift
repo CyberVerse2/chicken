@@ -41,10 +41,6 @@ struct SearchView: View {
                         Text("Nothing matches \u{201C}\(trimmed)\u{201D}")
                             .font(.chickenSerif(18, italic: true))
                             .foregroundStyle(palette.muted)
-                        Text("Try part of a title, an author's surname, or a word from a passage.")
-                            .font(.chickenUI(13))
-                            .foregroundStyle(palette.faint)
-                            .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 80)
@@ -91,10 +87,7 @@ struct SearchView: View {
 
     private var suggestions: some View {
         VStack(alignment: .leading, spacing: 18) {
-            PageHeader(
-                title: "Search",
-                subtitle: "Find a book by title, author, or publisher, or a passage you highlighted."
-            )
+            PageHeader(title: "Search")
             let recent = books.filter { $0.lastOpenedAt != nil }.prefix(6)
             if !recent.isEmpty {
                 SectionLabel(text: "Recently opened")
@@ -138,9 +131,11 @@ private struct SearchBookRow: View {
                         .font(.chickenSerif(13, italic: true))
                         .foregroundStyle(palette.muted)
                         .lineLimit(1)
-                    Text(meta)
-                        .font(.chickenUI(11))
-                        .foregroundStyle(palette.faint)
+                    if !meta.isEmpty {
+                        Text(meta)
+                            .font(.chickenUI(11))
+                            .foregroundStyle(palette.faint)
+                    }
                 }
                 Spacer(minLength: 8)
             }
@@ -153,7 +148,7 @@ private struct SearchBookRow: View {
     }
 
     private var meta: String {
-        var parts = [book.format.label]
+        var parts: [String] = []
         if book.isFinished {
             parts.append("Finished")
         } else if book.progress > 0 {

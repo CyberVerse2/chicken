@@ -76,7 +76,7 @@ struct BooksView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                PageHeader(eyebrow: "\(books.count) books", title: "Library", subtitle: subtitle)
+                PageHeader(title: "Library")
                     .padding(.horizontal, gutter)
 
                 FilterChips(selection: $filter, counts: counts)
@@ -118,12 +118,6 @@ struct BooksView: View {
                 }
             }
         }
-    }
-
-    private var subtitle: String {
-        let reading = counts[.reading] ?? 0
-        let finished = counts[.finished] ?? 0
-        return "\(reading) on the go, \(finished) finished."
     }
 
     private var counts: [LibraryFilter: Int] {

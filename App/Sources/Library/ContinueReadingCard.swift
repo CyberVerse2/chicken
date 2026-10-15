@@ -30,7 +30,6 @@ struct ContinueReadingCard: View {
         HStack(alignment: .center, spacing: 52) {
             cover(width: 210)
             VStack(alignment: .leading, spacing: 0) {
-                eyebrow.padding(.bottom, 14)
                 Text(book.title)
                     .font(.chickenDisplay(40))
                     .tracking(-0.8)
@@ -42,16 +41,7 @@ struct ContinueReadingCard: View {
                 Text(book.displayAuthor)
                     .font(.chickenSerif(20, italic: true))
                     .foregroundStyle(palette.muted)
-                    .padding(.bottom, book.summary == nil ? 30 : 18)
-                if let summary = book.summary, !summary.isEmpty {
-                    Text(summary.replacingOccurrences(of: "\n", with: " "))
-                        .font(.chickenSerif(15.5))
-                        .foregroundStyle(palette.muted)
-                        .lineSpacing(5)
-                        .lineLimit(3)
-                        .frame(maxWidth: 540, alignment: .leading)
-                        .padding(.bottom, 28)
-                }
+                    .padding(.bottom, 30)
                 if mode == .continuing {
                     progress.frame(maxWidth: 420).padding(.bottom, 28)
                 }
@@ -69,7 +59,6 @@ struct ContinueReadingCard: View {
         VStack(spacing: 0) {
             cover(width: 148)
                 .padding(.bottom, 34)
-            eyebrow.padding(.bottom, 10)
             Text(book.title)
                 .font(.chickenDisplay(28))
                 .tracking(-0.5)
@@ -126,19 +115,6 @@ struct ContinueReadingCard: View {
         mode == .continuing ? "Continue reading" : "Begin reading"
     }
 
-    private var eyebrow: some View {
-        Group {
-            switch mode {
-            case .starting:
-                Text("Something new")
-            case .continuing:
-                Text(book.lastOpenedAt.map { "Where you left off · \(Self.shortAgo($0))" } ?? "Where you left off")
-            }
-        }
-        .chickenEyebrow(palette, color: palette.ribbon)
-        .lineLimit(1)
-    }
-
     private var progress: some View {
         VStack(alignment: .leading, spacing: 9) {
             ProgressLine(progress: book.progress, height: 3)
@@ -169,14 +145,6 @@ struct ContinueReadingCard: View {
             #if os(macOS)
             .controlSize(.large)
             #endif
-    }
-
-    static func shortAgo(_ date: Date) -> String {
-        let seconds = Date().timeIntervalSince(date)
-        if seconds < 90 { return "just now" }
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }
 
@@ -246,7 +214,6 @@ struct DailyReadingCard: View {
 
     private var goalSeconds: Int { library.preferences.dailyGoalMinutes * 60 }
     private var seconds: Int { library.readingSecondsToday }
-    private var metGoal: Bool { goalSeconds > 0 && seconds >= goalSeconds }
 
     var body: some View {
         GoalCard {
@@ -259,9 +226,6 @@ struct DailyReadingCard: View {
                 week
             }
 
-            Text(caption)
-                .font(.chickenSerif(13.5, italic: true))
-                .foregroundStyle(palette.muted)
         }
         .accessibilityElement(children: .combine)
     }
@@ -299,14 +263,6 @@ struct DailyReadingCard: View {
         }
     }
 
-    private var caption: String {
-        if goalSeconds <= 0 { return "Set a daily goal in Settings." }
-        if metGoal { return "Done for today. Read on for the joy of it." }
-        if seconds == 0 { return "Open a book to begin today's reading." }
-        let minutes = (goalSeconds - seconds + 59) / 60
-        return minutes == 1 ? "One minute to go." : "\(minutes) minutes to go."
-    }
-
     static func durationLabel(_ seconds: Int) -> String {
         if seconds < 60 { return seconds == 0 ? "0" : "<1" }
         let hours = seconds / 3600
@@ -337,7 +293,7 @@ struct YearGoalCard: View {
         GoalCard {
             VStack(alignment: .leading, spacing: 12) {
                 Text("The \(year) clutch").chickenEyebrow(palette)
-                GoalFigure(value: "\(finished.count)", unit: "of \(goal) \(goal == 1 ? "book" : "books") finished")
+                GoalFigure(value: "\(finished.count)", unit: "of \(goal)")
             }
 
             if goal <= 24 {
@@ -345,22 +301,8 @@ struct YearGoalCard: View {
             } else {
                 ProgressLine(progress: goal > 0 ? min(1, Double(finished.count) / Double(goal)) : 0, height: 3)
             }
-
-            Text(caption)
-                .font(.chickenSerif(13.5, italic: true))
-                .foregroundStyle(palette.muted)
         }
         .accessibilityElement(children: .combine)
-    }
-
-    private var caption: String {
-        guard goal > 0 else { return "Set a goal in Settings." }
-        if finished.count >= goal { return "The carton's full. Every book from here is a bonus." }
-        let remaining = goal - finished.count
-        let monthsLeft = 12 - Calendar.current.component(.month, from: Date()) + 1
-        let pace = Double(remaining) / Double(max(monthsLeft, 1))
-        let paceText = pace <= 1 ? "about one a month" : "about \(Int(pace.rounded(.up))) a month"
-        return "\(remaining) to go, \(paceText)."
     }
 }
 

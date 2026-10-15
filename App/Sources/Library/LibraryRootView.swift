@@ -54,7 +54,6 @@ struct LibraryRootView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabViewSidebarHeader { SidebarHeader() }
-        .tabViewSidebarBottomBar { SidebarFooter() }
         .tint(palette.text)
         .environment(\.openBook, OpenBookAction(handler: open))
         .sheet(isPresented: $router.showingDiscovery) {
@@ -199,35 +198,12 @@ struct LibraryToolbar: ToolbarContent {
     }
 }
 
-/// The house lockup above the sidebar and a quiet count below it.
+/// The house lockup above the sidebar.
 private struct SidebarHeader: View {
     var body: some View {
         BrandLockup(size: 17)
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-private struct SidebarFooter: View {
-    @Environment(\.palette) private var palette
-    @Query private var books: [Book]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("\(books.count) books")
-                .font(.chickenSerif(12, italic: true))
-                .foregroundStyle(palette.muted)
-            HStack(spacing: 4) {
-                Image(systemName: "lock")
-                Text("On this device")
-            }
-            .font(.chickenUI(10))
-            .foregroundStyle(palette.faint)
-        }
-        .fixedSize()
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

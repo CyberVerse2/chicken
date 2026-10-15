@@ -60,7 +60,7 @@ private struct BookTile: View {
                             .foregroundStyle(palette.muted)
                             .lineLimit(1)
                     }
-                    status.padding(.top, 3)
+                    status
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -80,27 +80,21 @@ private struct BookTile: View {
         return "Unread"
     }
 
+    /// "Read" or how far in; unread books carry no label.
+    @ViewBuilder
     private var status: some View {
-        HStack(spacing: 8) {
-            if book.isFinished {
-                Label("Read", systemImage: "checkmark")
-                    .labelStyle(.titleAndIcon)
-                    .foregroundStyle(palette.muted)
-            } else if book.progress > 0 {
-                Text("\(Int((book.progress * 100).rounded()))%")
-                    .fontWeight(.semibold)
-                    .foregroundStyle(palette.ribbon)
-            } else {
-                Text(book.format.label)
-            }
-            if book.highlightCount > 0 {
-                Label("\(book.highlightCount)", systemImage: "highlighter")
-                    .labelStyle(.titleAndIcon)
-            }
-            Spacer(minLength: 0)
+        if book.isFinished {
+            Label("Read", systemImage: "checkmark")
+                .labelStyle(.titleAndIcon)
+                .font(.chickenMono(10.5, weight: .medium))
+                .foregroundStyle(palette.muted)
+                .padding(.top, 3)
+        } else if book.progress > 0 {
+            Text("\(Int((book.progress * 100).rounded()))%")
+                .font(.chickenMono(10.5, weight: .semibold))
+                .foregroundStyle(palette.ribbon)
+                .padding(.top, 3)
         }
-        .font(.chickenMono(10.5, weight: .medium))
-        .foregroundStyle(palette.faint)
     }
 }
 

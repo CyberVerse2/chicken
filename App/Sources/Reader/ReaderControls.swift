@@ -31,9 +31,8 @@ struct ReaderProgressBar: View {
                     .font(model.isOnLastPage ? .chickenSerif(12, italic: true) : .chickenMono(11))
                     .foregroundStyle(palette.muted)
                 if !compact {
-                    let detail = [model.chapterReadout, model.timeReadout].filter { !$0.isEmpty }.joined(separator: " · ")
-                    if !detail.isEmpty {
-                        Text(detail)
+                    if !model.timeReadout.isEmpty {
+                        Text(model.timeReadout)
                             .font(.chickenMono(10))
                             .foregroundStyle(palette.faint)
                             .lineLimit(1)
@@ -97,9 +96,6 @@ struct HighlightPicker: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("Highlight")
-                .font(.chickenUI(12, weight: .medium))
-                .foregroundStyle(palette.muted)
             ForEach(HighlightColor.allCases) { color in
                 Button {
                     model.addHighlight(color: color)

@@ -12,8 +12,8 @@ struct SettingsView: View {
     var body: some View {
         let preferences = library.preferences
 
-        ChickenPage(title: "Settings", subtitle: "How Chicken looks, what it counts, and where your books live.") {
-            ChickenSection("Reading theme", footer: "Applies to the library and every book.") {
+        ChickenPage(title: "Settings") {
+            ChickenSection("Reading theme") {
                 ThemeSwatchPicker()
                     .padding(14)
             }
@@ -101,7 +101,7 @@ struct SettingsView: View {
 
     private var coverDetail: String {
         switch library.coverRefreshState {
-        case .idle: return "Re-extract covers from your PDFs and EPUBs"
+        case .idle: return ""
         case .refreshing(let completed, let total): return "\(completed) of \(total)"
         case .finished(let refreshed): return "Refreshed \(refreshed)"
         }
@@ -159,10 +159,12 @@ struct SettingsView: View {
                 Text(title)
                     .font(.chickenSerif(16, weight: .semibold))
                     .foregroundStyle(palette.text)
-                Text(detail)
-                    .font(.chickenUI(12))
-                    .foregroundStyle(palette.muted)
-                    .lineLimit(2)
+                if !detail.isEmpty {
+                    Text(detail)
+                        .font(.chickenUI(12))
+                        .foregroundStyle(palette.muted)
+                        .lineLimit(2)
+                }
             }
             Spacer(minLength: 8)
             Button(button, action: action)

@@ -32,16 +32,10 @@ struct NotebookView: View {
         return order.compactMap { byBook[$0] }.map { (book: $0.0, highlights: $0.1) }
     }
 
-    private var bookCount: Int { Set(highlights.compactMap { $0.book?.id }).count }
-
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                PageHeader(
-                    eyebrow: "\(highlights.count) \(highlights.count == 1 ? "passage" : "passages") · \(bookCount) \(bookCount == 1 ? "book" : "books")",
-                    title: "Notebook",
-                    subtitle: "Everything you've marked, gathered by book."
-                )
+                PageHeader(title: "Notebook")
                 .padding(.horizontal, gutter)
                 .padding(.bottom, 28)
 
@@ -120,7 +114,7 @@ struct NotebookView: View {
                 .font(.chickenSerif(22))
                 .foregroundStyle(palette.text)
                 .lineSpacing(6)
-            Text("Nothing marked yet. While reading, select a passage and choose a color; it lands here with any note you add.")
+            Text("Select a passage while reading to keep it here.")
                 .font(.chickenSerif(15, italic: true))
                 .foregroundStyle(palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
@@ -161,9 +155,6 @@ private struct NotebookBookSection: View {
                             .lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    Text("\(highlights.count)")
-                        .font(.chickenMono(12, weight: .medium))
-                        .foregroundStyle(palette.faint)
                     Image(systemName: "chevron.right")
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(palette.faint)
@@ -209,9 +200,6 @@ private struct NotebookHighlightRow: View {
                             .foregroundStyle(palette.muted)
                     }
                 }
-                Text(highlight.createdAt.formatted(date: .abbreviated, time: .omitted))
-                    .font(.chickenUI(11, weight: .medium))
-                    .foregroundStyle(palette.faint)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())

@@ -9,7 +9,6 @@ struct HomeView: View {
     @Environment(\.palette) private var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
-    @Query private var highlights: [Highlight]
 
     private var isCompact: Bool { sizeClass == .compact }
     private var gutter: CGFloat { isCompact ? 20 : 44 }
@@ -44,7 +43,7 @@ struct HomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: isCompact ? 40 : 56) {
-                HomeHeader(booksInProgress: alsoReading.count + (continueBook == nil ? 0 : 1))
+                HomeHeader()
                     .padding(.horizontal, gutter)
 
                 if let summary = library.migrationSummary {
@@ -78,12 +77,6 @@ struct HomeView: View {
                         BookShelf(title: "Waiting on the shelf", books: Array(upNext.dropFirst(continueBook == nil ? 1 : 0)), gutter: gutter)
                     }
 
-                    LibraryFooter(
-                        bookCount: books.count,
-                        highlightCount: highlights.count,
-                        finishedCount: books.filter(\.isFinished).count
-                    )
-                    .padding(.horizontal, gutter)
                 }
             }
             .padding(.top, isCompact ? 8 : 28)
@@ -113,41 +106,16 @@ struct HomeView: View {
 // MARK: - Header
 
 private struct HomeHeader: View {
-    @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
-    let booksInProgress: Int
 
     var body: some View {
         TimelineView(.everyMinute) { context in
-            VStack(alignment: .leading, spacing: 10) {
-                Text(context.date.formatted(.dateTime.weekday(.wide).day().month(.wide)))
-                    .chickenEyebrow(palette)
-                Text(Self.greeting(for: context.date))
-                    .font(.chickenDisplay(sizeClass == .compact ? 38 : 52))
-                    .tracking(sizeClass == .compact ? -0.8 : -1.2)
-                    .foregroundStyle(palette.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(subline)
-                    .font(.chickenSerif(sizeClass == .compact ? 16 : 18, italic: true))
-                    .foregroundStyle(palette.muted)
-                    .contentTransition(.opacity)
-            }
-        }
-    }
-
-    private var subline: String {
-        let minutes = library.readingSecondsToday / 60
-        let goal = library.preferences.dailyGoalMinutes
-        if minutes >= goal && goal > 0 { return "Today's reading is done. Anything more is for the joy of it." }
-        if minutes > 0 {
-            let left = goal - minutes
-            return "\(minutes) minutes read today, \(left) to go."
-        }
-        switch booksInProgress {
-        case 0: return "What will you read next?"
-        case 1: return "One book on the go."
-        default: return "\(booksInProgress) books on the go."
+            Text(Self.greeting(for: context.date))
+                .font(.chickenDisplay(sizeClass == .compact ? 38 : 52))
+                .tracking(sizeClass == .compact ? -0.8 : -1.2)
+                .foregroundStyle(palette.text)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -177,15 +145,10 @@ struct BookShelf: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(title)
-                    .font(.chickenDisplay(sizeClass == .compact ? 19 : 22))
-                    .foregroundStyle(palette.text)
-                Text("\(books.count)")
-                    .font(.chickenMono(12, weight: .medium))
-                    .foregroundStyle(palette.faint)
-            }
-            .padding(.horizontal, gutter)
+            Text(title)
+                .font(.chickenDisplay(sizeClass == .compact ? 19 : 22))
+                .foregroundStyle(palette.text)
+                .padding(.horizontal, gutter)
 
             ScrollView(.horizontal) {
                 LazyHStack(alignment: .top, spacing: sizeClass == .compact ? 18 : 26) {
@@ -300,29 +263,6 @@ struct MigrationNotice: View {
                 .fill(palette.surface)
                 .stroke(palette.border, lineWidth: 0.5)
         )
-    }
-}
-
-struct LibraryFooter: View {
-    @Environment(\.palette) private var palette
-    let bookCount: Int
-    let highlightCount: Int
-    let finishedCount: Int
-
-    var body: some View {
-        VStack(spacing: 12) {
-            EggShape()
-                .stroke(palette.faint, lineWidth: 1)
-                .frame(width: 11, height: 14)
-            Text("\(bookCount) books · \(highlightCount) highlights · \(finishedCount) finished")
-                .font(.chickenSerif(13.5, italic: true))
-                .foregroundStyle(palette.muted)
-            Label("Kept on this device. No account, no cloud.", systemImage: "lock")
-                .font(.chickenUI(11))
-                .foregroundStyle(palette.faint)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.top, 12)
     }
 }
 

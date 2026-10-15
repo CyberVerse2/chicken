@@ -123,11 +123,6 @@ struct ContinueReadingView: View {
             cover(book)
                 .frame(width: 78, height: 117)
             VStack(alignment: .leading, spacing: 4) {
-                Text("WHERE YOU LEFT OFF")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .tracking(1.3)
-                    .foregroundStyle(colors.ribbon)
-                    .widgetAccentable()
                 Text(book.title)
                     .font(.custom("Superclarendon-Regular", size: 18))
                     .foregroundStyle(colors.text)

@@ -224,27 +224,15 @@ final class ReaderModel {
         return "section \(chapterIndex + 1) of \(chapters.count)"
     }
 
-    var chapterReadout: String {
-        let fraction: Double
-        if let chapterProgress {
-            fraction = chapterProgress
-        } else if let chapterPage, let chapterPageCount, chapterPageCount > 0 {
-            fraction = Double(chapterPage) / Double(chapterPageCount)
-        } else {
-            return ""
-        }
-        return "chapter \(Int((min(1, max(0, fraction)) * 100).rounded()))%"
-    }
-
+    /// Time left in the book, or in the chapter when the book's length isn't known.
     var timeReadout: String {
-        var parts: [String] = []
-        if let pages = chapterPagesRemaining {
-            parts.append("\(ReadingEstimate.duration(forPages: pages)) left in chapter")
-        }
         if let totalPages, totalPages > 0, let currentPage {
-            parts.append("\(ReadingEstimate.duration(forPages: max(0, totalPages - currentPage))) left in book")
+            return "\(ReadingEstimate.duration(forPages: max(0, totalPages - currentPage))) left"
         }
-        return parts.joined(separator: " · ")
+        if let pages = chapterPagesRemaining {
+            return "\(ReadingEstimate.duration(forPages: pages)) left in chapter"
+        }
+        return ""
     }
 
     private var chapterPagesRemaining: Int? {

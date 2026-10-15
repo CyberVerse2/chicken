@@ -18,7 +18,7 @@ struct DiscoveryView: View {
         NavigationStack {
             ChickenPage(
                 title: "Find books",
-                subtitle: "Chicken only looks inside folders you choose, and only copies the books you pick. Originals stay where they are."
+                subtitle: "Chicken only looks in folders you choose."
             ) {
                 foldersSection
                 if !library.folders.isEmpty { scanStatus }
@@ -69,10 +69,6 @@ struct DiscoveryView: View {
                                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(palette.surfaceAlt))
                             }
                         }
-                        Text("Start with the places books tend to collect: Downloads, Documents, or a Books folder in iCloud Drive.")
-                            .font(.chickenSerif(15, italic: true))
-                            .foregroundStyle(palette.muted)
-                            .fixedSize(horizontal: false, vertical: true)
                         PrimaryActionButton(title: "Choose a folder", systemImage: "folder") { choosingFolder = true }
                     }
                     .padding(.vertical, 6)
@@ -122,7 +118,7 @@ struct DiscoveryView: View {
     // MARK: Results
 
     private var likelySection: some View {
-        ChickenSection("Likely books", count: likely.count, footer: "Scored by format, length, metadata, and file name.") {
+        ChickenSection("Likely books", count: likely.count) {
             Button(library.importState.isImporting ? "Importing…" : "Import All") { library.importDiscovered(likely) }
                 .font(.chickenUI(13, weight: .semibold))
                 .buttonStyle(.glassProminent)
@@ -140,7 +136,7 @@ struct DiscoveryView: View {
 
     private var othersSection: some View {
         let shown = showingAllOthers ? others : Array(others.prefix(5))
-        return ChickenSection("Needs a look", count: others.count, footer: "Probably documents rather than books, but you decide.") {
+        return ChickenSection("Needs a look", count: others.count) {
             ForEach(Array(shown.enumerated()), id: \.element.id) { index, book in
                 ChickenRow(isLast: index == shown.count - 1 && (showingAllOthers || others.count <= 5)) {
                     DiscoveredRow(book: book)
@@ -213,9 +209,6 @@ private struct DiscoveredRow: View {
                     .font(.chickenUI(11))
                     .foregroundStyle(palette.muted)
                     .lineLimit(1)
-                Text(book.classification)
-                    .font(.chickenSerif(11, italic: true))
-                    .foregroundStyle(palette.faint)
             }
 
             Spacer(minLength: 8)
@@ -289,18 +282,11 @@ struct EmptyLibraryView: View {
                 .frame(height: 170)
                 .padding(.bottom, 4)
 
-            VStack(spacing: 10) {
-                Text("Bring your books home to roost")
-                    .font(.chickenDisplay(sizeClass == .compact ? 26 : 34))
-                    .tracking(-0.5)
-                    .foregroundStyle(palette.text)
-                    .multilineTextAlignment(.center)
-                Text("Point Chicken at the folders where your PDFs and EPUBs already live, or import a few files. Everything stays on this device.")
-                    .font(.chickenSerif(16, italic: true))
-                    .foregroundStyle(palette.muted)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 460)
-            }
+            Text("Bring your books home to roost")
+                .font(.chickenDisplay(sizeClass == .compact ? 26 : 34))
+                .tracking(-0.5)
+                .foregroundStyle(palette.text)
+                .multilineTextAlignment(.center)
 
             GlassEffectContainer(spacing: 12) {
                 ViewThatFits {

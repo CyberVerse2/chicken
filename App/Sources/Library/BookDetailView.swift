@@ -146,10 +146,7 @@ struct BookDetailView: View {
             ("Publisher", book.publisher ?? ""),
             ("Language", book.language.flatMap { Locale.current.localizedString(forLanguageCode: $0) } ?? book.language ?? ""),
             ("Added", book.importedAt.formatted(date: .long, time: .omitted)),
-            ("Last opened", book.lastOpenedAt?.relativeDescription ?? "Never"),
             ("Finished", book.finishedAt?.formatted(date: .long, time: .omitted) ?? ""),
-            ("Size", book.fileSize > 0 ? ByteCountFormatter.string(fromByteCount: book.fileSize, countStyle: .file) : ""),
-            ("File", book.originalFileName),
         ].filter { !$0.1.isEmpty }
 
         return ChickenSection("Details") {

@@ -106,7 +106,7 @@ struct AnnotationsList: View {
                     switch tab {
                     case .highlights:
                         if highlights.isEmpty {
-                            hint(icon: "highlighter", title: "No highlights yet", text: "Select a passage, then choose a color in the bar at the bottom of the page.")
+                            hint(icon: "highlighter", title: "No highlights yet", text: "Select a passage to highlight it.")
                         }
                         ForEach(highlights) { highlight in
                             HighlightCard(model: model, highlight: highlight)
@@ -114,7 +114,7 @@ struct AnnotationsList: View {
                         }
                     case .bookmarks:
                         if bookmarks.isEmpty {
-                            hint(icon: "bookmark", title: "No bookmarks yet", text: "Use the bookmark button in the toolbar to mark a place to come back to.")
+                            hint(icon: "bookmark", title: "No bookmarks yet", text: "Bookmark a page to come back to it.")
                         }
                         ForEach(bookmarks) { bookmark in
                             BookmarkCard(model: model, bookmark: bookmark)
@@ -277,16 +277,11 @@ private struct BookmarkCard: View {
                         .frame(width: 12, height: 30)
                         .padding(.horizontal, 6)
                         .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(bookmark.title)
-                            .font(.chickenSerif(15, weight: .semibold))
-                            .foregroundStyle(palette.text)
-                            .lineLimit(2)
-                            .multilineTextAlignment(.leading)
-                        Text(bookmark.createdAt.formatted(date: .abbreviated, time: .shortened))
-                            .font(.chickenUI(11))
-                            .foregroundStyle(palette.faint)
-                    }
+                    Text(bookmark.title)
+                        .font(.chickenSerif(15, weight: .semibold))
+                        .foregroundStyle(palette.text)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
                     Spacer(minLength: 0)
                 }
                 .contentShape(Rectangle())
