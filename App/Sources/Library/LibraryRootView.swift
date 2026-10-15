@@ -67,14 +67,16 @@ struct LibraryRootView: View {
             DiscoveryView()
                 .readingTheme(library.preferences.theme)
         }
-        .sheet(item: detailBook) { item in
-            BookDetailPager(ids: router.detailSequence, start: item.id)
-                .environment(\.openBook, OpenBookAction(handler: open))
-                // Sheets don't inherit environment set on the presenter.
-                .environment(\.coverNamespace, coverNamespace)
-                .readingTheme(library.preferences.theme)
-                .zoomTransition(from: router.detailSource, in: coverNamespace)
+        // iPhone (and the Mac): a sheet. iPad: full screen, where the card
+        // sits in the middle with its neighbors peeking, as in Apple Books.
+        .sheet(item: detailBook(presentedFullScreen: false)) { item in
+            detailPager(start: item.id)
         }
+        #if os(iOS)
+        .fullScreenCover(item: detailBook(presentedFullScreen: true)) { item in
+            detailPager(start: item.id)
+        }
+        #endif
         #if !os(macOS)
         .sheet(isPresented: $router.showingSettings) {
             NavigationStack { SettingsView() }
@@ -204,11 +206,29 @@ struct LibraryRootView: View {
         #endif
     }
 
-    private var detailBook: Binding<IdentifiedBook?> {
+    /// Details show full screen on iPad and as a sheet everywhere else.
+    private var showsDetailsFullScreen: Bool {
+        #if os(iOS)
+        sizeClass == .regular
+        #else
+        false
+        #endif
+    }
+
+    private func detailBook(presentedFullScreen: Bool) -> Binding<IdentifiedBook?> {
         Binding(
-            get: { router.detailBookID.map(IdentifiedBook.init) },
-            set: { router.detailBookID = $0?.id }
+            get: { presentedFullScreen == showsDetailsFullScreen ? router.detailBookID.map(IdentifiedBook.init) : nil },
+            set: { if presentedFullScreen == showsDetailsFullScreen { router.detailBookID = $0?.id } }
         )
+    }
+
+    private func detailPager(start: UUID) -> some View {
+        BookDetailPager(ids: router.detailSequence, start: start, style: showsDetailsFullScreen ? .cards : .pages)
+            .environment(\.openBook, OpenBookAction(handler: open))
+            // Presentations don't inherit environment set on the presenter.
+            .environment(\.coverNamespace, coverNamespace)
+            .readingTheme(library.preferences.theme)
+            .zoomTransition(from: router.detailSource, in: coverNamespace)
     }
 
     #if !os(macOS)

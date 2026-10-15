@@ -311,19 +311,21 @@ enum CoverLayout { case framed, banded, plain }
 /// Bookcloth colors drawn from the icon (soot, linen, cocoa, ochre) plus a
 /// few classic binding shades so a shelf of cloth covers doesn't look cloned.
 struct CoverPreset {
-    let cloth: Color
+    let clothHex: UInt32
     let ink: Color
     let layout: CoverLayout
 
+    var cloth: Color { .hex(clothHex) }
+
     static let all: [CoverPreset] = [
-        CoverPreset(cloth: .hex(0x2A2523), ink: .hex(0xE9D9C2), layout: .framed),  // soot
-        CoverPreset(cloth: .hex(0x76593F), ink: .hex(0xF2E6D6), layout: .plain),   // cocoa
-        CoverPreset(cloth: .hex(0xC48C44), ink: .hex(0x2A2118), layout: .banded),  // ochre
-        CoverPreset(cloth: .hex(0x45503A), ink: .hex(0xE6DCC0), layout: .framed),  // moss
-        CoverPreset(cloth: .hex(0x6E2C27), ink: .hex(0xEFD9BE), layout: .plain),   // oxblood
-        CoverPreset(cloth: .hex(0xE6D9C4), ink: .hex(0x2A2523), layout: .banded),  // linen
-        CoverPreset(cloth: .hex(0x2F3E4A), ink: .hex(0xDCCBA8), layout: .plain),   // slate
-        CoverPreset(cloth: .hex(0x9A4E2E), ink: .hex(0xF4E3CB), layout: .framed),  // rust
+        CoverPreset(clothHex: 0x2A2523, ink: .hex(0xE9D9C2), layout: .framed),  // soot
+        CoverPreset(clothHex: 0x76593F, ink: .hex(0xF2E6D6), layout: .plain),   // cocoa
+        CoverPreset(clothHex: 0xC48C44, ink: .hex(0x2A2118), layout: .banded),  // ochre
+        CoverPreset(clothHex: 0x45503A, ink: .hex(0xE6DCC0), layout: .framed),  // moss
+        CoverPreset(clothHex: 0x6E2C27, ink: .hex(0xEFD9BE), layout: .plain),   // oxblood
+        CoverPreset(clothHex: 0xE6D9C4, ink: .hex(0x2A2523), layout: .banded),  // linen
+        CoverPreset(clothHex: 0x2F3E4A, ink: .hex(0xDCCBA8), layout: .plain),   // slate
+        CoverPreset(clothHex: 0x9A4E2E, ink: .hex(0xF4E3CB), layout: .framed),  // rust
     ]
 
     static func preset(for index: Int) -> CoverPreset {

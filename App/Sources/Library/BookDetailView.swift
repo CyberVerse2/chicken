@@ -4,10 +4,15 @@ import SwiftUI
 /// Details for a run of books, one per page: swipe sideways to the next
 /// book on the shelf, as in a printed catalogue.
 struct BookDetailPager: View {
+    /// `.pages`: one book per screen (iPhone sheet). `.cards`: a centered
+    /// card with the books on either side peeking in (iPad, full screen).
+    enum Style { case pages, cards }
+
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
     @Environment(\.coverNamespace) private var coverNamespace
     let ids: [UUID]
+    var style: Style = .pages
     @State private var current: UUID?
     /// The book being read from this card, and the cover it zoomed from.
     @State private var reading: ReaderRequest?
@@ -17,33 +22,20 @@ struct BookDetailPager: View {
         let source: CoverSource?
     }
 
-    init(ids: [UUID], start: UUID) {
+    init(ids: [UUID], start: UUID, style: Style = .pages) {
         self.ids = ids.contains(start) ? ids : [start]
+        self.style = style
         _current = State(initialValue: start)
     }
 
     var body: some View {
         NavigationStack {
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: 0) {
-                    ForEach(ids, id: \.self) { id in
-                        BookDetailView(bookID: id)
-                            .containerRelativeFrame(.horizontal)
-                            // Neighbors sit slightly back, so a swipe reads as
-                            // sliding one book off the pile and the next on.
-                            .scrollTransition(.interactive, axis: .horizontal) { page, phase in
-                                page
-                                    .scaleEffect(1 - abs(phase.value) * 0.07)
-                                    .opacity(1 - abs(phase.value) * 0.35)
-                            }
-                    }
+            Group {
+                switch style {
+                case .pages: pages
+                case .cards: cards
                 }
-                .scrollTargetLayout()
             }
-            .scrollTargetBehavior(.paging)
-            .scrollPosition(id: $current)
-            .scrollIndicators(.hidden)
-            .background(palette.background.ignoresSafeArea())
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close", systemImage: "xmark") { dismiss() }
@@ -79,6 +71,65 @@ struct BookDetailPager: View {
     }
 }
 
+extension BookDetailPager {
+    private var pages: some View {
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(ids, id: \.self) { id in
+                    BookDetailView(bookID: id)
+                        .containerRelativeFrame(.horizontal)
+                        // Neighbors sit slightly back, so a swipe reads as
+                        // sliding one book off the pile and the next on.
+                        .scrollTransition(.interactive, axis: .horizontal) { page, phase in
+                            page
+                                .scaleEffect(1 - abs(phase.value) * 0.07)
+                                .opacity(1 - abs(phase.value) * 0.35)
+                        }
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollPosition(id: $current)
+        .scrollIndicators(.hidden)
+        .background(palette.background.ignoresSafeArea())
+    }
+
+    private var cards: some View {
+        GeometryReader { geometry in
+            let cardWidth = min(geometry.size.width * 0.66, 620)
+            let gap: CGFloat = 22
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: gap) {
+                    ForEach(ids, id: \.self) { id in
+                        BookDetailView(bookID: id, inCard: true)
+                            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+                            .background(
+                                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                                    .fill(palette.background)
+                                    .shadow(color: palette.shadow, radius: 24, y: 10)
+                            )
+                            .frame(width: cardWidth)
+                            .padding(.vertical, 12)
+                            .scrollTransition(.interactive, axis: .horizontal) { card, phase in
+                                card
+                                    .scaleEffect(1 - abs(phase.value) * 0.06)
+                                    .opacity(1 - abs(phase.value) * 0.25)
+                            }
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .contentMargins(.horizontal, max(0, (geometry.size.width - cardWidth) / 2), for: .scrollContent)
+            .scrollTargetBehavior(.viewAligned)
+            .scrollPosition(id: $current, anchor: .center)
+            .scrollIndicators(.hidden)
+            .scrollClipDisabled()
+        }
+        .background(palette.surfaceAlt.ignoresSafeArea())
+    }
+}
+
 /// About a book: cover, description, where you are, and what's in it.
 /// One page of `BookDetailPager`, or a page of its own when a book is
 /// picked in the Mac sidebar.
@@ -93,6 +144,8 @@ struct BookDetailView: View {
     var isPage = false
     /// In the Mac's details panel: narrower, and nothing to dismiss.
     var inInspector = false
+    /// On an iPad card: room above the cover, inside the card's edge.
+    var inCard = false
     @State private var summaryExpanded = false
     @State private var confirmingRemoval = false
 
@@ -109,12 +162,19 @@ struct BookDetailView: View {
     private var page: some View {
         Group {
             if let book = library.book(id: bookID) {
-                content(book)
+                if isPage || inInspector {
+                    content(book)
+                        .background(palette.background.ignoresSafeArea())
+                } else {
+                    // A card takes its colour from the book's cover.
+                    content(book)
+                        .modifier(CoverTintModifier(book: book))
+                }
             } else {
                 ContentUnavailableView("Book Unavailable", systemImage: "book.closed")
+                    .background(palette.background.ignoresSafeArea())
             }
         }
-        .background(palette.background.ignoresSafeArea())
     }
 
     private func content(_ book: Book) -> some View {
@@ -167,7 +227,7 @@ struct BookDetailView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Read \(book.title)")
-            .padding(.top, isPage || inInspector ? 36 : 12)
+            .padding(.top, isPage || inInspector ? 36 : (inCard ? 44 : 12))
             .padding(.bottom, 10)
             VStack(spacing: 8) {
                 Text(book.title)
