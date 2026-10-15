@@ -56,7 +56,11 @@ struct BookCover: View {
     @Environment(LibraryStore.self) private var library
     let book: Book
     let style: BookCoverStyle
+    /// False for a blank cloth board, where the title is shown alongside.
+    var showsClothText = true
     @State private var image: CGImage?
+    /// A PDF whose first page is just text gets a cloth cover instead.
+    @State private var isTextPage = false
     @State private var cacheGeneration = 0
 
     var body: some View {
@@ -64,12 +68,12 @@ struct BookCover: View {
         Rectangle()
             .fill(preset.cloth)
             .overlay {
-                if let image, CGFloat(image.width) / CGFloat(max(image.height, 1)) <= 1.05 {
+                if let image, !isTextPage, CGFloat(image.width) / CGFloat(max(image.height, 1)) <= 1.05 {
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {
-                    ClothCover(title: book.title, author: book.author, preset: preset, style: style)
+                    ClothCover(title: book.title, author: book.author, preset: preset, style: style, showsText: showsClothText)
                 }
             }
             .overlay { CoverFinish(style: style) }
@@ -85,7 +89,11 @@ struct BookCover: View {
                     image = nil
                     return
                 }
-                image = await CoverImageCache.shared.image(for: url, maxPixelSize: style.decodeSize)
+                let loaded = await CoverImageCache.shared.image(for: url, maxPixelSize: style.decodeSize)
+                if book.format == .pdf, let loaded {
+                    isTextPage = await CoverImageCache.shared.isTextPage(loaded, at: url)
+                }
+                image = loaded
             }
             .onReceive(NotificationCenter.default.publisher(for: .chickenCoversInvalidated)) { _ in
                 image = nil
@@ -138,17 +146,35 @@ struct ClothCover: View {
     let author: String?
     let preset: CoverPreset
     let style: BookCoverStyle
+    var showsText = true
 
     var body: some View {
         ZStack {
             ClothWeave(color: preset.ink)
-            switch preset.layout {
-            case .framed: framed
-            case .banded: banded
-            case .plain: plain
+            if !showsText {
+                blank
+            } else {
+                switch preset.layout {
+                case .framed: framed
+                case .banded: banded
+                case .plain: plain
+                }
             }
         }
         .foregroundStyle(preset.ink)
+    }
+
+    /// An untitled board: the binding's rules and the egg stamped in the
+    /// middle, like a cloth hardback without its jacket.
+    private var blank: some View {
+        EggShape()
+            .stroke(preset.ink.opacity(0.55), lineWidth: 1.25)
+            .frame(width: style.titleSize * 0.9, height: style.titleSize * 1.15)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay {
+                Rectangle().strokeBorder(preset.ink.opacity(0.45), lineWidth: 0.75).padding(style.padding * 0.55)
+                Rectangle().strokeBorder(preset.ink.opacity(0.25), lineWidth: 0.5).padding(style.padding * 0.55 + 3)
+            }
     }
 
     private var titleText: some View {
@@ -389,12 +415,26 @@ nonisolated struct EggShape: Shape {
 nonisolated final class CoverImageCache: @unchecked Sendable {
     static let shared = CoverImageCache()
     private let cache = NSCache<NSString, CGImage>()
+    private let textPages = NSCache<NSString, NSNumber>()
 
     private init() {
         cache.countLimit = 600
         NotificationCenter.default.addObserver(forName: .chickenCoversInvalidated, object: nil, queue: nil) { [weak self] _ in
             self?.cache.removeAllObjects()
+            self?.textPages.removeAllObjects()
         }
+    }
+
+    /// Whether a stored PDF cover is really a page of text. Covers saved
+    /// before Chicken checked this at import are judged here instead.
+    nonisolated func isTextPage(_ image: CGImage, at url: URL) async -> Bool {
+        let key = url.path as NSString
+        if let cached = textPages.object(forKey: key) { return cached.boolValue }
+        let verdict = await Task.detached(priority: .utility) {
+            CoverRenderer.looksLikeTextPage(image)
+        }.value
+        textPages.setObject(NSNumber(value: verdict), forKey: key)
+        return verdict
     }
 
     nonisolated func image(for url: URL, maxPixelSize: Int) async -> CGImage? {

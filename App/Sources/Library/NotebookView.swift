@@ -48,6 +48,7 @@ struct NotebookView: View {
                             .padding(.horizontal, gutter)
                             .padding(.top, 30)
                     }
+                    .coverCollection("notebook", books: groups.map(\.book.id))
                 }
             }
             .padding(.top, sizeClass == .compact ? 8 : 28)
@@ -134,15 +135,17 @@ struct NotebookView: View {
 private struct NotebookBookSection: View {
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
+    @Environment(\.coverContext) private var coverContext
     let book: Book
     let highlights: [Highlight]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Button { openBook(book.id) } label: {
+            Button { openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
                 HStack(alignment: .center, spacing: 14) {
                     BookCover(book: book, style: .mini)
                         .frame(width: 34, height: 51)
+                        .coverTransitionSource(book.id)
                         .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(book.title)

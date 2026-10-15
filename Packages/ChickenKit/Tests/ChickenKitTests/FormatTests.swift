@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import ChickenKit
@@ -175,3 +176,44 @@ struct LibraryLogicTests {
         #expect(legacy.highlights.isEmpty)
     }
 }
+
+struct CoverDetectionTests {
+    /// A 640×960 page: white paper plus whatever `draw` adds.
+    private func page(_ draw: (CGContext) -> Void) -> CGImage {
+        let context = CGContext(
+            data: nil, width: 640, height: 960, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        )!
+        context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 640, height: 960))
+        draw(context)
+        return context.makeImage()!
+    }
+
+    @Test func pageOfTextIsNotACover() {
+        let text = page { context in
+            // Lines of "words": thin dark dashes, as body text is at this scale.
+            context.setFillColor(CGColor(gray: 0.15, alpha: 1))
+            for line in stride(from: 80, to: 880, by: 28) {
+                for word in stride(from: 72, to: 560, by: 44) {
+                    context.fill(CGRect(x: word, y: line, width: 30, height: 2))
+                }
+            }
+        }
+        #expect(CoverRenderer.looksLikeTextPage(text))
+    }
+
+    @Test func minimalCoversAreKept() {
+        let colored = page { context in
+            context.setFillColor(CGColor(red: 0.95, green: 0.75, blue: 0.1, alpha: 1))
+            context.fill(CGRect(x: 280, y: 300, width: 80, height: 260))
+        }
+        let boldTitle = page { context in
+            context.setFillColor(CGColor(gray: 0, alpha: 1))
+            context.fill(CGRect(x: 80, y: 600, width: 480, height: 90))
+        }
+        #expect(!CoverRenderer.looksLikeTextPage(colored))
+        #expect(!CoverRenderer.looksLikeTextPage(boldTitle))
+    }
+}
+

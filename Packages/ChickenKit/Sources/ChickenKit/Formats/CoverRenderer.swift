@@ -18,7 +18,9 @@ public enum CoverRenderer {
 
         switch format {
         case .pdf:
-            guard let image = renderFirstPDFPage(url) else { return nil }
+            // Many PDFs open on a page of text rather than a cover; those get
+            // a typographic cover instead of a picture of their first page.
+            guard let image = renderFirstPDFPage(url), !looksLikeTextPage(image) else { return nil }
             return writeJPEG(image, to: destination) ? name : nil
         case .epub:
             guard
@@ -57,6 +59,50 @@ public enum CoverRenderer {
         context.concatenate(page.getDrawingTransform(.cropBox, rect: rect, rotate: 0, preserveAspectRatio: true))
         context.drawPDFPage(page)
         return context.makeImage()
+    }
+
+    /// True when a rendered page is a page of text rather than a cover:
+    /// nearly all pale, colorless paper, with no color and almost no heavy
+    /// ink. At this size body text blurs to light grey, while covers keep
+    /// some color, large dark type, or a picture. Tuned to keep minimal
+    /// covers (a pencil, an apple, a bold title) and to err toward keeping.
+    public static func looksLikeTextPage(_ image: CGImage) -> Bool {
+        let width = 96
+        let height = 144
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        guard drawn else { return false }
+
+        var paper = 0
+        var ink = 0
+        var color = 0
+        for index in stride(from: 0, to: pixels.count, by: 4) {
+            let red = Double(pixels[index]) / 255
+            let green = Double(pixels[index + 1]) / 255
+            let blue = Double(pixels[index + 2]) / 255
+            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+            let chroma = max(red, green, blue) - min(red, green, blue)
+            if luminance > 0.8 && chroma < 0.12 { paper += 1 }
+            if luminance < 0.3 { ink += 1 }
+            if chroma > 0.2 { color += 1 }
+        }
+        let total = Double(width * height)
+        return Double(paper) / total >= 0.85
+            && Double(ink) / total < 0.0025
+            && Double(color) / total < 0.003
     }
 
     // MARK: EPUB

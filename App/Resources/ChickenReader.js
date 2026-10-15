@@ -366,8 +366,12 @@
     const touch = event.touches[0];
     touchStart = { x: touch.clientX, y: touch.clientY, time: Date.now() };
   }, { passive: true });
+  // iOS sends no click for a tap on plain text, so taps are read from the
+  // touch itself; the click that sometimes follows is then ignored.
+  let lastTouchTap = 0;
+  const interactive = 'a, button, input, textarea, select, [contenteditable], [role=button]';
   window.addEventListener('touchend', (event) => {
-    if (!touchStart || !state.horizontal) return;
+    if (!touchStart) return;
     const touch = event.changedTouches[0];
     const dx = touch.clientX - touchStart.x;
     const dy = touch.clientY - touchStart.y;
@@ -375,21 +379,37 @@
     touchStart = null;
     const selection = window.getSelection();
     if (selection && !selection.isCollapsed) return;
-    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.4 && elapsed < 700) {
+    if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && elapsed < 350) {
+      if (event.target.closest && event.target.closest(interactive)) return;
+      lastTouchTap = Date.now();
+      handleTap(touch.clientX);
+      return;
+    }
+    if (!state.horizontal || elapsed > 700) return;
+    // Pages turn with a swipe either way: sideways like a book, or up and
+    // down like scrolling.
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.4) {
       turnPage(dx < 0 ? 1 : -1);
+    } else if (Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx) * 1.4) {
+      turnPage(dy < 0 ? 1 : -1);
     }
   }, { passive: true });
 
   // Taps: edges turn pages (like a printed book), the middle toggles chrome.
+  const handleTap = (clientX) => {
+    const x = clientX / window.innerWidth;
+    if (state.horizontal && x < 0.28) turnPage(-1);
+    else if (state.horizontal && x > 0.72) turnPage(1);
+    else post({ type: 'tap' });
+  };
   window.addEventListener('click', (event) => {
     if (event.button !== 0 || event.detail > 1) return;
+    if (Date.now() - lastTouchTap < 600) return;
     const selection = window.getSelection();
     if (selection && !selection.isCollapsed) return;
-    if (event.target.closest && event.target.closest('a, button, input, textarea, select, [contenteditable], [role=button]')) return;
-    const x = event.clientX / window.innerWidth;
-    if (state.horizontal && x < 0.28) { event.preventDefault(); turnPage(-1); }
-    else if (state.horizontal && x > 0.72) { event.preventDefault(); turnPage(1); }
-    else post({ type: 'tap' });
+    if (event.target.closest && event.target.closest(interactive)) return;
+    if (state.horizontal) event.preventDefault();
+    handleTap(event.clientX);
   });
 
   // After any free scroll settles (drag, momentum, find), realign to a

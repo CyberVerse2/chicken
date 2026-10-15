@@ -29,6 +29,9 @@ final class Book {
     /// don't keep re-parsing books that have no embedded cover.
     var derivedDataChecked: Bool = false
     var lastLocation: String?
+    /// Title of the chapter at `lastLocation`, recorded by the reader so
+    /// Home can say where you are without opening the book.
+    var lastChapterTitle: String?
     /// Stamped when progress first reaches 100%; powers "books this year".
     var finishedAt: Date?
     /// JSON-encoded `ReaderPreferences`. Stored as plain data rather than a

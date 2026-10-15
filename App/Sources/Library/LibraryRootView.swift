@@ -1,6 +1,7 @@
 import ChickenKit
 import SwiftData
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum AppTab: Hashable {
     case home
@@ -18,12 +19,16 @@ struct LibraryRootView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(AppRouter.self) private var router
     @Environment(\.palette) private var palette
+    @Environment(\.horizontalSizeClass) private var sizeClass
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     #endif
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
 
     @State private var tab: AppTab = LibraryRootView.initialTab
+    /// Covers, the reader, and the details sheet share this so books zoom
+    /// open from wherever they were tapped (iPhone and iPad).
+    @Namespace private var coverNamespace
 
     /// Books in progress, most recent first: the sidebar's Reading section.
     private var reading: [Book] {
@@ -47,20 +52,25 @@ struct LibraryRootView: View {
         @Bindable var router = router
 
         navigation
+            // Scale with the reader's text size, up to the point where
+            // shelves and covers still lay out.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .onChange(of: reading.map(\.id)) { _, ids in
             // A finished or removed book drops out of the sidebar.
             if case .book(let id) = tab, !ids.contains(id) { tab = .home }
         }
         .tint(palette.text)
         .environment(\.openBook, OpenBookAction(handler: open))
+        .environment(\.coverNamespace, coverNamespace)
         .sheet(isPresented: $router.showingDiscovery) {
             DiscoveryView()
                 .readingTheme(library.preferences.theme)
         }
         .sheet(item: detailBook) { item in
-            BookDetailView(bookID: item.id)
+            BookDetailPager(ids: router.detailSequence, start: item.id)
                 .environment(\.openBook, OpenBookAction(handler: open))
                 .readingTheme(library.preferences.theme)
+                .zoomTransition(from: router.detailSource, in: coverNamespace)
         }
         #if !os(macOS)
         .sheet(isPresented: $router.showingSettings) {
@@ -69,19 +79,20 @@ struct LibraryRootView: View {
         }
         .fullScreenCover(item: presentedBook) { item in
             ReaderLoader(bookID: item.id)
+                .zoomTransition(from: router.presentedSource, in: coverNamespace)
         }
         #endif
         .fileImporter(
             isPresented: $router.showingImporter,
-            allowedContentTypes: BookFormat.importableContentTypes,
+            allowedContentTypes: importerContentTypes,
             allowsMultipleSelection: true
         ) { result in
-            if case .success(let urls) = result { library.importFiles(urls) }
+            if case .success(let urls) = result { receive(urls) }
         }
         .dropDestination(for: URL.self) { urls, _ in
             let files = urls.filter(\.isFileURL)
             guard !files.isEmpty else { return false }
-            library.importFiles(files)
+            receive(files)
             return true
         }
         .overlay(alignment: .bottom) { ActivityToast() }
@@ -125,7 +136,9 @@ struct LibraryRootView: View {
             Tab(value: AppTab.search, role: .search) {
                 NavigationStack { SearchView() }
             }
-            if !reading.isEmpty {
+            // Only where there's a sidebar: on iPhone these tabs would
+            // crowd the tab bar into a "More" tab.
+            if sizeClass == .regular && !reading.isEmpty {
                 TabSection("Reading") {
                     ForEach(reading) { book in
                         Tab(value: AppTab.book(book.id)) {
@@ -147,10 +160,13 @@ struct LibraryRootView: View {
 
     // MARK: Opening books
 
-    private func open(_ id: UUID) {
+    private func open(_ id: UUID, from source: CoverSource? = nil) {
         #if os(macOS)
         openWindow(id: SceneID.reader, value: id)
         #else
+        // From the details sheet the cover is going away with the sheet, so
+        // the reader uses the standard presentation instead of a zoom.
+        router.presentedSource = router.detailBookID == nil ? source : nil
         router.detailBookID = nil
         router.presentedBookID = id
         #endif
@@ -172,9 +188,31 @@ struct LibraryRootView: View {
     }
     #endif
 
+    // MARK: Importing
+
+    /// Folders can be picked on the Mac too, so the Downloads folder isn't
+    /// greyed out; they go to Find Books rather than being imported whole.
+    private var importerContentTypes: [UTType] {
+        #if os(macOS)
+        BookFormat.importableContentTypes + [.folder]
+        #else
+        BookFormat.importableContentTypes
+        #endif
+    }
+
+    /// Imports files straight away. Folders (from the picker or a drop) are
+    /// shared with Find Books instead, so their contents are reviewed first.
+    private func receive(_ urls: [URL]) {
+        let folders = urls.filter(\.isFolder)
+        library.importFiles(urls.filter { !$0.isFolder })
+        guard !folders.isEmpty else { return }
+        library.addFolders(folders)
+        router.showingDiscovery = true
+    }
+
     private func handle(_ url: URL) {
         if url.isFileURL {
-            library.importFiles([url])
+            receive([url])
         } else if let destination = ChickenLink.destination(for: url) {
             route(to: destination)
         }
@@ -187,6 +225,16 @@ struct LibraryRootView: View {
         case .continueReading:
             if let book = library.continueReadingBook() { open(book.id) }
         }
+    }
+}
+
+private extension URL {
+    /// A plain folder, not a package such as an .rtfd bundle.
+    var isFolder: Bool {
+        let accessing = startAccessingSecurityScopedResource()
+        defer { if accessing { stopAccessingSecurityScopedResource() } }
+        let values = try? resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+        return values?.isDirectory == true && values?.isPackage != true
     }
 }
 

@@ -67,8 +67,12 @@ final class ReaderModel {
     @ObservationIgnored weak var engine: ReaderEngine?
 
     // Structure and position, reported by the engine.
-    var chapters: [ReaderChapter] = []
-    var chapterIndex: Int
+    var chapters: [ReaderChapter] = [] {
+        didSet { recordChapterTitle() }
+    }
+    var chapterIndex: Int {
+        didSet { recordChapterTitle() }
+    }
     var totalPages: Int?
     var currentPage: Int?
     var chapterProgress: Double?
@@ -187,6 +191,15 @@ final class ReaderModel {
     func reportProgress(_ progress: Double, location: String?) {
         if let location { currentLocation = location }
         library.updateProgress(for: book, progress: progress, location: location)
+    }
+
+    /// Remembers the chapter you're in, so Home can name it.
+    private func recordChapterTitle() {
+        guard chapters.indices.contains(chapterIndex) else { return }
+        let title = chapters[chapterIndex].title
+        guard book.lastChapterTitle != title else { return }
+        book.lastChapterTitle = title
+        library.save()
     }
 
     func resetPosition() {

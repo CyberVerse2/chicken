@@ -1,8 +1,67 @@
 import ChickenKit
 import SwiftUI
 
+/// Details for a run of books, one per page: swipe sideways to the next
+/// book on the shelf, as in a printed catalogue.
+struct BookDetailPager: View {
+    @Environment(\.palette) private var palette
+    @Environment(\.dismiss) private var dismiss
+    let ids: [UUID]
+    @State private var current: UUID?
+
+    init(ids: [UUID], start: UUID) {
+        self.ids = ids.contains(start) ? ids : [start]
+        _current = State(initialValue: start)
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(.horizontal) {
+                LazyHStack(spacing: 0) {
+                    ForEach(ids, id: \.self) { id in
+                        BookDetailView(bookID: id)
+                            .containerRelativeFrame(.horizontal)
+                            // Neighbors sit slightly back, so a swipe reads as
+                            // sliding one book off the pile and the next on.
+                            .scrollTransition(.interactive, axis: .horizontal) { page, phase in
+                                page
+                                    .scaleEffect(1 - abs(phase.value) * 0.07)
+                                    .opacity(1 - abs(phase.value) * 0.35)
+                            }
+                    }
+                }
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.paging)
+            .scrollPosition(id: $current)
+            .scrollIndicators(.hidden)
+            .background(palette.background.ignoresSafeArea())
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close", systemImage: "xmark") { dismiss() }
+                }
+                if ids.count > 1, let current, let index = ids.firstIndex(of: current) {
+                    ToolbarItem(placement: .principal) {
+                        Text("\(index + 1) of \(ids.count)")
+                            .font(.chickenMono(12, weight: .medium))
+                            .foregroundStyle(palette.muted)
+                            .contentTransition(.numericText())
+                            .animation(.snappy, value: index)
+                    }
+                }
+            }
+        }
+        #if os(macOS)
+        .frame(minWidth: 560, idealWidth: 640, minHeight: 600, idealHeight: 720)
+        #else
+        .presentationDetents([.large])
+        #endif
+    }
+}
+
 /// About a book: cover, description, where you are, and what's in it.
-/// Shown as a sheet, or as a page when a book is picked in the sidebar.
+/// One page of `BookDetailPager`, or a page of its own when a book is
+/// picked in the Mac sidebar.
 struct BookDetailView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
@@ -20,7 +79,7 @@ struct BookDetailView: View {
                 .pageTitle(library.book(id: bookID)?.title ?? "Book")
                 .toolbar { LibraryToolbar() }
         } else {
-            sheet
+            page
         }
     }
 
@@ -33,22 +92,6 @@ struct BookDetailView: View {
             }
         }
         .background(palette.background.ignoresSafeArea())
-    }
-
-    private var sheet: some View {
-        NavigationStack {
-            page
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close", systemImage: "xmark") { dismiss() }
-                    }
-                }
-        }
-        #if os(macOS)
-        .frame(minWidth: 560, idealWidth: 640, minHeight: 600, idealHeight: 720)
-        #else
-        .presentationDetents([.large])
-        #endif
     }
 
     private func content(_ book: Book) -> some View {

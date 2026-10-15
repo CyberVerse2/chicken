@@ -39,6 +39,12 @@ struct ReaderView: View {
     @State private var showSearch = false
     @State private var searchText = ""
     @State private var chromeHidden = false
+    /// Briefly shown on entering zen mode on iPhone and iPad, where there's
+    /// no hover to reveal a way out.
+    @State private var showingZenHint = false
+    /// Gives up waiting for the first page after a moment, so a slow or
+    /// odd file never leaves the cover stuck on screen.
+    @State private var coverTimedOut = false
     @State private var zenHover = false
     @State private var availableWidth: CGFloat = 1200
 
@@ -164,6 +170,14 @@ struct ReaderView: View {
                 showSearch = false
                 showTypography = false
             }
+            guard !Platform.isMac else { return }
+            showingZenHint = zen
+            if zen {
+                Task {
+                    try? await Task.sleep(for: .seconds(2.8))
+                    showingZenHint = false
+                }
+            }
         }
         #if os(macOS)
         .onExitCommand {
@@ -186,9 +200,49 @@ struct ReaderView: View {
 
     // MARK: Reading surface
 
+    /// True until the engine reports where it is: the book's cover holds
+    /// the page meanwhile, so opening a book reads as its cover opening.
+    private var isWaitingForFirstPage: Bool {
+        guard book.format == .epub || book.format == .pdf else { return false }
+        return model.error == nil && model.currentPage == nil && model.chapterProgress == nil && !coverTimedOut
+    }
+
     private var readingSurface: some View {
         engineView
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay {
+                if isWaitingForFirstPage {
+                    ZStack {
+                        palette.background
+                        BookCover(book: book, style: .hero)
+                            .frame(width: isCompact ? 220 : 280, height: isCompact ? 330 : 420)
+                            .shadow(color: palette.shadow, radius: 24, x: 4, y: 16)
+                    }
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+                }
+            }
+            .animation(.easeOut(duration: 0.35), value: isWaitingForFirstPage)
+            .task {
+                try? await Task.sleep(for: .seconds(3))
+                coverTimedOut = true
+            }
+            .overlay(alignment: .bottom) {
+                if showingZenHint {
+                    Label("Tap the middle of the page to bring back the controls", systemImage: "hand.tap")
+                        .font(.chickenUI(13, weight: .medium))
+                        .foregroundStyle(palette.text)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .glassEffect(.regular, in: .capsule)
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 24)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .allowsHitTesting(false)
+                }
+            }
+            .animation(.smooth(duration: 0.3), value: showingZenHint)
             .overlay(alignment: .topTrailing) {
                 // A bookmarked place gets a silk ribbon over the top edge
                 // of the page, as a real bookmark would.
@@ -369,6 +423,15 @@ struct ReaderView: View {
                 }
                 Picker("Theme", selection: themeBinding) {
                     ForEach(ReadingTheme.allCases) { Label($0.label, systemImage: $0.systemImage).tag($0) }
+                }
+                if book.format.supportsFlowModes {
+                    // Scroll reads straight down through every chapter;
+                    // Pages turns like a book.
+                    Picker("Layout", selection: $model.readingMode) {
+                        ForEach(isCompact ? [ReadingMode.scroll, .paged] : ReadingMode.allCases) { mode in
+                            Label(mode.label, systemImage: mode.systemImage).tag(mode)
+                        }
+                    }
                 }
                 Toggle(isOn: $model.isZen) {
                     Label("Zen Mode", systemImage: "rectangle.compress.vertical")

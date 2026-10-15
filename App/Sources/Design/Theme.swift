@@ -239,7 +239,7 @@ extension Font {
     /// with restraint: greetings, page titles, the book you're in, numbers
     /// worth celebrating. Ships with both iOS and macOS.
     static func chickenDisplay(_ size: CGFloat, weight: DisplayWeight = .regular, italic: Bool = false) -> Font {
-        .custom(weight.postScriptName(italic: italic), size: size)
+        .custom(weight.postScriptName(italic: italic), size: size, relativeTo: .chickenStyle(for: size))
     }
 
     enum DisplayWeight {
@@ -269,17 +269,42 @@ extension Font {
         case (true, false): name = "IowanOldStyle-Bold"
         case (true, true): name = "IowanOldStyle-BoldItalic"
         }
-        return .custom(name, size: size)
+        return .custom(name, size: size, relativeTo: .chickenStyle(for: size))
     }
 
-    /// UI chrome: toolbars, buttons, labels.
+    /// UI chrome: toolbars, buttons, labels. On iPhone and iPad this is the
+    /// nearest system text style, so it follows the reader's text size; the
+    /// Mac keeps exact sizes.
     static func chickenUI(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        #if os(macOS)
         .system(size: size, weight: weight)
+        #else
+        .system(.chickenStyle(for: size), weight: weight)
+        #endif
     }
 
     /// Measurements and counts: the UI face with even-width figures.
     static func chickenMono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight).monospacedDigit()
+        chickenUI(size, weight: weight).monospacedDigit()
+    }
+}
+
+extension Font.TextStyle {
+    /// The text style a fixed size stands in for, so Chicken's type scales
+    /// with Dynamic Type from the size it was designed at.
+    static func chickenStyle(for size: CGFloat) -> Font.TextStyle {
+        switch size {
+        case ..<11.5: return .caption2
+        case ..<12.5: return .caption
+        case ..<13.5: return .footnote
+        case ..<15.5: return .subheadline
+        case ..<16.5: return .callout
+        case ..<18.5: return .body
+        case ..<21: return .title3
+        case ..<25: return .title2
+        case ..<31: return .title
+        default: return .largeTitle
+        }
     }
 }
 

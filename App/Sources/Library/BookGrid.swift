@@ -3,14 +3,17 @@ import SwiftUI
 
 struct BookGrid: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
     let books: [Book]
 
     private var spacing: CGFloat { sizeClass == .compact ? 18 : 32 }
 
+    /// Wider tiles at accessibility text sizes, so titles wrap between words.
     private var columns: [GridItem] {
-        sizeClass == .compact
-            ? [GridItem(.adaptive(minimum: 100, maximum: 150), spacing: spacing, alignment: .top)]
-            : [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: spacing, alignment: .top)]
+        let large = typeSize.isAccessibilitySize
+        return sizeClass == .compact
+            ? [GridItem(.adaptive(minimum: large ? 150 : 100, maximum: large ? 220 : 150), spacing: spacing, alignment: .top)]
+            : [GridItem(.adaptive(minimum: large ? 200 : 140, maximum: large ? 260 : 180), spacing: spacing, alignment: .top)]
     }
 
     var body: some View {
@@ -19,6 +22,7 @@ struct BookGrid: View {
                 BookTile(book: book, ledgeOverhang: spacing / 2)
             }
         }
+        .coverCollection("grid", books: books.map(\.id))
     }
 }
 
@@ -26,6 +30,7 @@ private struct BookTile: View {
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.coverContext) private var coverContext
     let book: Book
     /// Each tile's ledge reaches halfway into the gap on either side, so a
     /// row of tiles reads as one continuous shelf.
@@ -35,10 +40,11 @@ private struct BookTile: View {
     private var inProgress: Bool { book.progress > 0 && !book.isFinished }
 
     var body: some View {
-        Button { openBook(book.id) } label: {
+        Button { openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
             VStack(alignment: .leading, spacing: 14) {
                 BookCover(book: book, style: .tile)
                     .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                    .coverTransitionSource(book.id)
                     .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
                     .offset(y: hovering ? -6 : 0)
                     .background(alignment: .bottom) {
@@ -111,14 +117,20 @@ private struct BookContextMenu: ViewModifier {
     @Environment(LibraryStore.self) private var library
     @Environment(AppRouter.self) private var router
     @Environment(\.openBook) private var openBook
+    @Environment(\.coverContext) private var coverContext
+    @Environment(\.bookSequence) private var bookSequence
     let book: Book
     @State private var confirmingRemoval = false
+
+    private var source: CoverSource { CoverSource(context: coverContext, bookID: book.id) }
 
     func body(content: Content) -> some View {
         content
             .contextMenu {
-                Button("Open", systemImage: "book") { openBook(book.id) }
-                Button("Details", systemImage: "info.circle") { router.detailBookID = book.id }
+                Button("Open", systemImage: "book") { openBook(book.id, from: source) }
+                Button("Details", systemImage: "info.circle") {
+                    router.showDetails(book.id, in: bookSequence, from: source)
+                }
                 Divider()
                 if book.progress > 0 {
                     Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {
@@ -130,8 +142,11 @@ private struct BookContextMenu: ViewModifier {
                 Divider()
                 Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
             } preview: {
+                // The preview is rendered outside this view's hierarchy, so
+                // it needs the library handed to it explicitly.
                 BookCover(book: book, style: .hero)
                     .frame(width: 220, height: 330)
+                    .environment(library)
                     .readingTheme(.paper)
             }
             .confirmationDialog("Remove \u{201C}\(book.title)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {

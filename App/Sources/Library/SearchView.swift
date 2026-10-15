@@ -23,6 +23,11 @@ struct SearchView: View {
         }
     }
 
+    /// The books currently listed, in order: suggestions or results.
+    private var listedBooks: [Book] {
+        trimmed.isEmpty ? Array(books.filter { $0.lastOpenedAt != nil }.prefix(6)) : Array(matchingBooks.prefix(60))
+    }
+
     private var matchingHighlights: [Highlight] {
         guard !trimmed.isEmpty else { return [] }
         return highlights.filter { $0.text.localizedStandardContains(trimmed) || $0.note.localizedStandardContains(trimmed) }
@@ -76,6 +81,7 @@ struct SearchView: View {
             .padding(.horizontal, gutter)
             .padding(.top, 12)
             .padding(.bottom, 80)
+            .coverCollection("search", books: listedBooks.map(\.id))
             .frame(maxWidth: 820, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -113,14 +119,16 @@ struct SearchView: View {
 private struct SearchBookRow: View {
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
+    @Environment(\.coverContext) private var coverContext
     let book: Book
     let query: String
 
     var body: some View {
-        Button { openBook(book.id) } label: {
+        Button { openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
             HStack(spacing: 16) {
                 BookCover(book: book, style: .mini)
                     .frame(width: 40, height: 60)
+                    .coverTransitionSource(book.id)
                     .shadow(color: palette.shadow, radius: 2, y: 1)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(book.title)

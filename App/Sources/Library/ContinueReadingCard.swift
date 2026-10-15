@@ -11,8 +11,12 @@ struct ContinueReadingCard: View {
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.coverContext) private var coverContext
+    @Environment(\.bookSequence) private var bookSequence
     let book: Book
     var mode: Mode = .continuing
+
+    private var source: CoverSource { CoverSource(context: coverContext, bookID: book.id) }
     @State private var hovering = false
 
     private var isCompact: Bool { sizeClass == .compact }
@@ -46,7 +50,7 @@ struct ContinueReadingCard: View {
                     progress.frame(maxWidth: 420).padding(.bottom, 28)
                 }
                 HStack(spacing: 12) {
-                    PrimaryActionButton(title: actionTitle, systemImage: "arrow.right") { openBook(book.id) }
+                    PrimaryActionButton(title: actionTitle, systemImage: "arrow.right") { openBook(book.id, from: source) }
                     detailsButton
                 }
             }
@@ -76,7 +80,7 @@ struct ContinueReadingCard: View {
                 progress.padding(.bottom, 22)
             }
             HStack(spacing: 10) {
-                Button { openBook(book.id) } label: {
+                Button { openBook(book.id, from: source) } label: {
                     HStack(spacing: 8) {
                         Text(actionTitle)
                         Image(systemName: "arrow.right").font(.system(size: 13, weight: .semibold))
@@ -95,9 +99,11 @@ struct ContinueReadingCard: View {
     // MARK: Parts
 
     private func cover(width: CGFloat) -> some View {
-        Button { openBook(book.id) } label: {
-            BookCover(book: book, style: .hero)
+        Button { openBook(book.id, from: source) } label: {
+            // A cloth cover goes blank here: the title is set right beside it.
+            BookCover(book: book, style: .hero, showsClothText: false)
                 .frame(width: width, height: width * 1.5)
+                .coverTransitionSource(book.id)
                 .shadow(color: palette.shadow.opacity(0.9), radius: 2, x: 1, y: 1)
                 .shadow(color: palette.shadow, radius: hovering ? 30 : 22, x: 4, y: hovering ? 22 : 16)
                 .coverRibbon(mode == .continuing, length: width * 0.16, width: width * 0.075)
@@ -120,7 +126,10 @@ struct ContinueReadingCard: View {
                 Text("\(Int((book.progress * 100).rounded()))%")
                     .foregroundStyle(palette.text)
                     .fontWeight(.semibold)
-                if let pages = book.pageCount, pages > 0 {
+                if let chapter = book.lastChapterTitle, !chapter.isEmpty, chapter != book.title {
+                    Text("· \(chapter)")
+                        .lineLimit(1)
+                } else if let pages = book.pageCount, pages > 0 {
                     Text("· p. \(max(1, Int((Double(pages) * book.progress).rounded()))) of \(pages)")
                 }
                 Spacer(minLength: 8)
@@ -134,7 +143,7 @@ struct ContinueReadingCard: View {
     }
 
     private var detailsButton: some View {
-        Button("Details", systemImage: "info") { router.detailBookID = book.id }
+        Button("Details", systemImage: "info") { router.showDetails(book.id, in: bookSequence, from: source) }
             .labelStyle(.iconOnly)
             .font(.system(size: 14, weight: .semibold))
             .foregroundStyle(palette.text)

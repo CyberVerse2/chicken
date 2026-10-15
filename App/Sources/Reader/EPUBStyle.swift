@@ -107,13 +107,24 @@ struct EPUBStyle: Equatable {
         """
     }
 
+    /// Room under each page for the floating progress bar. On the Mac the
+    /// bar and the soft edge beneath it sit higher than the page's own
+    /// safe area reports, and a smaller margin cut the last line in half.
+    private static var pagedBottomPadding: Int {
+        #if os(macOS)
+        return 116
+        #else
+        return 76
+        #endif
+    }
+
     private func columnsCSS(count: Int, inset: String) -> String {
         """
         html, body { width: 100vw !important; max-width: none !important; }
         body {
           height: 100vh !important;
           margin: 0 !important;
-          padding: calc(28px + env(safe-area-inset-top)) 0 calc(76px + env(safe-area-inset-bottom)) !important;
+          padding: calc(28px + env(safe-area-inset-top)) 0 calc(\(Self.pagedBottomPadding)px + env(safe-area-inset-bottom)) !important;
           \(count == 1 ? "column-width: 100vw !important; column-count: auto !important;" : "column-count: \(count) !important;")
           column-gap: 0 !important;
           column-fill: auto !important;

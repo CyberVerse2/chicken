@@ -83,8 +83,20 @@ final class AppRouter {
 
     /// Book shown in the full-screen reader on iPhone and iPad.
     var presentedBookID: UUID?
+    /// The cover the reader zoomed out of, and shrinks back into.
+    var presentedSource: CoverSource?
     /// Book whose details sheet is showing.
     var detailBookID: UUID?
+    /// Books the details sheet swipes through, and the cover it zoomed from.
+    var detailSequence: [UUID] = []
+    var detailSource: CoverSource?
+
+    /// Shows details for a book, swipeable through the books around it.
+    func showDetails(_ id: UUID, in sequence: [UUID] = [], from source: CoverSource? = nil) {
+        detailSequence = sequence.contains(id) ? sequence : [id]
+        detailSource = source
+        detailBookID = id
+    }
     var showingImporter = false
     var showingDiscovery = false
     var showingSettings = false
@@ -95,12 +107,13 @@ final class AppRouter {
 /// Opens a book in the platform-appropriate way: a new window on the Mac, a
 /// full-screen reader on iPhone and iPad.
 struct OpenBookAction {
-    let handler: (UUID) -> Void
-    func callAsFunction(_ id: UUID) { handler(id) }
+    let handler: (UUID, CoverSource?) -> Void
+    /// `source` is the cover the reader zooms out of on iPhone and iPad.
+    func callAsFunction(_ id: UUID, from source: CoverSource? = nil) { handler(id, source) }
 }
 
 extension EnvironmentValues {
-    @Entry var openBook = OpenBookAction { _ in }
+    @Entry var openBook = OpenBookAction { _, _ in }
 }
 
 #if os(macOS)

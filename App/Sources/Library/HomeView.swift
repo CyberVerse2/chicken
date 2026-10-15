@@ -58,8 +58,10 @@ struct HomeView: View {
                     Group {
                         if let continueBook {
                             ContinueReadingCard(book: continueBook, mode: .continuing)
+                                .coverCollection("hero", books: [continueBook.id] + alsoReading.map(\.id))
                         } else if let first = upNext.first {
                             ContinueReadingCard(book: first, mode: .starting)
+                                .coverCollection("hero", books: upNext.map(\.id))
                         }
                     }
                     .padding(.horizontal, gutter)
@@ -165,6 +167,7 @@ struct BookShelf: View {
             .background(alignment: .top) {
                 ShelfLedge().offset(y: coverWidth * 1.5)
             }
+            .coverCollection("shelf-\(title)", books: books.map(\.id))
         }
     }
 }
@@ -188,6 +191,7 @@ struct ShelfLedge: View {
 private struct ShelfItem: View {
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
+    @Environment(\.coverContext) private var coverContext
     let book: Book
     let width: CGFloat
     let showsProgress: Bool
@@ -196,10 +200,11 @@ private struct ShelfItem: View {
     private var inProgress: Bool { book.progress > 0 && !book.isFinished }
 
     var body: some View {
-        Button { openBook(book.id) } label: {
+        Button { openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
             VStack(alignment: .leading, spacing: 14) {
                 BookCover(book: book, style: .tile)
                     .frame(width: width, height: width * 1.5)
+                    .coverTransitionSource(book.id)
                     .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
                     .offset(y: hovering ? -6 : 0)
                     .coverRibbon(inProgress)

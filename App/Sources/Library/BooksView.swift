@@ -54,7 +54,17 @@ enum LibrarySort: String, CaseIterable, Identifiable {
 
     func sorted(_ books: [Book]) -> [Book] {
         switch self {
-        case .recent: return books
+        case .recent:
+            // Books you've opened, latest first, then the ones you haven't
+            // started, newest arrivals first.
+            return books.sorted { lhs, rhs in
+                switch (lhs.lastOpenedAt, rhs.lastOpenedAt) {
+                case let (left?, right?): return left > right
+                case (.some, nil): return true
+                case (nil, .some): return false
+                case (nil, nil): return lhs.importedAt > rhs.importedAt
+                }
+            }
         case .added: return books.sorted { $0.importedAt > $1.importedAt }
         case .title: return books.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         case .author: return books.sorted { $0.displayAuthor.localizedStandardCompare($1.displayAuthor) == .orderedAscending }
