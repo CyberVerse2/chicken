@@ -85,9 +85,7 @@ struct ContinueReadingCard: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 6)
                 }
-                .buttonStyle(.glassProminent)
-                .tint(palette.text)
-                .foregroundStyle(palette.background)
+                .inkProminentButton()
                 detailsButton
             }
         }

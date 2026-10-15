@@ -106,14 +106,54 @@ struct PrimaryActionButton: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
         }
-        .buttonStyle(.glassProminent)
-        .tint(palette.text)
-        .foregroundStyle(palette.background)
+        .inkProminentButton()
+    }
+}
+
+extension View {
+    /// The filled, theme-ink button used for primary actions. On the Mac a
+    /// tinted glass button loses its tint when the window is inactive, which
+    /// leaves background-colored text on a pale capsule, so the Mac draws
+    /// its own solid capsule instead.
+    func inkProminentButton() -> some View {
+        modifier(InkProminentButton())
+    }
+}
+
+private struct InkProminentButton: ViewModifier {
+    @Environment(\.palette) private var palette
+
+    func body(content: Content) -> some View {
         #if os(macOS)
-        .controlSize(.large)
+        content.buttonStyle(InkCapsuleButtonStyle(palette: palette))
+        #else
+        content
+            .buttonStyle(.glassProminent)
+            .tint(palette.text)
+            .foregroundStyle(palette.background)
         #endif
     }
 }
+
+#if os(macOS)
+private struct InkCapsuleButtonStyle: ButtonStyle {
+    let palette: ReaderPalette
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(palette.background)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(palette.text.opacity(hovering ? 0.88 : 1)))
+            .opacity(isEnabled ? (configuration.isPressed ? 0.75 : 1) : 0.4)
+            .contentShape(Capsule())
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.15), value: hovering)
+    }
+}
+#endif
 
 struct SecondaryActionButton: View {
     @Environment(\.palette) private var palette
@@ -132,12 +172,35 @@ struct SecondaryActionButton: View {
             .font(.chickenUI(13, weight: .medium))
             .foregroundStyle(palette.text)
         }
-        .buttonStyle(.glass)
         #if os(macOS)
-        .controlSize(.large)
+        // Glass buttons pick up the accent fill in active Mac windows, which
+        // hides ink-colored labels; a hairline capsule reads in any state.
+        .buttonStyle(InkOutlineButtonStyle(palette: palette))
+        #else
+        .buttonStyle(.glass)
         #endif
     }
 }
+
+#if os(macOS)
+private struct InkOutlineButtonStyle: ButtonStyle {
+    let palette: ReaderPalette
+    @Environment(\.isEnabled) private var isEnabled
+    @State private var hovering = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(Capsule().fill(palette.text.opacity(hovering ? 0.06 : 0)))
+            .overlay(Capsule().strokeBorder(palette.borderStrong, lineWidth: 1))
+            .opacity(isEnabled ? (configuration.isPressed ? 0.6 : 1) : 0.4)
+            .contentShape(Capsule())
+            .onHover { hovering = $0 }
+            .animation(.easeOut(duration: 0.15), value: hovering)
+    }
+}
+#endif
 
 extension Date {
     var shortRelativeDescription: String {

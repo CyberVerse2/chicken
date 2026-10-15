@@ -121,9 +121,7 @@ struct DiscoveryView: View {
         ChickenSection("Likely books", count: likely.count) {
             Button(library.importState.isImporting ? "Importing…" : "Import All") { library.importDiscovered(likely) }
                 .font(.chickenUI(13, weight: .semibold))
-                .buttonStyle(.glassProminent)
-                .tint(palette.text)
-                .foregroundStyle(palette.background)
+                .inkProminentButton()
                 .disabled(library.importState.isImporting)
         } content: {
             ForEach(Array(likely.enumerated()), id: \.element.id) { index, book in
