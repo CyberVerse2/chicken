@@ -26,6 +26,12 @@ struct LibraryRootView: View {
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
 
     @State private var tab: AppTab = LibraryRootView.initialTab
+    #if os(macOS)
+    /// The details panel waits until the window has restored its saved
+    /// layout: adding the column during restoration sends AppKit's split
+    /// view into a constraint loop and the app aborts at launch.
+    @State private var windowSettled = false
+    #endif
     /// Covers, the reader, and the details sheet share this so books zoom
     /// open from wherever they were tapped (iPhone and iPad).
     @Namespace private var coverNamespace
@@ -134,6 +140,10 @@ struct LibraryRootView: View {
             }
             .overlay { BookPreviewOverlay() }
             .animation(.smooth(duration: 0.22), value: router.previewingBookID)
+            .task {
+                try? await Task.sleep(for: .milliseconds(150))
+                windowSettled = true
+            }
         }
         #else
         TabView(selection: $tab) {
@@ -177,7 +187,7 @@ struct LibraryRootView: View {
         Binding(
             get: {
                 if case .book = tab { return false }
-                return router.showingInspector
+                return windowSettled && router.showingInspector
             },
             set: { router.showingInspector = $0 }
         )
@@ -206,10 +216,11 @@ struct LibraryRootView: View {
         #endif
     }
 
-    /// Details show full screen on iPad and as a sheet everywhere else.
+    /// On iPhone and iPad the detail cards present over the dimmed library
+    /// with nothing of their own behind them; the Mac uses a sheet.
     private var showsDetailsFullScreen: Bool {
         #if os(iOS)
-        sizeClass == .regular
+        true
         #else
         false
         #endif
@@ -223,7 +234,9 @@ struct LibraryRootView: View {
     }
 
     private func detailPager(start: UUID) -> some View {
-        BookDetailPager(ids: router.detailSequence, start: start, style: showsDetailsFullScreen ? .cards : .pages)
+        // Cards on iPhone and iPad: the books either side peek in, so it's
+        // clear there's more to swipe to. The Mac's sheet keeps pages.
+        BookDetailPager(ids: router.detailSequence, start: start, style: Platform.isMac ? .pages : .cards)
             .environment(\.openBook, OpenBookAction(handler: open))
             // Presentations don't inherit environment set on the presenter.
             .environment(\.coverNamespace, coverNamespace)

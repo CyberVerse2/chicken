@@ -9,14 +9,15 @@ nonisolated struct CoverHue: Equatable, Sendable {
     let hue: Double
     let saturation: Double
 
-    /// The wash for a theme: pale enough under dark text in Paper and Sepia,
-    /// deep enough under light text in Ink, whatever the cover's colour.
+    /// The card colour for a theme: light enough under dark text in Paper
+    /// and Sepia, deep enough under light text in Ink, but clearly the
+    /// cover's hue either way.
     func wash(for theme: ReadingTheme) -> Color {
-        let saturation = min(self.saturation, 0.6)
+        let saturation = min(self.saturation, 0.7)
         switch theme {
-        case .paper: return Color(hue: hue, saturation: saturation * 0.42, brightness: 0.93)
-        case .sepia: return Color(hue: hue, saturation: saturation * 0.5, brightness: 0.88)
-        case .ink: return Color(hue: hue, saturation: saturation * 0.6, brightness: 0.22)
+        case .paper: return Color(hue: hue, saturation: saturation * 0.55, brightness: 0.9)
+        case .sepia: return Color(hue: hue, saturation: saturation * 0.6, brightness: 0.85)
+        case .ink: return Color(hue: hue, saturation: saturation * 0.75, brightness: 0.3)
         }
     }
 
@@ -88,15 +89,13 @@ struct CoverTintModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background {
+                // The card is filled with the book's colour, settling a
+                // little toward the page further down.
+                let fill = coverHue?.wash(for: theme) ?? palette.surface
                 LinearGradient(
-                    stops: [
-                        .init(color: (coverHue?.wash(for: theme) ?? palette.background), location: 0),
-                        .init(color: (coverHue?.wash(for: theme) ?? palette.background).opacity(0.7), location: 0.32),
-                        .init(color: palette.background, location: 0.62),
-                    ],
+                    colors: [fill, fill.mix(with: palette.background, by: 0.45)],
                     startPoint: .top, endPoint: .bottom
                 )
-                .background(palette.background)
                 .ignoresSafeArea()
                 .animation(.easeInOut(duration: 0.35), value: coverHue)
             }

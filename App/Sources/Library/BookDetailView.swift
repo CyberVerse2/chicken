@@ -4,13 +4,14 @@ import SwiftUI
 /// Details for a run of books, one per page: swipe sideways to the next
 /// book on the shelf, as in a printed catalogue.
 struct BookDetailPager: View {
-    /// `.pages`: one book per screen (iPhone sheet). `.cards`: a centered
-    /// card with the books on either side peeking in (iPad, full screen).
+    /// `.pages`: one book per screen (the Mac's sheet). `.cards`: a centered
+    /// card with the books on either side peeking in (iPhone and iPad).
     enum Style { case pages, cards }
 
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
     @Environment(\.coverNamespace) private var coverNamespace
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let ids: [UUID]
     var style: Style = .pages
     @State private var current: UUID?
@@ -29,26 +30,21 @@ struct BookDetailPager: View {
     }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                switch style {
-                case .pages: pages
-                case .cards: cards
+        Group {
+            switch style {
+            case .pages:
+                NavigationStack {
+                    pages
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Close", systemImage: "xmark") { dismiss() }
+                            }
+                        }
                 }
-            }
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close", systemImage: "xmark") { dismiss() }
-                }
-                if ids.count > 1, let current, let index = ids.firstIndex(of: current) {
-                    ToolbarItem(placement: .principal) {
-                        Text("\(index + 1) of \(ids.count)")
-                            .font(.chickenMono(12, weight: .medium))
-                            .foregroundStyle(palette.muted)
-                            .contentTransition(.numericText())
-                            .animation(.snappy, value: index)
-                    }
-                }
+            case .cards:
+                // No bar of its own: each card is the surface, with its
+                // close button in the corner.
+                cards
             }
         }
         .coverCollection("detail", books: ids)
@@ -56,6 +52,7 @@ struct BookDetailPager: View {
         .frame(minWidth: 560, idealWidth: 640, minHeight: 600, idealHeight: 720)
         #else
         .presentationDetents([.large])
+        .presentationBackground(style == .cards ? Color.clear : palette.background)
         .environment(\.openBook, OpenBookAction { id, source in
             reading = ReaderRequest(id: id, source: source)
         })
@@ -95,38 +92,83 @@ extension BookDetailPager {
         .background(palette.background.ignoresSafeArea())
     }
 
+    /// Full-height cards, each filled with its book's colour, the current
+    /// one centred and its neighbours showing as strips at the edges.
     private var cards: some View {
         GeometryReader { geometry in
-            let cardWidth = min(geometry.size.width * 0.66, 620)
-            let gap: CGFloat = 22
+            let compact = sizeClass == .compact
+            let gap: CGFloat = compact ? 8 : 16
+            let peek: CGFloat = compact ? 16 : 0
+            let cardWidth = compact ? geometry.size.width - 2 * (gap + peek) : min(geometry.size.width * 0.66, 620)
+            let radius: CGFloat = 34
             ScrollView(.horizontal) {
                 LazyHStack(spacing: gap) {
                     ForEach(ids, id: \.self) { id in
                         BookDetailView(bookID: id, inCard: true)
-                            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-                            .background(
-                                RoundedRectangle(cornerRadius: 30, style: .continuous)
-                                    .fill(palette.background)
-                                    .shadow(color: palette.shadow, radius: 24, y: 10)
-                            )
-                            .frame(width: cardWidth)
-                            .padding(.vertical, 12)
-                            .scrollTransition(.interactive, axis: .horizontal) { card, phase in
-                                card
-                                    .scaleEffect(1 - abs(phase.value) * 0.06)
-                                    .opacity(1 - abs(phase.value) * 0.25)
+                            .overlay(alignment: .topLeading) {
+                                Button("Close", systemImage: "xmark") { dismiss() }
+                                    .labelStyle(.iconOnly)
+                                    .font(.system(size: 16, weight: .semibold))
+                                    .foregroundStyle(palette.text)
+                                    .buttonStyle(.glass)
+                                    .buttonBorderShape(.circle)
+                                    .controlSize(.large)
+                                    .padding(16)
                             }
+                            // Rounded at the top only: cards run off the bottom.
+                            .clipShape(UnevenRoundedRectangle(
+                                topLeadingRadius: radius, bottomLeadingRadius: 0,
+                                bottomTrailingRadius: 0, topTrailingRadius: radius,
+                                style: .continuous
+                            ))
+                            .shadow(color: .black.opacity(0.25), radius: 20, y: 6)
+                            .frame(width: cardWidth)
+                            .padding(.top, 8)
                     }
                 }
                 .scrollTargetLayout()
             }
-            .contentMargins(.horizontal, max(0, (geometry.size.width - cardWidth) / 2), for: .scrollContent)
-            .scrollTargetBehavior(.viewAligned)
+            // A card centres when there are books on both sides; the first
+            // and last stay against the edges instead of leaving a gap.
+            .contentMargins(.horizontal, compact ? 12 : 24, for: .scrollContent)
+            .scrollTargetBehavior(CardSnapping(cardWidth: cardWidth, gap: gap, count: ids.count))
             .scrollPosition(id: $current, anchor: .center)
             .scrollIndicators(.hidden)
             .scrollClipDisabled()
+            // The cards run past the bottom of the screen.
+            .ignoresSafeArea(edges: .bottom)
         }
-        .background(palette.surfaceAlt.ignoresSafeArea())
+        // The library shows through behind the cards, dimmed.
+        .background(Color.black.opacity(0.4).ignoresSafeArea())
+    }
+}
+
+/// Snaps one card at a time: each card is centred in the view, clamped so
+/// the first and last sit at the edges, and a flick moves at most one card.
+private struct CardSnapping: ScrollTargetBehavior {
+    let cardWidth: CGFloat
+    let gap: CGFloat
+    let count: Int
+
+    // Offsets and sizes here exclude the content margins: offset 0 puts the
+    // first card at the leading margin, and `containerSize` is the width
+    // between the margins.
+    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
+        let viewport = context.containerSize.width
+        let unit = cardWidth + gap
+        guard count > 0, unit > 0 else { return }
+
+        func index(atOffset offset: CGFloat) -> Int {
+            Int(((offset + viewport / 2 - cardWidth / 2) / unit).rounded())
+        }
+        let current = index(atOffset: context.originalTarget.rect.minX)
+        var next = index(atOffset: target.rect.minX)
+        next = min(max(next, current - 1), current + 1)
+        next = min(max(next, 0), count - 1)
+
+        let centered = CGFloat(next) * unit + cardWidth / 2 - viewport / 2
+        let maxOffset = max(0, context.contentSize.width - viewport)
+        target.rect.origin.x = min(max(0, centered), maxOffset)
     }
 }
 
@@ -227,7 +269,7 @@ struct BookDetailView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Read \(book.title)")
-            .padding(.top, isPage || inInspector ? 36 : (inCard ? 44 : 12))
+            .padding(.top, isPage || inInspector ? 36 : (inCard ? 76 : 12))
             .padding(.bottom, 10)
             VStack(spacing: 8) {
                 Text(book.title)
