@@ -27,6 +27,11 @@ final class AppPreferences {
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         theme = defaults.string(forKey: Keys.theme).flatMap(ReadingTheme.init(rawValue:)) ?? .paper
+        #if DEBUG
+        if let forced = ProcessInfo.processInfo.environment["CHICKEN_DEBUG_THEME"].flatMap(ReadingTheme.init(rawValue:)) {
+            theme = forced
+        }
+        #endif
         let daily = defaults.integer(forKey: Keys.dailyGoal)
         dailyGoalMinutes = daily > 0 ? daily : 30
         let annual = defaults.integer(forKey: Keys.annualGoal)

@@ -1,101 +1,91 @@
 # Design
 
-## Style
+## The idea
 
-Chicken is a personal reading room on Mac, iPad, and iPhone. The interface should feel composed and quiet — a literary surface, not a SaaS dashboard or a Kindle storefront. Typography carries the mood; chrome stays out of the way. Three reading themes — paper, sepia, ink — sit on equal footing and switch from inside the reader.
+Chicken is where your books come home to roost: a private reading room on Mac, iPad, and iPhone. The brand starts from the app icon (a linen hen rising out of an open book on a soot ground, with an ochre ribbon bookmark) and takes three things from it:
+
+1. **The palette**: soot, linen, cocoa, ochre.
+2. **The voice of a farmhouse almanac**: sturdy Clarendon headlines, warm book-face text, plain words with a little wit.
+3. **The ribbon**: the one accent. Ochre silk marks *your place*, and nothing else.
+
+Reading stays the center. Chrome is quiet, and the brand shows up in a few deliberate places rather than everywhere.
+
+## Signature: the ribbon
+
+The ochre ribbon means "this is where you are". It is used only for that, so it keeps its meaning:
+
+- A ribbon tail hangs out of the foot of every book cover you're partway through, on Home, in the Library grid, in book details, and in the widget. Finished and unread books have none.
+- Progress meters and the reader's scrubber fill with ribbon ochre.
+- A bookmarked page gets a ribbon draped over its top edge.
+- The active chapter in Contents, the selected Library/Notebook filter, and the selected theme/typeface are marked with ribbon.
+- The "Where you left off" eyebrow is set in ribbon.
+
+Don't use the ribbon for decoration, errors, or general emphasis.
+
+`Ribbon`, `RibbonShape`, and `.coverRibbon(_:)` live in `Library/BookCover.swift`.
 
 ## Color
 
-Color is restrained and neutral. There is no brand accent green; "accent" is just the highest-contrast text color of the active theme. Color must never be the only signal for state.
+Three reading themes, applied to the whole app (`ReadingTheme.palette`, `Design/Theme.swift`). Ink is the icon's own colors.
 
-The three reading themes are first-class — they apply to the whole app, not only the reader.
+| | Paper | Sepia | Ink |
+|---|---|---|---|
+| Background | `#F4EEE4` linen | `#EEDFC4` | `#171413` soot |
+| Surface | `#FBF8F2` | `#F6EBD6` | `#211D1C` (icon ground) |
+| Alt surface | `#EAE2D5` | `#E3D1B0` | `#2D2826` |
+| Text | `#211D1C` soot | `#3B2A1A` | `#F2E6D6` linen (icon hen) |
+| Muted | `#6E6259` | `#77593C` | `#A89B8C` |
+| Faint | `#A89C90` | `#A68B6A` | `#6D6359` |
+| Ribbon | `#B57631` | `#A9642A` | `#CB8D45` (icon ribbon) |
 
-### Paper (default)
+Borders and shadows are the text color at low opacity (black for Ink shadows). Primary buttons fill with the text color and use the background as their label color. Color is never the only signal of state: selected tabs are bold as well as underlined, and finished books say "Read".
 
-- App background: `#F5F1E8` warm off-paper
-- Surface (cards, hero): `#FFFFFF`
-- Alt surface (panels, chips): `#EDE7D9`
-- Text (primary, accent): `#1F1B16` deep ink
-- Muted text: `#6B655B`
-- Faint text / metadata: `#A8A095`
-- Hairline border: `rgba(31, 27, 22, 0.10)`
-- Strong border (active state): `rgba(31, 27, 22, 0.18)`
-- Shadow: `rgba(31, 27, 22, 0.08)`
-
-### Sepia
-
-- Background: `#EFE3CC`
-- Surface: `#F4EAD3`
-- Alt surface: `#E5D6B8`
-- Text: `#3A2A18`
-- Muted: `#7A5A40`
-- Faint: `#A89070`
-- Hairline border: `rgba(58, 42, 24, 0.14)`
-- Strong border: `rgba(58, 42, 24, 0.22)`
-- Shadow: `rgba(58, 42, 24, 0.10)`
-
-### Ink (dark)
-
-- Background: `#0F0F10`
-- Surface: `#1A1A1B`
-- Alt surface: `#252527`
-- Text: `#E8E6E1`
-- Muted: `#9A968D`
-- Faint: `#5A5851`
-- Hairline border: `rgba(255, 255, 255, 0.08)`
-- Strong border: `rgba(255, 255, 255, 0.14)`
-- Shadow: `rgba(0, 0, 0, 0.40)`
-
-### Highlight colors
-
-Four soft tints for marginalia. Translucent fill on the running text, full-strength bar on highlight rails in the side panel.
-
-- Amber — fill `rgba(239, 159, 39, 0.30)`, bar `#EF9F27`
-- Green — fill `rgba(99, 153, 34, 0.28)`, bar `#97C459`
-- Purple — fill `rgba(127, 119, 221, 0.28)`, bar `#AFA9EC`
-- Coral — fill `rgba(216, 90, 48, 0.25)`, bar `#F0997B`
+Highlights keep four soft tints (amber, green, purple, coral). Wherever a highlight is shown outside the book (Notebook, Search, details, the reader's panel) it is drawn as highlighter across the words, the way it looks on the page, not as a colored bar.
 
 ## Typography
 
-A literary serif for reading and titles, a clean sans for chrome and metadata.
+All three faces ship with both iOS and macOS, so nothing is bundled.
 
-- Reading body, titles, drop caps: `New York` / system serif via `Font.serif`. Body sits at 17pt by default with a 1.78 line height; column width defaults to ~620pt and is user-adjustable (480–820).
-- UI chrome (toolbars, buttons, side panel labels): system sans.
-- Section labels and metadata accents: small caps style — sans, 11pt, weight 500, letter-spacing ~0.14em, uppercase, in muted color.
-- Brand lockup: app icon mark plus serif "Chicken" title. Keep it compact and stable in the library header.
-- Drop cap on the first paragraph of a chapter: serif, ~3.4× body size, sits flush left, paragraph wraps around it.
+- **Display: Superclarendon** (`Font.chickenDisplay`). Greetings, page titles, the book you're in, shelf names, big figures, chapter headings inside EPUBs, the drop cap in text files, and titles on cloth covers. Use it with restraint, at most a few things per screen.
+- **Book face: Iowan Old Style** (`Font.chickenSerif`). Book titles in lists (semibold), authors (italic), summaries, quotations, captions and footnotes (italic).
+- **UI: SF Pro** (`Font.chickenUI`). Controls, labels, metadata. Eyebrows are 10.5pt semibold, tracked 1.6, uppercase. Figures use monospaced digits (`Font.chickenMono`), not a mono typeface.
+- **Reading**: the reader chooses the body face: New York (default), Iowan, Charter, Athelas, or San Francisco (`ReaderTypeface`, saved per book). Body text defaults to 17pt at 1.78 line height in a 620pt column.
 
-## Liquid Glass
+## Covers
 
-Glass is for controls, never for content. It appears only on things that float above the page or library: toolbars (system), the reader's progress capsule, the highlight picker, the in-book search bar, typography steppers, and primary/secondary buttons (`.glassProminent` tinted with the theme's ink, and `.glass`). Pages, covers, cards, and panels stay solid theme surfaces, so the reading surface is calm and glass reads as "something you can touch". Glass follows the theme's color scheme: Ink gets dark glass, Paper and Sepia get light glass. Related controls sit in a `GlassEffectContainer` so they blend into each other.
+Real cover art is shown as is. Books without one get a **cloth cover** (`ClothCover`): bookcloth in one of eight colors drawn from the palette (soot, cocoa, ochre, moss, oxblood, linen, slate, rust), a faint weave, and one of three bindings (framed, banded label, plain), with the title in Superclarendon and the author in Iowan italic. Subtitles after `:` or `;` are left off the cover. An egg outline at the foot is the house colophon.
+
+Every cover, real or cloth, gets the same finish: a darker hinge at the spine edge, a soft fall of light, and a hairline edge, so it reads as a book rather than a picture.
+
+## The egg
+
+The egg is a secondary motif, used in three places:
+
+- **The clutch**: the yearly books goal on Home is an egg carton, with one egg laid per finished book. Goals over 24 fall back to a meter.
+- The colophon on cloth covers.
+- The mark at the foot of Home.
 
 ## Layout
 
-Two surfaces:
+- **Home**: date eyebrow, Superclarendon greeting, and an italic line about today's reading. Then the book you're in, set out on the page rather than boxed in a card: a large cover with its ribbon, title, author, progress, and one "Continue reading" button. After that come shelves (Also reading, Recently added, Waiting on the shelf), the goals row, and a footer saying everything is kept on this device.
+- **Shelves and grid**: covers stand on a shelf ledge (a hairline over a soft shadow) that runs edge to edge. In the Library grid each tile's ledge reaches into the gutters, so every row reads as one shelf.
+- **Filters** (Library, Notebook) are quiet text tabs with a ribbon underline, not chips.
+- **Pages** (Library, Notebook, Search) open with `PageHeader`: eyebrow, display title, italic subtitle. Secondary screens (Settings, Find Books, details) use `ChickenPage` and `ChickenSection`.
+- **iPhone Home** shows the brand lockup (icon tile and "Chicken" in Superclarendon Bold) in the navigation bar. On iPad and Mac it heads the sidebar.
+- **Reader**: unchanged structure. There's a Contents sidebar or sheet, a highlights inspector, and a floating glass progress capsule. Typography lives in a popover (a sheet on iPhone) with a live sample, the typeface picker, size and spacing steppers, layout, and theme.
 
-1. **Library**: a navigation toolbar (add books, view options, settings) with system search, then a "Continue reading" hero card, the yearly goal, and an adaptive cover grid (170–220pt columns on regular width, 140–200pt on compact). A quiet footer carries counts and "Stored on this device".
-2. **Reader**: on the Mac each book opens in its own window. On iPad and iPhone it opens full screen. A contents sidebar (~270pt) appears on regular width and becomes a sheet on compact. Highlights and bookmarks live in an inspector, which also becomes a sheet on compact. The reading column is centered at `columnWidth`. The floating glass progress capsule sits at the bottom. On iPhone and iPad, a tap in the middle of the page hides and shows the chrome.
+## Liquid Glass
 
-The typography popover floats over the reader and never pushes content; on iPhone it becomes a half-height sheet. Reduce-motion is respected — transitions on theme, panel show/hide, and column width changes use short opacity/position fades only.
-
-## Components
-
-- **Book cover** — 2:3 ratio, solid background tint, accent ink, a thin rule above the title block, an optional motif in the background at low opacity (lines, frame, tree, flourish, crack, pattern). Title in serif 500, author in serif italic.
-- **Library card (hero)** — rounded surface, cover on the left at 200pt, chapter eyebrow + serif title + italic author + slim progress bar + "Continue reading" primary button + meta line (time-left, highlights count).
-- **Reading goal card** — sits between the Continue card and the grid. Small-caps eyebrow `Reading goal · YYYY` on the left, large serif `n` of `m` on the right (tabular numerals). Hairline meter underneath. Italic caption beneath the meter ("3 books to go", "Goal met. Read on for the joy of it."). Below, a horizontal row of finished-this-year books at 78pt cover width with a `MMM` month tag — quiet, scannable, never celebratory. Goal is set by a stepper in the Settings popover and persists in UserDefaults.
-- **Library tile** — cover, title (serif 500, 15pt), author (serif italic 13pt), then a hairline progress meter or "Read"/"Unread" tag and a highlight count.
-- **Reader toolbar**: system toolbar with Contents, Search, Text & Layout, Bookmark, Highlights, and a More menu (theme, zen mode). On compact width, Search and Bookmark move into More.
-- **Progress capsule**: glass capsule with percent, a scrubber, "page N of M", and chapter / time-left readouts. On the last page the readout turns to serif italic: "the last page".
-- **Chapter list item** — small caps "Chapter N" eyebrow, serif title, page range. Active item has a 2pt accent bar on the leading edge.
-- **Highlight rail item** — left bar in the highlight color, the quoted text in serif at 13pt, optional italic note underneath, footer with "Ch. N · timestamp" and a remove icon.
-- **Highlight picker**: interactive glass capsule above the progress bar while text is selected, with four 24pt color swatches and Copy.
-- **Typography popover** — surface card with three steppers (size 13–24, line height 1.4–2.2, column width 480–820), a three-up theme picker, and a "Reset to defaults" tonal button.
-- **Buttons** — primary uses the active theme's text color as fill with the background as label color. Secondary is a hairline border on a transparent surface. Both at 8pt radius.
+Glass is for controls that float above content: toolbars, the progress capsule, the highlight picker, steppers, and buttons. Pages, covers, cards, and panels stay solid theme surfaces.
 
 ## Motion
 
-Motion is subtle and state-driven. Theme transitions: 0.4s ease on background and primary text. Side-panel show/hide and popovers: 0.15s ease. Continue-reading button hover: 0.2s opacity. No parallax, no decorative animation.
+Subtle and state-driven. Covers lift a few points on hover. The hero cover turns slightly toward you. Filter underlines slide between tabs. A bookmark ribbon drops in with a short spring. Theme changes cross-fade over 0.4s. Reduce Motion is respected.
+
+## Voice
+
+Plain, warm, a little wry, and never cute at the expense of clarity. Name things by what people do: "Continue reading", "Find books", "Kept on this device". Brand words appear sparingly: "clutch" for the year's finished books, "roost" in the empty library, "on the go" for books in progress.
 
 ## Anti-references
 
-Do not make Chicken feel like a SaaS dashboard, a Kindle storefront, a loud AI reader, or a glassy toy macOS demo. No green or saturated brand accent. No nested cards. No gradients, no fake analytics, no merchandising shelves, no decorative effects competing with text.
+Not a SaaS dashboard, a Kindle storefront, a loud AI reader, or a glassy toy demo. No gradients as decoration, no fake analytics, no merchandising, no gamified streaks or confetti. And no second accent color competing with the ribbon.

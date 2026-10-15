@@ -1,3 +1,4 @@
+import ChickenKit
 import ImageIO
 import SwiftUI
 
@@ -8,25 +9,33 @@ enum BookCoverStyle {
 
     var titleSize: CGFloat {
         switch self {
-        case .hero: return 22
-        case .tile: return 16
-        case .mini: return 8
+        case .hero: return 26
+        case .tile: return 17
+        case .mini: return 7
         }
     }
 
     var authorSize: CGFloat {
         switch self {
-        case .hero: return 13
-        case .tile: return 11
-        case .mini: return 6
+        case .hero: return 14
+        case .tile: return 10.5
+        case .mini: return 5
         }
     }
 
     var padding: CGFloat {
         switch self {
-        case .hero: return 26
-        case .tile: return 18
-        case .mini: return 7
+        case .hero: return 22
+        case .tile: return 13
+        case .mini: return 4
+        }
+    }
+
+    var cornerRadius: CGFloat {
+        switch self {
+        case .hero: return 4
+        case .tile: return 3
+        case .mini: return 2
         }
     }
 
@@ -40,8 +49,9 @@ enum BookCoverStyle {
     }
 }
 
-/// A book's cover image, or a stylized typographic cover when the file has
-/// none (or only has a landscape page that would crop badly).
+/// A book's cover image, or a cloth-bound typographic cover when the file has
+/// none (or only has a landscape page that would crop badly). Either way it
+/// gets a hinge and a little light, so it reads as an object, not a picture.
 struct BookCover: View {
     @Environment(LibraryStore.self) private var library
     let book: Book
@@ -52,18 +62,24 @@ struct BookCover: View {
     var body: some View {
         let preset = CoverPreset.preset(for: book.coverTintIndex)
         Rectangle()
-            .fill(preset.background)
+            .fill(preset.cloth)
             .overlay {
                 if let image, CGFloat(image.width) / CGFloat(max(image.height, 1)) <= 1.05 {
                     Image(decorative: image, scale: 1)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {
-                    StylizedCover(title: book.title, author: book.displayAuthor, preset: preset, style: style)
+                    ClothCover(title: book.title, author: book.author, preset: preset, style: style)
                 }
             }
-            .clipped()
-            .clipShape(RoundedRectangle(cornerRadius: style == .mini ? 3 : 5, style: .continuous))
+            .overlay { CoverFinish(style: style) }
+            .clipShape(UnevenRoundedRectangle(
+                topLeadingRadius: style.cornerRadius * 0.5,
+                bottomLeadingRadius: style.cornerRadius * 0.5,
+                bottomTrailingRadius: style.cornerRadius,
+                topTrailingRadius: style.cornerRadius,
+                style: .continuous
+            ))
             .task(id: "\(book.coverImageName ?? "")-\(cacheGeneration)") {
                 guard let url = library.coverURL(for: book) else {
                     image = nil
@@ -79,108 +95,293 @@ struct BookCover: View {
     }
 }
 
-private struct StylizedCover: View {
+/// The hinge where the board meets the spine, a soft fall of light across
+/// the board, and a hairline edge.
+private struct CoverFinish: View {
+    let style: BookCoverStyle
+
+    var body: some View {
+        GeometryReader { geometry in
+            let hinge = max(2, geometry.size.width * 0.045)
+            ZStack(alignment: .leading) {
+                LinearGradient(
+                    stops: [
+                        .init(color: .white.opacity(0.10), location: 0),
+                        .init(color: .clear, location: 0.35),
+                        .init(color: .black.opacity(0.10), location: 1),
+                    ],
+                    startPoint: .topLeading, endPoint: .bottomTrailing
+                )
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [.black.opacity(0.24), .black.opacity(0.06)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: hinge)
+                    LinearGradient(colors: [.white.opacity(0.16), .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: hinge * 0.8)
+                    Spacer(minLength: 0)
+                }
+            }
+            .overlay {
+                Rectangle().strokeBorder(.black.opacity(0.10), lineWidth: 0.5)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Cloth covers
+
+/// A typographic cover in the manner of a cloth-bound hardback: title set in
+/// Superclarendon, author in Iowan italic, a rule, and the house egg as a
+/// colophon at the foot.
+struct ClothCover: View {
     let title: String
-    let author: String
+    let author: String?
     let preset: CoverPreset
     let style: BookCoverStyle
 
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            CoverMotif(kind: preset.motif, accent: preset.accent)
-            VStack(alignment: .leading, spacing: style == .mini ? 3 : 8) {
-                Rectangle()
-                    .fill(preset.accent.opacity(0.5))
-                    .frame(width: style.padding, height: 1)
-                Text(title)
-                    .font(.system(size: style.titleSize, weight: .medium, design: .serif))
-                    .foregroundStyle(preset.accent)
-                    .lineLimit(3)
-                    .multilineTextAlignment(.leading)
-                if style != .mini {
-                    Text(author)
-                        .font(.system(size: style.authorSize, design: .serif).italic())
-                        .foregroundStyle(preset.accent.opacity(0.78))
-                        .lineLimit(2)
-                }
+        ZStack {
+            ClothWeave(color: preset.ink)
+            switch preset.layout {
+            case .framed: framed
+            case .banded: banded
+            case .plain: plain
             }
-            .padding(style.padding)
         }
+        .foregroundStyle(preset.ink)
+    }
+
+    private var titleText: some View {
+        Text(Self.displayTitle(title))
+            .font(.chickenDisplay(style.titleSize, weight: style == .hero ? .regular : .regular))
+            .lineSpacing(style == .mini ? 0 : -style.titleSize * 0.08)
+            .lineLimit(style == .mini ? 3 : 5)
+            .minimumScaleFactor(0.55)
+            .allowsTightening(true)
+    }
+
+    @ViewBuilder
+    private var authorText: some View {
+        if style != .mini, let author, !author.isEmpty {
+            Text(author)
+                .font(.chickenSerif(style.authorSize, italic: true))
+                .opacity(0.82)
+                .lineLimit(2)
+                .minimumScaleFactor(0.8)
+        }
+    }
+
+    @ViewBuilder
+    private var colophon: some View {
+        if style != .mini {
+            EggShape()
+                .stroke(preset.ink.opacity(0.7), lineWidth: style == .hero ? 1 : 0.75)
+                .frame(width: style.titleSize * 0.42, height: style.titleSize * 0.55)
+        }
+    }
+
+    /// Double-ruled frame, title centred: the classic library binding.
+    private var framed: some View {
+        let inset = style.padding * 0.55
+        return VStack(spacing: style.padding * 0.5) {
+            Spacer(minLength: 0)
+            titleText.multilineTextAlignment(.center)
+            if style != .mini {
+                Rectangle().frame(width: style.titleSize * 1.2, height: 0.75).opacity(0.6)
+            }
+            authorText.multilineTextAlignment(.center)
+            Spacer(minLength: 0)
+            colophon
+        }
+        .padding(style.padding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay {
+            if style != .mini {
+                Rectangle().strokeBorder(preset.ink.opacity(0.5), lineWidth: 0.75).padding(inset)
+                Rectangle().strokeBorder(preset.ink.opacity(0.28), lineWidth: 0.5).padding(inset + 3)
+            }
+        }
+    }
+
+    /// A contrasting label band across the upper third, like a paper spine label.
+    private var banded: some View {
+        GeometryReader { geometry in
+            VStack(alignment: .leading, spacing: 0) {
+                Spacer().frame(height: geometry.size.height * 0.16)
+                VStack(alignment: .leading, spacing: style.padding * 0.35) {
+                    titleText.multilineTextAlignment(.leading)
+                    authorText
+                }
+                .foregroundStyle(preset.cloth)
+                .padding(.horizontal, style.padding)
+                .padding(.vertical, style.padding * 0.8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(preset.ink)
+                Spacer(minLength: 0)
+                HStack {
+                    Spacer()
+                    colophon
+                    Spacer()
+                }
+                .padding(.bottom, style.padding)
+            }
+        }
+    }
+
+    /// Flush-left title high on the board, a short rule, author below.
+    private var plain: some View {
+        VStack(alignment: .leading, spacing: style.padding * 0.45) {
+            Rectangle().frame(width: style.padding * 1.3, height: style == .mini ? 0.5 : 1.25)
+            titleText.multilineTextAlignment(.leading)
+            authorText
+            Spacer(minLength: 0)
+            colophon
+        }
+        .padding(style.padding)
+        .padding(.leading, style.padding * 0.25)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    /// Long subtitles ("Moby-Dick; or, The Whale") make covers shout; the
+    /// cover shows the main title only.
+    static func displayTitle(_ title: String) -> String {
+        for separator in [": ", "; "] {
+            if let range = title.range(of: separator), title.distance(from: title.startIndex, to: range.lowerBound) >= 4 {
+                return String(title[..<range.lowerBound])
+            }
+        }
+        return title
     }
 }
 
+/// The faint crosshatch of bookcloth.
+private struct ClothWeave: View {
+    let color: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let step: CGFloat = 2.5
+            var path = Path()
+            var x: CGFloat = 0
+            while x < size.width {
+                path.move(to: CGPoint(x: x, y: 0))
+                path.addLine(to: CGPoint(x: x, y: size.height))
+                x += step
+            }
+            var y: CGFloat = 0
+            while y < size.height {
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: size.width, y: y))
+                y += step
+            }
+            context.stroke(path, with: .color(color.opacity(0.022)), lineWidth: 0.5)
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+enum CoverLayout { case framed, banded, plain }
+
+/// Bookcloth colors drawn from the icon (soot, linen, cocoa, ochre) plus a
+/// few classic binding shades so a shelf of cloth covers doesn't look cloned.
 struct CoverPreset {
-    let background: Color
-    let accent: Color
-    let motif: CoverMotifKind
+    let cloth: Color
+    let ink: Color
+    let layout: CoverLayout
 
     static let all: [CoverPreset] = [
-        CoverPreset(background: .hex(0x1F3A4D), accent: .hex(0xD9B380), motif: .lines),
-        CoverPreset(background: .hex(0x6B3E3A), accent: .hex(0xF4E4D0), motif: .frame),
-        CoverPreset(background: .hex(0x2D4A2A), accent: .hex(0xD8C99B), motif: .tree),
-        CoverPreset(background: .hex(0x1A1A1A), accent: .hex(0xC9A861), motif: .flourish),
-        CoverPreset(background: .hex(0x3A3D40), accent: .hex(0xB8B0A0), motif: .crack),
-        CoverPreset(background: .hex(0xB8902F), accent: .hex(0x2A2519), motif: .pattern),
+        CoverPreset(cloth: .hex(0x2A2523), ink: .hex(0xE9D9C2), layout: .framed),  // soot
+        CoverPreset(cloth: .hex(0x76593F), ink: .hex(0xF2E6D6), layout: .plain),   // cocoa
+        CoverPreset(cloth: .hex(0xC48C44), ink: .hex(0x2A2118), layout: .banded),  // ochre
+        CoverPreset(cloth: .hex(0x45503A), ink: .hex(0xE6DCC0), layout: .framed),  // moss
+        CoverPreset(cloth: .hex(0x6E2C27), ink: .hex(0xEFD9BE), layout: .plain),   // oxblood
+        CoverPreset(cloth: .hex(0xE6D9C4), ink: .hex(0x2A2523), layout: .banded),  // linen
+        CoverPreset(cloth: .hex(0x2F3E4A), ink: .hex(0xDCCBA8), layout: .plain),   // slate
+        CoverPreset(cloth: .hex(0x9A4E2E), ink: .hex(0xF4E3CB), layout: .framed),  // rust
     ]
 
     static func preset(for index: Int) -> CoverPreset {
         all[((index % all.count) + all.count) % all.count]
     }
+
+    static func preset(forTitle title: String) -> CoverPreset {
+        preset(for: Int(title.stableChickenHash % UInt64(all.count)))
+    }
 }
 
-enum CoverMotifKind { case lines, frame, tree, flourish, crack, pattern }
+// MARK: - The ribbon
 
-struct CoverMotif: View {
-    let kind: CoverMotifKind
-    let accent: Color
+/// A silk bookmark ribbon with a swallowtail end.
+nonisolated struct RibbonShape: Shape {
+    var notch: CGFloat = 0.9
+
+    func path(in rect: CGRect) -> Path {
+        let depth = min(rect.width * notch, rect.height * 0.5)
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY - depth))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
+    }
+}
+
+/// Two-tone ribbon: the silk catches light on one side of its fold.
+struct Ribbon: View {
+    @Environment(\.palette) private var palette
+    var color: Color?
 
     var body: some View {
-        Canvas { context, size in
-            let w = size.width
-            let h = size.height
-            func line(_ points: [(CGFloat, CGFloat)], opacity: Double, width: CGFloat = 0.5) {
-                var path = Path()
-                path.addLines(points.map { CGPoint(x: w * $0.0, y: h * $0.1) })
-                context.stroke(path, with: .color(accent.opacity(opacity)), lineWidth: width)
-            }
-
-            switch kind {
-            case .lines:
-                line([(0.10, 0.27), (0.90, 0.20)], opacity: 0.18)
-                line([(0.20, 0.43), (0.85, 0.53)], opacity: 0.18)
-                line([(0.10, 0.66), (0.80, 0.60)], opacity: 0.18)
-                for (x, y) in [(0.30, 0.33), (0.70, 0.50), (0.45, 0.65)] {
-                    context.fill(Path(ellipseIn: CGRect(x: w * x - 2, y: h * y - 2, width: 4, height: 4)), with: .color(accent.opacity(0.18)))
-                }
-            case .frame:
-                context.stroke(Path(CGRect(x: 12, y: 12, width: w - 24, height: h - 24)), with: .color(accent.opacity(0.40)), lineWidth: 0.5)
-                context.stroke(Path(CGRect(x: 16, y: 16, width: w - 32, height: h - 32)), with: .color(accent.opacity(0.24)), lineWidth: 0.3)
-            case .tree:
-                for x in [0.20, 0.50, 0.80] { line([(x, 0.20), (x, 0.80)], opacity: 0.18) }
-                for x in [0.35, 0.65] { line([(x, 0.30), (x, 0.70)], opacity: 0.14, width: 0.4) }
-            case .flourish:
-                var path = Path()
-                path.move(to: CGPoint(x: w * 0.2, y: h * 0.5))
-                path.addQuadCurve(to: CGPoint(x: w * 0.5, y: h * 0.5), control: CGPoint(x: w * 0.35, y: h * 0.4))
-                path.addQuadCurve(to: CGPoint(x: w * 0.8, y: h * 0.5), control: CGPoint(x: w * 0.65, y: h * 0.6))
-                context.stroke(path, with: .color(accent.opacity(0.5)), lineWidth: 0.5)
-                context.fill(Path(ellipseIn: CGRect(x: w * 0.5 - 1.5, y: h * 0.5 - 1.5, width: 3, height: 3)), with: .color(accent.opacity(0.5)))
-            case .crack:
-                line([(0.50, 0), (0.47, 0.20), (0.55, 0.37), (0.45, 0.57), (0.52, 0.77), (0.47, 1)], opacity: 0.18)
-            case .pattern:
-                let step: CGFloat = 18
-                var x: CGFloat = 0
-                while x < w + step {
-                    var y: CGFloat = 0
-                    while y < h + step {
-                        context.stroke(Path(ellipseIn: CGRect(x: x - 3, y: y - 3, width: 6, height: 6)), with: .color(accent.opacity(0.22)), lineWidth: 0.5)
-                        context.fill(Path(ellipseIn: CGRect(x: x + step / 2 - 1, y: y + step / 2 - 1, width: 2, height: 2)), with: .color(accent.opacity(0.22)))
-                        y += step
+        let base = color ?? palette.ribbon
+        RibbonShape()
+            .fill(base)
+            .overlay {
+                RibbonShape()
+                    .fill(.black.opacity(0.16))
+                    .mask(alignment: .trailing) {
+                        GeometryReader { geometry in
+                            Rectangle().frame(width: geometry.size.width / 2).frame(maxWidth: .infinity, alignment: .trailing)
+                        }
                     }
-                    x += step
-                }
+            }
+    }
+}
+
+extension View {
+    /// Hangs a ribbon out of the foot of a cover when the book is in
+    /// progress, the way a real bookmark hangs out of a book you're reading.
+    func coverRibbon(_ visible: Bool, length: CGFloat = 16, width: CGFloat = 7) -> some View {
+        overlay(alignment: .bottomTrailing) {
+            if visible {
+                Ribbon()
+                    .frame(width: width, height: length)
+                    .shadow(color: .black.opacity(0.18), radius: 1, y: 1)
+                    .offset(x: -width * 2.2, y: length * 0.72)
+                    .transition(.opacity)
+                    .accessibilityHidden(true)
             }
         }
+    }
+}
+
+// MARK: - The egg
+
+/// Chicken's house mark, used as a colophon and for the yearly "clutch".
+nonisolated struct EggShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let steps = 72
+        for index in 0...steps {
+            let t = Double(index) / Double(steps) * 2 * .pi
+            let y = -cos(t)
+            let x = sin(t) * (1 + 0.16 * y) / 1.16
+            let point = CGPoint(x: rect.midX + x * rect.width / 2, y: rect.midY + y * rect.height / 2)
+            if index == 0 { path.move(to: point) } else { path.addLine(to: point) }
+        }
+        path.closeSubpath()
+        return path
     }
 }
 

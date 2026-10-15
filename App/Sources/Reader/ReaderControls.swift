@@ -55,9 +55,10 @@ struct ReaderProgressBar: View {
             let width = max(geometry.size.width, 1)
             ZStack(alignment: .leading) {
                 Capsule().fill(palette.text.opacity(0.12)).frame(height: 3)
-                Capsule().fill(palette.text.opacity(0.75)).frame(width: width * shown, height: 3)
+                Capsule().fill(palette.ribbon).frame(width: width * shown, height: 3)
                 Circle()
-                    .fill(palette.text)
+                    .fill(palette.ribbon)
+                    .overlay(Circle().stroke(palette.background.opacity(0.8), lineWidth: 1.5))
                     .frame(width: dragProgress == nil ? 9 : 13, height: dragProgress == nil ? 9 : 13)
                     .offset(x: min(width - 9, max(0, width * shown - 4.5)))
             }
@@ -180,117 +181,173 @@ struct TypographyPanel: View {
     @Bindable var model: ReaderModel
     let isCompact: Bool
 
-    private var modes: [ReadingMode] {
-        isCompact ? [.scroll, .paged] : ReadingMode.allCases
-    }
+    private var modes: [ReadingMode] { isCompact ? [.scroll, .paged] : ReadingMode.allCases }
+    private var hasTypography: Bool { model.book.format != .pdf }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Text & Layout").chickenEyebrow(palette)
-
-            if model.book.format != .pdf {
-                StepperRow(
-                    label: "Size",
-                    value: "\(Int(model.fontSize)) pt",
-                    canDecrease: model.fontSize > ReaderPreferences.fontSizeRange.lowerBound,
-                    canIncrease: model.fontSize < ReaderPreferences.fontSizeRange.upperBound,
-                    decrease: { model.fontSize -= 1 },
-                    increase: { model.fontSize += 1 }
-                )
-                StepperRow(
-                    label: "Spacing",
-                    value: model.lineHeight.formatted(.number.precision(.fractionLength(2))),
-                    canDecrease: model.lineHeight > ReaderPreferences.lineHeightRange.lowerBound + 0.001,
-                    canIncrease: model.lineHeight < ReaderPreferences.lineHeightRange.upperBound - 0.001,
-                    decrease: { model.lineHeight = ((model.lineHeight - 0.1) * 100).rounded() / 100 },
-                    increase: { model.lineHeight = ((model.lineHeight + 0.1) * 100).rounded() / 100 }
-                )
-                if !isCompact {
-                    StepperRow(
-                        label: "Width",
-                        value: "\(Int(model.columnWidth)) pt",
-                        canDecrease: model.columnWidth > ReaderPreferences.columnWidthRange.lowerBound,
-                        canIncrease: model.columnWidth < ReaderPreferences.columnWidthRange.upperBound,
-                        decrease: { model.columnWidth -= 40 },
-                        increase: { model.columnWidth += 40 }
-                    )
-                }
-            }
-
-            if model.book.format.supportsFlowModes {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Flow").font(.chickenUI(12)).foregroundStyle(palette.muted)
-                    Picker("Flow", selection: $model.readingMode) {
-                        ForEach(modes) { Label($0.label, systemImage: $0.systemImage).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Theme").font(.chickenUI(12)).foregroundStyle(palette.muted)
-                HStack(spacing: 8) {
-                    ForEach(ReadingTheme.allCases) { theme in
-                        let swatch = theme.palette
-                        let selected = library.preferences.theme == theme
-                        Button { library.preferences.theme = theme } label: {
-                            Text(theme.label)
-                                .font(.chickenSerif(13, italic: true))
-                                .foregroundStyle(swatch.text)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(swatch.background)
-                                        .stroke(selected ? swatch.text : swatch.border, lineWidth: selected ? 1.5 : 0.5)
-                                )
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                if hasTypography {
+                    sample
+                    typefacePicker
+                    VStack(spacing: 0) {
+                        row(
+                            "Size", value: "\(Int(model.fontSize)) pt",
+                            canDecrease: model.fontSize > ReaderPreferences.fontSizeRange.lowerBound,
+                            canIncrease: model.fontSize < ReaderPreferences.fontSizeRange.upperBound,
+                            decrease: { model.fontSize -= 1 }, increase: { model.fontSize += 1 }
+                        )
+                        divider
+                        row(
+                            "Line spacing", value: model.lineHeight.formatted(.number.precision(.fractionLength(1))),
+                            canDecrease: model.lineHeight > ReaderPreferences.lineHeightRange.lowerBound + 0.001,
+                            canIncrease: model.lineHeight < ReaderPreferences.lineHeightRange.upperBound - 0.001,
+                            decrease: { model.lineHeight = ((model.lineHeight - 0.1) * 100).rounded() / 100 },
+                            increase: { model.lineHeight = ((model.lineHeight + 0.1) * 100).rounded() / 100 }
+                        )
+                        if !isCompact {
+                            divider
+                            row(
+                                "Column width", value: "\(Int(model.columnWidth)) pt",
+                                canDecrease: model.columnWidth > ReaderPreferences.columnWidthRange.lowerBound,
+                                canIncrease: model.columnWidth < ReaderPreferences.columnWidthRange.upperBound,
+                                decrease: { model.columnWidth -= 40 }, increase: { model.columnWidth += 40 }
+                            )
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.surface))
+                }
+
+                if model.book.format.supportsFlowModes {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Layout").chickenEyebrow(palette)
+                        HStack(spacing: 8) {
+                            ForEach(modes) { mode in
+                                modeButton(mode)
+                            }
+                        }
                     }
                 }
-            }
 
-            if model.book.format != .pdf {
-                Button("Reset to Defaults") { model.resetTypography() }
-                    .buttonStyle(.glass)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Theme").chickenEyebrow(palette)
+                    ThemeSwatchPicker(compact: true)
+                }
+
+                if hasTypography {
+                    Button("Reset to Defaults", systemImage: "arrow.counterclockwise") {
+                        withAnimation(.snappy) { model.resetTypography() }
+                    }
+                    .font(.chickenUI(13, weight: .medium))
+                    .foregroundStyle(palette.muted)
+                    .buttonStyle(.plain)
                     .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(20)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(width: isCompact ? nil : 340)
+        .frame(maxWidth: isCompact ? .infinity : nil, minHeight: isCompact ? nil : 440)
+        .background(palette.background.opacity(isCompact ? 1 : 0))
+    }
+
+    /// Each face set in itself, in a horizontally scrolling row.
+    private var typefacePicker: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(ReaderTypeface.allCases) { face in
+                    let selected = model.typeface == face
+                    Button {
+                        withAnimation(.snappy) { model.typeface = face }
+                    } label: {
+                        VStack(spacing: 4) {
+                            Text("Ag").font(face.font(22))
+                            Text(face.label)
+                                .font(.chickenUI(11, weight: selected ? .semibold : .regular))
+                                .lineLimit(1)
+                        }
+                        .foregroundStyle(selected ? palette.text : palette.muted)
+                        .frame(minWidth: 64)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .fill(selected ? palette.surface : palette.surfaceAlt.opacity(0.5))
+                                .stroke(selected ? palette.ribbon : .clear, lineWidth: 1.5)
+                        )
+                        .contentShape(RoundedRectangle(cornerRadius: 14))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(face.label)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
             }
         }
-        .padding(20)
-        .frame(width: isCompact ? nil : 320)
-        .frame(maxWidth: isCompact ? .infinity : nil)
+        .scrollIndicators(.hidden)
+        .scrollClipDisabled()
     }
-}
 
-private struct StepperRow: View {
-    @Environment(\.palette) private var palette
-    let label: String
-    let value: String
-    let canDecrease: Bool
-    let canIncrease: Bool
-    let decrease: () -> Void
-    let increase: () -> Void
+    /// A live preview of the current face, size, and spacing.
+    private var sample: some View {
+        Text("Rain on the window, tea gone cold, and one more chapter before bed.")
+            .font(model.typeface.font(min(model.fontSize, 22)))
+            .lineSpacing(CGFloat(model.lineHeight - 1) * CGFloat(min(model.fontSize, 22)) * 0.6)
+            .foregroundStyle(palette.text)
+            .lineLimit(3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(16)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.surfaceAlt.opacity(0.6)))
+            .animation(.snappy, value: model.fontSize)
+            .animation(.snappy, value: model.lineHeight)
+            .animation(.snappy, value: model.typeface)
+            .accessibilityHidden(true)
+    }
 
-    var body: some View {
+    private var divider: some View {
+        Rectangle().fill(palette.border).frame(height: 0.5).padding(.leading, 16)
+    }
+
+    private func row(
+        _ label: String, value: String,
+        canDecrease: Bool, canIncrease: Bool,
+        decrease: @escaping () -> Void, increase: @escaping () -> Void
+    ) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(label).font(.chickenUI(13)).foregroundStyle(palette.text)
-                Text(value).font(.chickenMono(11)).foregroundStyle(palette.faint)
+                Text(label).font(.chickenUI(14)).foregroundStyle(palette.text)
+                Text(value).font(.chickenSerif(13, italic: true)).foregroundStyle(palette.muted).monospacedDigit()
             }
             Spacer()
-            GlassEffectContainer(spacing: 6) {
-                HStack(spacing: 6) {
-                    Button("Decrease \(label)", systemImage: "minus", action: decrease)
-                        .disabled(!canDecrease)
-                    Button("Increase \(label)", systemImage: "plus", action: increase)
-                        .disabled(!canIncrease)
-                }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.glass)
-            }
+            GlassStepper(label: label, canDecrease: canDecrease, canIncrease: canIncrease, decrease: decrease, increase: increase)
         }
-        .accessibilityElement(children: .contain)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    @ViewBuilder
+    private func modeButton(_ mode: ReadingMode) -> some View {
+        let selected = model.readingMode == mode
+        Button {
+            withAnimation(.snappy) { model.readingMode = mode }
+        } label: {
+            VStack(spacing: 6) {
+                Image(systemName: mode.systemImage)
+                    .font(.system(size: 18, weight: .light))
+                Text(mode.label)
+                    .font(.chickenUI(12, weight: selected ? .semibold : .regular))
+            }
+            .foregroundStyle(selected ? palette.text : palette.muted)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(selected ? palette.surface : palette.surfaceAlt.opacity(0.5))
+                    .stroke(selected ? palette.ribbon : .clear, lineWidth: 1.5)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

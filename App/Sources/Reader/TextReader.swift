@@ -10,6 +10,7 @@ struct TextReader: PlatformViewRepresentable {
     let fontSize: Double
     let lineHeight: Double
     let columnWidth: Double
+    let typeface: ReaderTypeface
     let onTapCenter: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
@@ -114,7 +115,8 @@ struct TextReader: PlatformViewRepresentable {
             lastPalette = palette
             guard !content.isEmpty, let textView else { return }
             let highlights = (model.book.highlights ?? []).map { "\($0.id)\($0.colorRaw)" }.sorted().joined()
-            let key = "\(palette.backgroundHex)|\(fontSize)|\(lineHeight)|\(content.count)|\(highlights)"
+            let typeface = model.typeface
+            let key = "\(palette.backgroundHex)|\(fontSize)|\(lineHeight)|\(typeface.rawValue)|\(content.count)|\(highlights)"
             guard key != renderKey else { return }
             let anchor = currentProgress
             renderKey = key
@@ -123,6 +125,7 @@ struct TextReader: PlatformViewRepresentable {
                 palette: palette,
                 fontSize: fontSize,
                 lineHeight: lineHeight,
+                typeface: typeface,
                 highlights: model.book.highlights ?? []
             )
             #if os(macOS)
@@ -383,12 +386,13 @@ enum TextDocumentLoader {
         palette: ReaderPalette,
         fontSize: Double,
         lineHeight: Double,
+        typeface: ReaderTypeface = .default,
         highlights: [Highlight]
     ) -> NSAttributedString {
         let size = CGFloat(fontSize)
-        let body = serifFont(size: size)
+        let body = typeface.platformFont(size: size)
         let dropCapSize = (size * 3.2).rounded()
-        let dropCap = serifFont(size: dropCapSize, weight: .medium)
+        let dropCap = PlatformFont(name: "Superclarendon-Regular", size: dropCapSize) ?? serifFont(size: dropCapSize, weight: .medium)
         let textColor = PlatformColor.hex(palette.textHex)
 
         let paragraph = NSMutableParagraphStyle()

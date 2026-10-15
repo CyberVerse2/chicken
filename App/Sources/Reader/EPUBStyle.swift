@@ -8,6 +8,7 @@ struct EPUBStyle: Equatable {
     var lineHeight: Double
     var columnWidth: Double
     var mode: ReadingMode
+    var typeface: ReaderTypeface = .default
 
     var css: String {
         let background = ReaderPalette.css(palette.backgroundHex)
@@ -15,7 +16,9 @@ struct EPUBStyle: Equatable {
         let muted = ReaderPalette.css(palette.mutedHex)
         let horizontal = mode.isHorizontal
         let size = mode == .spread ? max(fontSize + 2, fontSize * 1.12) : fontSize
-        let serif = "ui-serif, 'New York', Georgia, 'Times New Roman', serif"
+        let serif = typeface.cssFamily
+        // Chapter headings in the house display face.
+        let display = "'Superclarendon', 'Superclarendon-Regular', \(serif)"
 
         let layout: String
         switch mode {
@@ -76,7 +79,9 @@ struct EPUBStyle: Equatable {
         .chicken-spine-section h1, .chicken-spine-section h2, .chicken-spine-section h3,
         .chicken-spine-section h4, .chicken-spine-section h5, .chicken-spine-section h6 {
           color: \(text) !important;
-          font-family: \(serif) !important;
+          font-family: \(display) !important;
+          font-weight: normal !important;
+          letter-spacing: -0.01em;
           line-height: 1.2 !important;
         }
         /* Scene breaks render as a quiet asterism. */

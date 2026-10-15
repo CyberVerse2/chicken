@@ -49,11 +49,11 @@ private struct ChapterRow: View {
         Button(action: action) {
             HStack(spacing: 0) {
                 Rectangle()
-                    .fill(isActive ? palette.text : .clear)
-                    .frame(width: 2)
+                    .fill(isActive ? palette.ribbon : .clear)
+                    .frame(width: 3)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(chapter.title)
-                        .font(.chickenSerif(14, weight: isActive ? .medium : .regular))
+                        .font(.chickenSerif(14.5, weight: isActive ? .semibold : .regular))
                         .foregroundStyle(isActive ? palette.text : palette.muted)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -78,143 +78,230 @@ private struct ChapterRow: View {
 // MARK: - Highlights and bookmarks
 
 struct AnnotationsList: View {
+    enum Tab: String, CaseIterable, Identifiable {
+        case highlights = "Highlights"
+        case bookmarks = "Bookmarks"
+        var id: String { rawValue }
+    }
+
     @Environment(\.palette) private var palette
     let model: ReaderModel
+    @State private var tab: Tab = .highlights
 
     private var highlights: [Highlight] { model.book.sortedHighlights }
     private var bookmarks: [Bookmark] { model.book.sortedBookmarks }
 
     var body: some View {
-        List {
-            if highlights.isEmpty && bookmarks.isEmpty {
-                Text("Select text to highlight it, or bookmark a page to come back to it.")
-                    .font(.chickenUI(13))
-                    .foregroundStyle(palette.faint)
-                    .listRowBackground(Color.clear)
+        VStack(spacing: 0) {
+            Picker("Show", selection: $tab) {
+                Text("Highlights · \(highlights.count)").tag(Tab.highlights)
+                Text("Bookmarks · \(bookmarks.count)").tag(Tab.bookmarks)
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(16)
 
-            if !bookmarks.isEmpty {
-                Section("Bookmarks") {
-                    ForEach(bookmarks) { bookmark in
-                        Button { model.jump(toBookmark: bookmark) } label: {
-                            HStack(alignment: .top, spacing: 10) {
-                                Image(systemName: "bookmark.fill")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(palette.muted)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(bookmark.title)
-                                        .font(.chickenSerif(13, weight: .medium))
-                                        .foregroundStyle(palette.text)
-                                        .lineLimit(2)
-                                    Text("Ch. \(bookmark.chapterIndex + 1) · \(bookmark.createdAt.shortRelativeDescription)")
-                                        .font(.chickenUI(10))
-                                        .foregroundStyle(palette.faint)
-                                }
-                            }
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    switch tab {
+                    case .highlights:
+                        if highlights.isEmpty {
+                            hint(icon: "highlighter", title: "No highlights yet", text: "Select a passage, then choose a color in the bar at the bottom of the page.")
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button("Remove Bookmark", systemImage: "trash", role: .destructive) { model.library.removeBookmark(bookmark) }
+                        ForEach(highlights) { highlight in
+                            HighlightCard(model: model, highlight: highlight)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                         }
-                        .swipeActions {
-                            Button("Remove", role: .destructive) { model.library.removeBookmark(bookmark) }
+                    case .bookmarks:
+                        if bookmarks.isEmpty {
+                            hint(icon: "bookmark", title: "No bookmarks yet", text: "Use the bookmark button in the toolbar to mark a place to come back to.")
+                        }
+                        ForEach(bookmarks) { bookmark in
+                            BookmarkCard(model: model, bookmark: bookmark)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     }
                 }
-            }
-
-            if !highlights.isEmpty {
-                Section("Highlights · \(highlights.count)") {
-                    ForEach(highlights) { highlight in
-                        HighlightRow(model: model, highlight: highlight)
-                    }
-                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
+                .animation(.smooth(duration: 0.25), value: highlights.map(\.id))
+                .animation(.smooth(duration: 0.25), value: bookmarks.map(\.id))
             }
         }
-        .scrollContentBackground(.hidden)
         .background(palette.background)
-        .animation(.smooth(duration: 0.25), value: highlights.map(\.id))
-        .animation(.smooth(duration: 0.25), value: bookmarks.map(\.id))
+    }
+
+    private func hint(icon: String, title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 22, weight: .light))
+                .foregroundStyle(palette.muted)
+            Text(title)
+                .font(.chickenDisplay(17))
+                .foregroundStyle(palette.text)
+            Text(text)
+                .font(.chickenSerif(14, italic: true))
+                .foregroundStyle(palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.surface))
     }
 }
 
-private struct HighlightRow: View {
+private struct HighlightCard: View {
     @Environment(\.palette) private var palette
     let model: ReaderModel
     let highlight: Highlight
     @State private var editingNote = false
     @State private var draft = ""
+    @FocusState private var noteFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Button { model.jump(toHighlight: highlight) } label: {
-                HStack(alignment: .top, spacing: 11) {
-                    RoundedRectangle(cornerRadius: 1).fill(highlight.color.bar).frame(width: 3)
-                    Text(highlight.text)
-                        .font(.chickenSerif(13))
-                        .foregroundStyle(palette.text)
-                        .lineSpacing(3)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                Text(marked)
+                    .font(.chickenSerif(15.5))
+                    .foregroundStyle(palette.text)
+                    .lineSpacing(5)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
             if editingNote {
                 TextField("Add a note", text: $draft, axis: .vertical)
-                    .font(.chickenSerif(12, italic: true))
+                    .font(.chickenSerif(14, italic: true))
                     .textFieldStyle(.plain)
-                    .padding(.leading, 14)
+                    .focused($noteFocused)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.surfaceAlt))
                     .onSubmit(saveNote)
                 HStack {
                     Spacer()
                     Button("Cancel") { editingNote = false }
-                    Button("Save", action: saveNote).fontWeight(.semibold)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(palette.muted)
+                    Button("Save", action: saveNote)
+                        .buttonStyle(.glass)
+                        .foregroundStyle(palette.text)
                 }
-                .font(.chickenUI(12))
-                .buttonStyle(.plain)
-                .foregroundStyle(palette.muted)
+                .font(.chickenUI(13, weight: .medium))
             } else if !highlight.note.isEmpty {
                 Text(highlight.note)
-                    .font(.chickenSerif(12, italic: true))
+                    .font(.chickenSerif(14, italic: true))
                     .foregroundStyle(palette.muted)
-                    .padding(.leading, 14)
+                    .onTapGesture(perform: beginEditing)
             }
 
-            Text("Ch. \(highlight.chapterIndex + 1) · \(highlight.createdAt.shortRelativeDescription)")
-                .font(.chickenUI(10))
-                .foregroundStyle(palette.faint)
-                .padding(.leading, 14)
-        }
-        .padding(.vertical, 4)
-        .contextMenu {
-            Button(highlight.note.isEmpty ? "Add Note" : "Edit Note", systemImage: "note.text") { beginEditing() }
-            Menu("Color") {
-                ForEach(HighlightColor.allCases) { color in
-                    Button(color.label) {
-                        highlight.color = color
-                        model.library.save()
-                        model.engine?.refreshHighlights()
+            HStack {
+                Text("\(chapterTitle) · \(highlight.createdAt.shortRelativeDescription)")
+                    .font(.chickenUI(11))
+                    .foregroundStyle(palette.faint)
+                    .lineLimit(1)
+                Spacer()
+                Menu {
+                    Button(highlight.note.isEmpty ? "Add Note" : "Edit Note", systemImage: "square.and.pencil", action: beginEditing)
+                    Picker("Color", selection: colorBinding) {
+                        ForEach(HighlightColor.allCases) { Label($0.label, systemImage: "circle.fill").tint($0.bar).tag($0) }
                     }
+                    Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(highlight.text) }
+                    Divider()
+                    Button("Remove Highlight", systemImage: "trash", role: .destructive) { model.removeHighlight(highlight) }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(palette.muted)
+                        .frame(width: 28, height: 22)
+                        .contentShape(Rectangle())
                 }
+                .menuIndicator(.hidden)
+                .buttonStyle(.plain)
+                .accessibilityLabel("Highlight actions")
             }
+        }
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(palette.surface)
+                .stroke(palette.border, lineWidth: 0.5)
+        )
+        .contextMenu {
             Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(highlight.text) }
-            Divider()
             Button("Remove Highlight", systemImage: "trash", role: .destructive) { model.removeHighlight(highlight) }
         }
-        .swipeActions {
-            Button("Remove", role: .destructive) { model.removeHighlight(highlight) }
-            Button("Note") { beginEditing() }
-        }
+    }
+
+    private var marked: AttributedString {
+        var text = AttributedString(highlight.text)
+        text.backgroundColor = highlight.color.fill
+        return text
+    }
+
+    private var chapterTitle: String {
+        model.chapters.indices.contains(highlight.chapterIndex) ? model.chapters[highlight.chapterIndex].title : "Chapter \(highlight.chapterIndex + 1)"
+    }
+
+    private var colorBinding: Binding<HighlightColor> {
+        Binding(get: { highlight.color }, set: { color in
+            highlight.color = color
+            model.library.save()
+            model.engine?.refreshHighlights()
+        })
     }
 
     private func beginEditing() {
         draft = highlight.note
-        editingNote = true
+        withAnimation(.smooth) { editingNote = true }
+        noteFocused = true
     }
 
     private func saveNote() {
         model.library.updateNote(draft.trimmingCharacters(in: .whitespacesAndNewlines), on: highlight)
-        editingNote = false
+        withAnimation(.smooth) { editingNote = false }
+    }
+}
+
+private struct BookmarkCard: View {
+    @Environment(\.palette) private var palette
+    let model: ReaderModel
+    let bookmark: Bookmark
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Button { model.jump(toBookmark: bookmark) } label: {
+                HStack(spacing: 14) {
+                    Ribbon()
+                        .frame(width: 12, height: 30)
+                        .padding(.horizontal, 6)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(bookmark.title)
+                            .font(.chickenSerif(15, weight: .semibold))
+                            .foregroundStyle(palette.text)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                        Text(bookmark.createdAt.formatted(date: .abbreviated, time: .shortened))
+                            .font(.chickenUI(11))
+                            .foregroundStyle(palette.faint)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button("Remove bookmark", systemImage: "xmark") { model.library.removeBookmark(bookmark) }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
+                .foregroundStyle(palette.faint)
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(palette.surface)
+                .stroke(palette.border, lineWidth: 0.5)
+        )
     }
 }

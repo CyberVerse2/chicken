@@ -5,99 +5,145 @@ struct BookGrid: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     let books: [Book]
 
+    private var spacing: CGFloat { sizeClass == .compact ? 18 : 32 }
+
     private var columns: [GridItem] {
         sizeClass == .compact
-            ? [GridItem(.adaptive(minimum: 140, maximum: 200), spacing: 18, alignment: .top)]
-            : [GridItem(.adaptive(minimum: 170, maximum: 220), spacing: 32, alignment: .top)]
+            ? [GridItem(.adaptive(minimum: 100, maximum: 150), spacing: spacing, alignment: .top)]
+            : [GridItem(.adaptive(minimum: 140, maximum: 180), spacing: spacing, alignment: .top)]
     }
 
     var body: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: sizeClass == .compact ? 26 : 36) {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: sizeClass == .compact ? 34 : 46) {
             ForEach(books) { book in
-                BookTile(book: book)
+                BookTile(book: book, ledgeOverhang: spacing / 2)
             }
         }
     }
 }
 
 private struct BookTile: View {
-    @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let book: Book
+    /// Each tile's ledge reaches halfway into the gap on either side, so a
+    /// row of tiles reads as one continuous shelf.
+    let ledgeOverhang: CGFloat
     @State private var hovering = false
-    @State private var confirmingRemoval = false
+
+    private var inProgress: Bool { book.progress > 0 && !book.isFinished }
 
     var body: some View {
         Button { openBook(book.id) } label: {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 14) {
                 BookCover(book: book, style: .tile)
                     .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                    .shadow(color: palette.shadow, radius: hovering ? 10 : 3, y: hovering ? 7 : 2)
+                    .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
+                    .offset(y: hovering ? -6 : 0)
+                    .background(alignment: .bottom) {
+                        ShelfLedge()
+                            .padding(.horizontal, -ledgeOverhang)
+                            .alignmentGuide(.bottom) { $0[.top] }
+                    }
+                    .coverRibbon(inProgress)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(book.title)
-                        .font(.chickenSerif(15, weight: .medium))
+                        .font(.chickenSerif(sizeClass == .compact ? 13.5 : 15, weight: .semibold))
                         .foregroundStyle(palette.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    Text(book.displayAuthor)
-                        .font(.chickenSerif(13, italic: true))
-                        .foregroundStyle(palette.muted)
-                        .lineLimit(1)
+                    if let author = book.author, !author.isEmpty {
+                        Text(author)
+                            .font(.chickenSerif(sizeClass == .compact ? 12.5 : 13.5, italic: true))
+                            .foregroundStyle(palette.muted)
+                            .lineLimit(1)
+                    }
+                    status.padding(.top, 3)
                 }
-                status
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .offset(y: hovering ? -3 : 0)
-        .animation(.easeOut(duration: 0.2), value: hovering)
         .onHover { hovering = $0 }
-        .contextMenu {
-            Button("Open", systemImage: "book") { openBook(book.id) }
-            Divider()
-            Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
-        }
-        .confirmationDialog("Remove \u{201C}\(book.title)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
-            Button("Remove", role: .destructive) { library.delete(book) }
-        } message: {
-            Text("Chicken's copy, highlights, and bookmarks for this book will be deleted. The original file is not affected.")
-        }
+        .animation(.smooth(duration: 0.25), value: hovering)
+        .bookContextMenu(book)
         .accessibilityLabel("\(book.title) by \(book.displayAuthor)")
         .accessibilityValue(statusText)
     }
 
     private var statusText: String {
-        if book.isFinished { return "Read" }
+        if book.isFinished { return "Finished" }
         if book.progress > 0 { return "\(Int((book.progress * 100).rounded())) percent read" }
         return "Unread"
     }
 
     private var status: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             if book.isFinished {
                 Label("Read", systemImage: "checkmark")
-                    .font(.chickenUI(11))
-                    .foregroundStyle(palette.faint)
+                    .labelStyle(.titleAndIcon)
+                    .foregroundStyle(palette.muted)
             } else if book.progress > 0 {
-                ProgressLine(progress: book.progress)
-                    .frame(maxWidth: 90)
                 Text("\(Int((book.progress * 100).rounded()))%")
-                    .font(.chickenMono(11))
-                    .foregroundStyle(palette.faint)
+                    .fontWeight(.semibold)
+                    .foregroundStyle(palette.ribbon)
             } else {
-                Text("Unread")
-                    .font(.chickenUI(11))
-                    .foregroundStyle(palette.faint)
+                Text(book.format.label)
             }
-            Spacer(minLength: 0)
             if book.highlightCount > 0 {
                 Label("\(book.highlightCount)", systemImage: "highlighter")
-                    .font(.chickenMono(11))
-                    .foregroundStyle(palette.faint)
+                    .labelStyle(.titleAndIcon)
             }
+            Spacer(minLength: 0)
         }
+        .font(.chickenMono(10.5, weight: .medium))
+        .foregroundStyle(palette.faint)
+    }
+}
+
+// MARK: - Context menu
+
+extension View {
+    /// Open, details, and remove: the same actions wherever a book appears.
+    func bookContextMenu(_ book: Book) -> some View {
+        modifier(BookContextMenu(book: book))
+    }
+}
+
+private struct BookContextMenu: ViewModifier {
+    @Environment(LibraryStore.self) private var library
+    @Environment(AppRouter.self) private var router
+    @Environment(\.openBook) private var openBook
+    let book: Book
+    @State private var confirmingRemoval = false
+
+    func body(content: Content) -> some View {
+        content
+            .contextMenu {
+                Button("Open", systemImage: "book") { openBook(book.id) }
+                Button("Details", systemImage: "info.circle") { router.detailBookID = book.id }
+                Divider()
+                if book.progress > 0 {
+                    Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {
+                        library.setFinished(!book.isFinished, for: book)
+                    }
+                } else {
+                    Button("Mark as Finished", systemImage: "checkmark.circle") { library.setFinished(true, for: book) }
+                }
+                Divider()
+                Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
+            } preview: {
+                BookCover(book: book, style: .hero)
+                    .frame(width: 220, height: 330)
+                    .readingTheme(.paper)
+            }
+            .confirmationDialog("Remove \u{201C}\(book.title)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
+                Button("Remove", role: .destructive) { library.delete(book) }
+            } message: {
+                Text("Chicken's copy, highlights, and bookmarks for this book will be deleted. The original file is not affected.")
+            }
     }
 }

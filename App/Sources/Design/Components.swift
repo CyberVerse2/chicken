@@ -27,7 +27,7 @@ struct ProgressLine: View {
             ZStack(alignment: .leading) {
                 Capsule().fill(palette.surfaceAlt)
                 Capsule()
-                    .fill(fill ?? palette.muted)
+                    .fill(fill ?? palette.ribbon)
                     .frame(width: max(0, geometry.size.width * min(max(progress, 0), 1)))
             }
         }
@@ -35,6 +35,43 @@ struct ProgressLine: View {
         .accessibilityElement()
         .accessibilityLabel("Progress")
         .accessibilityValue("\(Int((progress * 100).rounded())) percent")
+    }
+}
+
+/// The house lockup: the icon's hen-and-book on its soot tile, then the
+/// name set in Superclarendon.
+struct BrandLockup: View {
+    @Environment(\.palette) private var palette
+    var size: CGFloat = 22
+
+    var body: some View {
+        HStack(spacing: size * 0.38) {
+            BrandBadge(size: size * 1.18)
+            Text("Chicken")
+                .font(.chickenDisplay(size, weight: .bold))
+                .tracking(-0.2)
+                .foregroundStyle(palette.text)
+                .fixedSize()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Chicken")
+    }
+}
+
+struct BrandBadge: View {
+    var size: CGFloat = 26
+
+    var body: some View {
+        Image("BrandBadge")
+            .resizable()
+            .interpolation(.high)
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: size * 0.24, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: size * 0.24, style: .continuous)
+                    .strokeBorder(.white.opacity(0.08), lineWidth: 0.5)
+            }
+            .accessibilityHidden(true)
     }
 }
 
@@ -72,6 +109,9 @@ struct PrimaryActionButton: View {
         .buttonStyle(.glassProminent)
         .tint(palette.text)
         .foregroundStyle(palette.background)
+        #if os(macOS)
+        .controlSize(.large)
+        #endif
     }
 }
 
@@ -93,6 +133,9 @@ struct SecondaryActionButton: View {
             .foregroundStyle(palette.text)
         }
         .buttonStyle(.glass)
+        #if os(macOS)
+        .controlSize(.large)
+        #endif
     }
 }
 

@@ -132,6 +132,18 @@ struct LibraryLogicTests {
         #expect(ChickenLink.destination(for: URL(string: "https://example.com")!) == nil)
     }
 
+    @Test func readerPreferencesSavedBeforeTypefaceStillDecode() throws {
+        let json = #"{"theme":"paper","fontSize":18,"lineHeight":1.8,"columnWidth":620,"readingMode":"paged","zenMode":false}"#
+        let preferences = try JSONDecoder().decode(ReaderPreferences.self, from: Data(json.utf8))
+        #expect(preferences.fontSize == 18)
+        #expect(preferences.typeface == nil)
+
+        var updated = preferences
+        updated.typeface = "iowan"
+        let roundTripped = try JSONDecoder().decode(ReaderPreferences.self, from: JSONEncoder().encode(updated))
+        #expect(roundTripped.typeface == "iowan")
+    }
+
     @Test func decodesLegacyLocations() {
         let legacy = #"{"href":"OEBPS\/c01.htm","spineIndex":7,"globalProgression":0.01,"progression":0,"type":"epub","pageNumber":12,"pageWithinSpine":3}"#
         let location = EPUBLocation.decode(legacy)

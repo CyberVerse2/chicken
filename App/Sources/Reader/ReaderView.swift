@@ -40,10 +40,19 @@ struct ReaderView: View {
     @State private var searchText = ""
     @State private var chromeHidden = false
     @State private var zenHover = false
+    @State private var availableWidth: CGFloat = 1200
 
     init(book: Book, library: LibraryStore) {
         self.library = library
         _model = State(initialValue: ReaderModel(book: book, library: library, defaultMode: Self.defaultMode))
+    }
+
+    private static var debugPanel: String? {
+        #if DEBUG
+        ProcessInfo.processInfo.environment["CHICKEN_DEBUG_PANEL"]
+        #else
+        nil
+        #endif
     }
 
     private static var prefersCompactLayout: Bool {
@@ -74,6 +83,7 @@ struct ReaderView: View {
                 readingSurface
             }
             .background(palette.background.ignoresSafeArea())
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
             .toolbar { toolbar }
             .toolbarVisibility(chromeVisible ? .automatic : .hidden, for: Self.toolbarPlacement)
             .navigationTitle(book.title)
@@ -115,15 +125,37 @@ struct ReaderView: View {
             library.markOpened(book)
             library.readerDidAppear()
         }
+        #if DEBUG
+        .task {
+            guard let panel = Self.debugPanel else { return }
+            try? await Task.sleep(for: .seconds(1.5))
+            switch panel {
+            case "annotations": showAnnotations = true
+            case "typography": showTypography = true
+            case "search": showSearch = true
+            case "contents": showChapters = true
+            default: break
+            }
+        }
+        #endif
         .onDisappear {
             model.engine?.captureLocation()
             model.savePreferences()
             library.readerDidDisappear()
             library.save()
         }
+        // Contents and the highlights inspector both take a column; when the
+        // window can't fit both beside a comfortable page, show one at a time.
+        .onChange(of: showAnnotations) { _, shown in
+            if shown && availableWidth < 1100 { showChapters = false }
+        }
+        .onChange(of: showChapters) { _, shown in
+            if shown && !isCompact && availableWidth < 1100 { showAnnotations = false }
+        }
         .onChange(of: model.fontSize) { model.savePreferences() }
         .onChange(of: model.lineHeight) { model.savePreferences() }
         .onChange(of: model.columnWidth) { model.savePreferences() }
+        .onChange(of: model.typeface) { model.savePreferences() }
         .onChange(of: model.readingMode) { model.savePreferences() }
         .onChange(of: model.isZen) { _, zen in
             model.savePreferences()
@@ -157,6 +189,21 @@ struct ReaderView: View {
     private var readingSurface: some View {
         engineView
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .topTrailing) {
+                // A bookmarked place gets a silk ribbon over the top edge
+                // of the page, as a real bookmark would.
+                if model.isBookmarked && model.error == nil {
+                    Ribbon()
+                        .frame(width: isCompact ? 14 : 18, height: isCompact ? 88 : 64)
+                        .shadow(color: .black.opacity(0.18), radius: 1.5, x: 0, y: 1)
+                        .padding(.trailing, isCompact ? 22 : 40)
+                        .ignoresSafeArea(edges: .top)
+                        .allowsHitTesting(false)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                        .accessibilityLabel("Bookmarked")
+                }
+            }
+            .animation(.spring(response: 0.45, dampingFraction: 0.7), value: model.isBookmarked)
             .overlay(alignment: .top) {
                 if showSearch && chromeVisible {
                     ReaderSearchBar(text: $searchText) { backwards in
@@ -225,11 +272,11 @@ struct ReaderView: View {
                     model: model,
                     fileURL: fileURL,
                     cacheDirectory: library.paths.epubCache,
-                    style: EPUBStyle(palette: palette, fontSize: model.fontSize, lineHeight: model.lineHeight, columnWidth: model.columnWidth, mode: effectiveMode),
+                    style: EPUBStyle(palette: palette, fontSize: model.fontSize, lineHeight: model.lineHeight, columnWidth: model.columnWidth, mode: effectiveMode, typeface: model.typeface),
                     onTapCenter: toggleChrome
                 )
             case .text, .document, .unknown:
-                TextReader(model: model, fileURL: fileURL, palette: palette, fontSize: model.fontSize, lineHeight: model.lineHeight, columnWidth: model.columnWidth, onTapCenter: toggleChrome)
+                TextReader(model: model, fileURL: fileURL, palette: palette, fontSize: model.fontSize, lineHeight: model.lineHeight, columnWidth: model.columnWidth, typeface: model.typeface, onTapCenter: toggleChrome)
             }
         }
     }

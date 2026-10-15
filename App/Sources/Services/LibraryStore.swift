@@ -45,6 +45,9 @@ final class LibraryStore {
         recomputeReadingStats()
         scheduleDerivedDataRefresh()
         publishWidgetSnapshot()
+        #if DEBUG
+        seedDebugLibraryIfRequested()
+        #endif
     }
 
     private static func makeContainer(paths: LibraryPaths, inMemory: Bool) -> ModelContainer {
@@ -142,6 +145,20 @@ final class LibraryStore {
         } else if !nowFinished && wasFinished {
             book.finishedAt = nil
         }
+        publishWidgetSnapshot()
+    }
+
+    /// "Mark as Finished" / "Mark as Unread" from the library.
+    func setFinished(_ finished: Bool, for book: Book) {
+        if finished {
+            book.progress = 1
+            book.finishedAt = book.finishedAt ?? Date()
+        } else {
+            book.progress = 0
+            book.finishedAt = nil
+            book.lastLocation = nil
+        }
+        save()
         publishWidgetSnapshot()
     }
 

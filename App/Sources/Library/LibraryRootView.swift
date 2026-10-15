@@ -2,22 +2,16 @@ import ChickenKit
 import SwiftData
 import SwiftUI
 
-enum LibrarySort: String, CaseIterable, Identifiable {
-    case recent
-    case title
-    case author
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .recent: return "Recently Read"
-        case .title: return "Title"
-        case .author: return "Author"
-        }
-    }
+enum AppTab: Hashable {
+    case home
+    case library
+    case notebook
+    case search
 }
 
+/// The app's main window: Home, Library, Notebook, and Search. With the
+/// sidebar-adaptable style this is a glass tab bar on iPhone, a tab bar
+/// that expands into a sidebar on iPad, and a sidebar on the Mac.
 struct LibraryRootView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(AppRouter.self) private var router
@@ -26,22 +20,50 @@ struct LibraryRootView: View {
     @Environment(\.openWindow) private var openWindow
     #endif
 
-    @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
-    @State private var search = ""
-    @AppStorage("Chicken.librarySort") private var sort: LibrarySort = .recent
+    @State private var tab: AppTab = LibraryRootView.initialTab
+
+    private static var initialTab: AppTab {
+        #if DEBUG
+        switch ProcessInfo.processInfo.environment["CHICKEN_DEBUG_TAB"] {
+        case "library": return .library
+        case "notebook": return .notebook
+        case "search": return .search
+        default: return .home
+        }
+        #else
+        return .home
+        #endif
+    }
 
     var body: some View {
         @Bindable var router = router
 
-        NavigationStack {
-            LibraryContent(books: books, visibleBooks: visibleBooks, search: search)
-                .navigationTitle("Library")
-                .searchable(text: $search, prompt: "Title, author, or publisher")
-                .toolbar { toolbar }
+        TabView(selection: $tab) {
+            Tab("Home", systemImage: "book.pages", value: AppTab.home) {
+                NavigationStack { HomeView() }
+            }
+            Tab("Library", systemImage: "books.vertical", value: AppTab.library) {
+                NavigationStack { BooksView() }
+            }
+            Tab("Notebook", systemImage: "highlighter", value: AppTab.notebook) {
+                NavigationStack { NotebookView() }
+            }
+            Tab(value: AppTab.search, role: .search) {
+                NavigationStack { SearchView() }
+            }
         }
+        .tabViewStyle(.sidebarAdaptable)
+        .tabViewSidebarHeader { SidebarHeader() }
+        .tabViewSidebarBottomBar { SidebarFooter() }
+        .tint(palette.text)
         .environment(\.openBook, OpenBookAction(handler: open))
         .sheet(isPresented: $router.showingDiscovery) {
             DiscoveryView()
+                .readingTheme(library.preferences.theme)
+        }
+        .sheet(item: detailBook) { item in
+            BookDetailView(bookID: item.id)
+                .environment(\.openBook, OpenBookAction(handler: open))
                 .readingTheme(library.preferences.theme)
         }
         #if !os(macOS)
@@ -76,81 +98,28 @@ struct LibraryRootView: View {
         .animation(.easeInOut(duration: 0.4), value: library.preferences.theme)
     }
 
-    // MARK: Toolbar
-
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            Menu {
-                Button("Import Files…", systemImage: "doc.badge.plus") { router.showingImporter = true }
-                Button("Find Books in Folders…", systemImage: "folder.badge.gearshape") { router.showingDiscovery = true }
-            } label: {
-                Label("Add Books", systemImage: "plus")
-            }
-
-            Menu {
-                Picker("Sort By", selection: $sort) {
-                    ForEach(LibrarySort.allCases) { Text($0.label).tag($0) }
-                }
-                Picker("Theme", selection: themeBinding) {
-                    ForEach(ReadingTheme.allCases) { theme in
-                        Label(theme.label, systemImage: theme.systemImage).tag(theme)
-                    }
-                }
-            } label: {
-                Label("View Options", systemImage: library.preferences.theme.systemImage)
-            }
-
-            #if os(macOS)
-            SettingsLink {
-                Label("Settings", systemImage: "gearshape")
-            }
-            #else
-            Button("Settings", systemImage: "gearshape") { router.showingSettings = true }
-            #endif
-        }
-    }
-
-    private var themeBinding: Binding<ReadingTheme> {
-        Binding(get: { library.preferences.theme }, set: { library.preferences.theme = $0 })
-    }
-
-    // MARK: Filtering
-
-    private var visibleBooks: [Book] {
-        let sorted: [Book]
-        switch sort {
-        case .recent:
-            sorted = books
-        case .title:
-            sorted = books.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
-        case .author:
-            sorted = books.sorted { $0.displayAuthor.localizedStandardCompare($1.displayAuthor) == .orderedAscending }
-        }
-        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return sorted }
-        return sorted.filter {
-            $0.title.localizedStandardContains(query)
-                || $0.displayAuthor.localizedStandardContains(query)
-                || ($0.publisher?.localizedStandardContains(query) ?? false)
-                || $0.originalFileName.localizedStandardContains(query)
-        }
-    }
-
     // MARK: Opening books
 
     private func open(_ id: UUID) {
         #if os(macOS)
         openWindow(id: SceneID.reader, value: id)
         #else
+        router.detailBookID = nil
         router.presentedBookID = id
         #endif
     }
 
-    #if !os(macOS)
-    private var presentedBook: Binding<PresentedBook?> {
+    private var detailBook: Binding<IdentifiedBook?> {
         Binding(
-            get: { router.presentedBookID.map(PresentedBook.init) },
+            get: { router.detailBookID.map(IdentifiedBook.init) },
+            set: { router.detailBookID = $0?.id }
+        )
+    }
+
+    #if !os(macOS)
+    private var presentedBook: Binding<IdentifiedBook?> {
+        Binding(
+            get: { router.presentedBookID.map(IdentifiedBook.init) },
             set: { router.presentedBookID = $0?.id }
         )
     }
@@ -174,6 +143,91 @@ struct LibraryRootView: View {
     }
 }
 
-private struct PresentedBook: Identifiable {
+struct IdentifiedBook: Identifiable {
     let id: UUID
+}
+
+/// Add books, theme, and settings: the same controls on every library page.
+struct LibraryToolbar: ToolbarContent {
+    @Environment(LibraryStore.self) private var library
+    @Environment(AppRouter.self) private var router
+
+    var body: some ToolbarContent {
+        #if os(macOS)
+        ToolbarSpacer(.flexible)
+        #endif
+        ToolbarItemGroup(placement: Self.placement) {
+            Menu {
+                Button("Import Files…", systemImage: "doc.badge.plus") { router.showingImporter = true }
+                Button("Find Books in Folders…", systemImage: "folder.badge.gearshape") { router.showingDiscovery = true }
+            } label: {
+                Label("Add Books", systemImage: "plus")
+            }
+
+            Menu {
+                Picker("Theme", selection: themeBinding) {
+                    ForEach(ReadingTheme.allCases) { theme in
+                        Label(theme.label, systemImage: theme.systemImage).tag(theme)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label("Theme", systemImage: library.preferences.theme.systemImage)
+            }
+
+            #if os(macOS)
+            SettingsLink {
+                Label("Settings", systemImage: "gearshape")
+            }
+            #else
+            Button("Settings", systemImage: "gearshape") { router.showingSettings = true }
+            #endif
+        }
+    }
+
+    private var themeBinding: Binding<ReadingTheme> {
+        Binding(get: { library.preferences.theme }, set: { library.preferences.theme = $0 })
+    }
+
+    /// Trailing on every platform (`.primaryAction` is leading on macOS).
+    static var placement: ToolbarItemPlacement {
+        #if os(macOS)
+        .automatic
+        #else
+        .primaryAction
+        #endif
+    }
+}
+
+/// The house lockup above the sidebar and a quiet count below it.
+private struct SidebarHeader: View {
+    var body: some View {
+        BrandLockup(size: 17)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SidebarFooter: View {
+    @Environment(\.palette) private var palette
+    @Query private var books: [Book]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(books.count) books")
+                .font(.chickenSerif(12, italic: true))
+                .foregroundStyle(palette.muted)
+            HStack(spacing: 4) {
+                Image(systemName: "lock")
+                Text("On this device")
+            }
+            .font(.chickenUI(10))
+            .foregroundStyle(palette.faint)
+        }
+        .fixedSize()
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
 }

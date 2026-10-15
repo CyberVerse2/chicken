@@ -11,8 +11,17 @@ struct ChickenApp: App {
     init() {
         #if DEBUG
         // `CHICKEN_DEBUG_OPEN=continue` or a book UUID opens a reader at launch.
-        if let target = ProcessInfo.processInfo.environment["CHICKEN_DEBUG_OPEN"] {
+        if let target = ProcessInfo.processInfo.environment["CHICKEN_DEBUG_OPEN"], !target.isEmpty {
             AppRouter.shared.pendingDestination = UUID(uuidString: target).map(ChickenLink.Destination.book) ?? .continueReading
+        }
+        // `CHICKEN_DEBUG_PANEL=discovery|settings` opens a library sheet;
+        // `annotations|typography|search` opens a reader panel.
+        switch ProcessInfo.processInfo.environment["CHICKEN_DEBUG_PANEL"] {
+        case "discovery": AppRouter.shared.showingDiscovery = true
+        case "settings": AppRouter.shared.showingSettings = true
+        case let value? where value.hasPrefix("detail:"):
+            AppRouter.shared.detailBookID = UUID(uuidString: String(value.dropFirst(7)))
+        default: break
         }
         #endif
     }
@@ -74,6 +83,8 @@ final class AppRouter {
 
     /// Book shown in the full-screen reader on iPhone and iPad.
     var presentedBookID: UUID?
+    /// Book whose details sheet is showing.
+    var detailBookID: UUID?
     var showingImporter = false
     var showingDiscovery = false
     var showingSettings = false

@@ -37,21 +37,22 @@ enum ReadingTheme: String, Codable, CaseIterable, Hashable, Identifiable {
         switch self {
         case .paper:
             return ReaderPalette(
-                background: 0xF5F1E8, surface: 0xFFFFFF, surfaceAlt: 0xEDE7D9,
-                text: 0x1F1B16, muted: 0x6B655B, faint: 0xA8A095,
-                ink: 0x1F1B16, borderOpacity: 0.10, borderStrongOpacity: 0.18, shadowOpacity: 0.08
+                background: 0xF4EEE4, surface: 0xFBF8F2, surfaceAlt: 0xEAE2D5,
+                text: 0x211D1C, muted: 0x6E6259, faint: 0xA89C90,
+                ink: 0x211D1C, ribbon: 0xB57631, borderOpacity: 0.10, borderStrongOpacity: 0.20, shadowOpacity: 0.10
             )
         case .sepia:
             return ReaderPalette(
-                background: 0xEFE3CC, surface: 0xF4EAD3, surfaceAlt: 0xE5D6B8,
-                text: 0x3A2A18, muted: 0x7A5A40, faint: 0xA89070,
-                ink: 0x3A2A18, borderOpacity: 0.14, borderStrongOpacity: 0.22, shadowOpacity: 0.10
+                background: 0xEEDFC4, surface: 0xF6EBD6, surfaceAlt: 0xE3D1B0,
+                text: 0x3B2A1A, muted: 0x77593C, faint: 0xA68B6A,
+                ink: 0x3B2A1A, ribbon: 0xA9642A, borderOpacity: 0.14, borderStrongOpacity: 0.24, shadowOpacity: 0.12
             )
         case .ink:
+            // The icon's own colors: soot ground, linen hen, ochre ribbon.
             return ReaderPalette(
-                background: 0x0F0F10, surface: 0x1A1A1B, surfaceAlt: 0x252527,
-                text: 0xE8E6E1, muted: 0x9A968D, faint: 0x5A5851,
-                ink: 0xFFFFFF, borderOpacity: 0.08, borderStrongOpacity: 0.14, shadowOpacity: 0.40, shadowIsBlack: true
+                background: 0x171413, surface: 0x211D1C, surfaceAlt: 0x2D2826,
+                text: 0xF2E6D6, muted: 0xA89B8C, faint: 0x6D6359,
+                ink: 0xF2E6D6, ribbon: 0xCB8D45, borderOpacity: 0.09, borderStrongOpacity: 0.16, shadowOpacity: 0.45, shadowIsBlack: true
             )
         }
     }
@@ -66,6 +67,9 @@ struct ReaderPalette: Equatable {
     let textHex: UInt32
     let mutedHex: UInt32
     let faintHex: UInt32
+    /// Ochre silk bookmark: the one brand accent, used only to mark "your
+    /// place" (progress, bookmarks, the book you're in).
+    let ribbonHex: UInt32
     private let inkHex: UInt32
     private let borderOpacity: Double
     private let borderStrongOpacity: Double
@@ -75,7 +79,7 @@ struct ReaderPalette: Equatable {
     init(
         background: UInt32, surface: UInt32, surfaceAlt: UInt32,
         text: UInt32, muted: UInt32, faint: UInt32,
-        ink: UInt32, borderOpacity: Double, borderStrongOpacity: Double, shadowOpacity: Double,
+        ink: UInt32, ribbon: UInt32, borderOpacity: Double, borderStrongOpacity: Double, shadowOpacity: Double,
         shadowIsBlack: Bool = false
     ) {
         backgroundHex = background
@@ -85,6 +89,7 @@ struct ReaderPalette: Equatable {
         mutedHex = muted
         faintHex = faint
         inkHex = ink
+        ribbonHex = ribbon
         self.borderOpacity = borderOpacity
         self.borderStrongOpacity = borderStrongOpacity
         self.shadowOpacity = shadowOpacity
@@ -97,11 +102,80 @@ struct ReaderPalette: Equatable {
     var text: Color { .hex(textHex) }
     var muted: Color { .hex(mutedHex) }
     var faint: Color { .hex(faintHex) }
+    var ribbon: Color { .hex(ribbonHex) }
+    /// A deeper fold of the ribbon, for the shaded half of the silk.
+    var ribbonShade: Color { .hex(ribbonHex).mix(with: .black, by: 0.22) }
     var border: Color { .hex(inkHex, alpha: borderOpacity) }
     var borderStrong: Color { .hex(inkHex, alpha: borderStrongOpacity) }
     var shadow: Color { shadowIsBlack ? .black.opacity(shadowOpacity) : .hex(inkHex, alpha: shadowOpacity) }
 
     static func css(_ hex: UInt32) -> String { String(format: "#%06X", hex) }
+}
+
+// MARK: - Reading typefaces
+
+/// Body faces for reflowable books. All ship with iOS and macOS.
+enum ReaderTypeface: String, CaseIterable, Identifiable {
+    case newYork
+    case iowan
+    case charter
+    case athelas
+    case sanFrancisco
+
+    static let `default`: ReaderTypeface = .newYork
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .newYork: return "New York"
+        case .iowan: return "Iowan"
+        case .charter: return "Charter"
+        case .athelas: return "Athelas"
+        case .sanFrancisco: return "San Francisco"
+        }
+    }
+
+    /// CSS font stack for EPUBs.
+    var cssFamily: String {
+        switch self {
+        case .newYork: return "ui-serif, 'New York', Georgia, serif"
+        case .iowan: return "'Iowan Old Style', 'IowanOldStyle-Roman', Georgia, serif"
+        case .charter: return "Charter, 'Charter Roman', Georgia, serif"
+        case .athelas: return "Athelas, Georgia, serif"
+        case .sanFrancisco: return "-apple-system, system-ui, 'Helvetica Neue', sans-serif"
+        }
+    }
+
+    /// The face for SwiftUI previews of the setting.
+    func font(_ size: CGFloat) -> Font {
+        switch self {
+        case .newYork: return .system(size: size, design: .serif)
+        case .iowan: return .custom("IowanOldStyle-Roman", size: size)
+        case .charter: return .custom("Charter-Roman", size: size)
+        case .athelas: return .custom("Athelas-Regular", size: size)
+        case .sanFrancisco: return .system(size: size)
+        }
+    }
+
+    /// The face for the native text reader.
+    func platformFont(size: CGFloat, bold: Bool = false) -> PlatformFont {
+        let name: String?
+        switch self {
+        case .iowan: name = bold ? "IowanOldStyle-Bold" : "IowanOldStyle-Roman"
+        case .charter: name = bold ? "Charter-Bold" : "Charter-Roman"
+        case .athelas: name = bold ? "Athelas-Bold" : "Athelas-Regular"
+        case .newYork, .sanFrancisco: name = nil
+        }
+        if let name, let font = PlatformFont(name: name, size: size) { return font }
+        let system = PlatformFont.systemFont(ofSize: size, weight: bold ? .semibold : .regular)
+        guard self == .newYork, let descriptor = system.fontDescriptor.withDesign(.serif) else { return system }
+        #if os(macOS)
+        return PlatformFont(descriptor: descriptor, size: size) ?? system
+        #else
+        return PlatformFont(descriptor: descriptor, size: size)
+        #endif
+    }
 }
 
 // MARK: - Highlight colors
@@ -160,10 +234,42 @@ extension EnvironmentValues {
 // MARK: - Type
 
 extension Font {
-    /// Reading body, titles, drop caps: the system serif (New York).
+    /// Display face: Superclarendon, a sturdy 19th-century Clarendon with
+    /// ball terminals — the voice of almanacs and county-fair posters. Used
+    /// with restraint: greetings, page titles, the book you're in, numbers
+    /// worth celebrating. Ships with both iOS and macOS.
+    static func chickenDisplay(_ size: CGFloat, weight: DisplayWeight = .regular, italic: Bool = false) -> Font {
+        .custom(weight.postScriptName(italic: italic), size: size)
+    }
+
+    enum DisplayWeight {
+        case light, regular, bold, black
+
+        func postScriptName(italic: Bool) -> String {
+            let base: String
+            switch self {
+            case .light: base = "Superclarendon-Light"
+            case .regular: base = "Superclarendon-Regular"
+            case .bold: base = "Superclarendon-Bold"
+            case .black: base = "Superclarendon-Black"
+            }
+            guard italic else { return base }
+            return self == .regular ? "Superclarendon-Italic" : base + "Italic"
+        }
+    }
+
+    /// Book face: Iowan Old Style, for titles in lists, authors (italic),
+    /// quotations, and anything that should read like a page.
     static func chickenSerif(_ size: CGFloat, weight: Font.Weight = .regular, italic: Bool = false) -> Font {
-        let base = Font.system(size: size, weight: weight, design: .serif)
-        return italic ? base.italic() : base
+        let bold = weight == .semibold || weight == .bold || weight == .heavy || weight == .black
+        let name: String
+        switch (bold, italic) {
+        case (false, false): name = "IowanOldStyle-Roman"
+        case (false, true): name = "IowanOldStyle-Italic"
+        case (true, false): name = "IowanOldStyle-Bold"
+        case (true, true): name = "IowanOldStyle-BoldItalic"
+        }
+        return .custom(name, size: size)
     }
 
     /// UI chrome: toolbars, buttons, labels.
@@ -171,9 +277,9 @@ extension Font {
         .system(size: size, weight: weight)
     }
 
-    /// Measurements and counts.
+    /// Measurements and counts: the UI face with even-width figures.
     static func chickenMono(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
-        .system(size: size, weight: weight, design: .monospaced)
+        .system(size: size, weight: weight).monospacedDigit()
     }
 }
 
@@ -192,8 +298,8 @@ extension Color {
 extension View {
     /// Small-caps section label: sans, 11pt, tracked, uppercase, muted.
     func chickenEyebrow(_ palette: ReaderPalette, color: Color? = nil) -> some View {
-        font(.chickenUI(11, weight: .medium))
-            .tracking(1.5)
+        font(.chickenUI(10.5, weight: .semibold))
+            .tracking(1.6)
             .textCase(.uppercase)
             .foregroundStyle(color ?? palette.muted)
     }

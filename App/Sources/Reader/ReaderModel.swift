@@ -82,6 +82,7 @@ final class ReaderModel {
     var fontSize: Double
     var lineHeight: Double
     var columnWidth: Double
+    var typeface: ReaderTypeface
     var readingMode: ReadingMode
     var isZen: Bool
 
@@ -96,6 +97,7 @@ final class ReaderModel {
         fontSize = preferences?.fontSize ?? ReaderPreferences.default.fontSize
         lineHeight = preferences?.lineHeight ?? ReaderPreferences.default.lineHeight
         columnWidth = preferences?.columnWidth ?? ReaderPreferences.default.columnWidth
+        typeface = preferences?.typeface.flatMap(ReaderTypeface.init(rawValue:)) ?? .default
         readingMode = preferences.flatMap { ReadingMode(rawValue: $0.readingMode) } ?? defaultMode
         isZen = preferences?.zenMode ?? false
         chapterIndex = EPUBLocation.decode(book.lastLocation)?.spineIndex
@@ -149,6 +151,7 @@ final class ReaderModel {
         fontSize = ReaderPreferences.default.fontSize
         lineHeight = ReaderPreferences.default.lineHeight
         columnWidth = ReaderPreferences.default.columnWidth
+        typeface = .default
     }
 
     func savePreferences() {
@@ -159,7 +162,8 @@ final class ReaderModel {
                 lineHeight: lineHeight,
                 columnWidth: columnWidth,
                 readingMode: readingMode.rawValue,
-                zenMode: isZen
+                zenMode: isZen,
+                typeface: typeface == .default ? nil : typeface.rawValue
             ),
             for: book
         )

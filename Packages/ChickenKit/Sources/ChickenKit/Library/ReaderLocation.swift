@@ -93,14 +93,18 @@ public struct ReaderPreferences: Codable, Hashable, Sendable {
     public var columnWidth: Double
     public var readingMode: String
     public var zenMode: Bool
+    /// Body typeface for reflowable books; nil means the default. Optional
+    /// so preferences saved before it existed still decode.
+    public var typeface: String?
 
-    public init(theme: String, fontSize: Double, lineHeight: Double, columnWidth: Double, readingMode: String, zenMode: Bool) {
+    public init(theme: String, fontSize: Double, lineHeight: Double, columnWidth: Double, readingMode: String, zenMode: Bool, typeface: String? = nil) {
         self.theme = theme
         self.fontSize = fontSize
         self.lineHeight = lineHeight
         self.columnWidth = columnWidth
         self.readingMode = readingMode
         self.zenMode = zenMode
+        self.typeface = typeface
     }
 
     public static let fontSizeRange: ClosedRange<Double> = 13...28

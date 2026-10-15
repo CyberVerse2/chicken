@@ -65,7 +65,7 @@ final class Book {
 
     /// Stable index into the stylized cover palette, so a book keeps its
     /// color until it gets a real cover.
-    var coverTintIndex: Int { Int(title.stableChickenHash % 6) }
+    var coverTintIndex: Int { Int(title.stableChickenHash % 8) }
 
     var highlightCount: Int { highlights?.count ?? 0 }
 

@@ -14,9 +14,9 @@ Chicken is a local-first reading library for Mac, iPad, and iPhone. It scans use
 
 ## Brand Personality
 
-quiet, private, scholarly
+quiet, private, homely, a little wry
 
-Chicken should feel like a thoughtful desktop tool: composed, trustworthy, and built for reading rather than selling. The app should respect the user's files and attention. It should feel native to each Apple platform without becoming generic.
+Chicken is where your books come home to roost. It should feel like a well-kept reading room with a sense of humor about its own name: composed and trustworthy, with warm almanac typography, and one ochre ribbon that always marks your place. It respects the user's files and attention, and feels native to each Apple platform without becoming generic. See DESIGN.md for the visual system.
 
 ## Anti-references
 
