@@ -7,6 +7,8 @@ enum AppTab: Hashable {
     case library
     case notebook
     case search
+    /// A book you're reading, picked from the sidebar's Reading section.
+    case book(UUID)
 }
 
 /// The app's main window: Home, Library, Notebook, and Search. With the
@@ -19,8 +21,14 @@ struct LibraryRootView: View {
     #if os(macOS)
     @Environment(\.openWindow) private var openWindow
     #endif
+    @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
 
     @State private var tab: AppTab = LibraryRootView.initialTab
+
+    /// Books in progress, most recent first: the sidebar's Reading section.
+    private var reading: [Book] {
+        Array(books.lazy.filter { $0.progress > 0 && !$0.isFinished }.prefix(8))
+    }
 
     private static var initialTab: AppTab {
         #if DEBUG
@@ -38,22 +46,11 @@ struct LibraryRootView: View {
     var body: some View {
         @Bindable var router = router
 
-        TabView(selection: $tab) {
-            Tab("Home", systemImage: "book.pages", value: AppTab.home) {
-                NavigationStack { HomeView() }
-            }
-            Tab("Library", systemImage: "books.vertical", value: AppTab.library) {
-                NavigationStack { BooksView() }
-            }
-            Tab("Notebook", systemImage: "highlighter", value: AppTab.notebook) {
-                NavigationStack { NotebookView() }
-            }
-            Tab(value: AppTab.search, role: .search) {
-                NavigationStack { SearchView() }
-            }
+        navigation
+        .onChange(of: reading.map(\.id)) { _, ids in
+            // A finished or removed book drops out of the sidebar.
+            if case .book(let id) = tab, !ids.contains(id) { tab = .home }
         }
-        .tabViewStyle(.sidebarAdaptable)
-        .tabViewSidebarHeader { SidebarHeader() }
         .tint(palette.text)
         .environment(\.openBook, OpenBookAction(handler: open))
         .sheet(isPresented: $router.showingDiscovery) {
@@ -95,6 +92,57 @@ struct LibraryRootView: View {
             route(to: destination)
         }
         .animation(.easeInOut(duration: 0.4), value: library.preferences.theme)
+    }
+
+    /// A sidebar of places and the books you're reading on the Mac; on
+    /// iPhone and iPad, a tab view that becomes a sidebar on wide screens.
+    @ViewBuilder
+    private var navigation: some View {
+        #if os(macOS)
+        NavigationSplitView {
+            MacSidebar(selection: $tab, reading: reading)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 236, max: 320)
+        } detail: {
+            switch tab {
+            case .home: NavigationStack { HomeView() }
+            case .library: NavigationStack { BooksView() }
+            case .notebook: NavigationStack { NotebookView() }
+            case .search: NavigationStack { SearchView() }
+            case .book(let id): NavigationStack { BookDetailView(bookID: id, isPage: true) }.id(id)
+            }
+        }
+        #else
+        TabView(selection: $tab) {
+            Tab("Home", systemImage: "book.pages", value: AppTab.home) {
+                NavigationStack { HomeView() }
+            }
+            Tab("Library", systemImage: "books.vertical", value: AppTab.library) {
+                NavigationStack { BooksView() }
+            }
+            Tab("Notebook", systemImage: "highlighter", value: AppTab.notebook) {
+                NavigationStack { NotebookView() }
+            }
+            Tab(value: AppTab.search, role: .search) {
+                NavigationStack { SearchView() }
+            }
+            if !reading.isEmpty {
+                TabSection("Reading") {
+                    ForEach(reading) { book in
+                        Tab(value: AppTab.book(book.id)) {
+                            NavigationStack { BookDetailView(bookID: book.id, isPage: true) }
+                        } label: {
+                            Label(book.title, systemImage: "bookmark.fill")
+                        }
+                        .defaultVisibility(.hidden, for: .tabBar)
+                    }
+                }
+                .defaultVisibility(.hidden, for: .tabBar)
+            }
+        }
+        .tabViewStyle(.sidebarAdaptable)
+        .tabViewSidebarHeader { SidebarHeader() }
+        .tabViewSidebarBottomBar { SidebarTodayMeter() }
+        #endif
     }
 
     // MARK: Opening books
@@ -205,5 +253,41 @@ private struct SidebarHeader: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Today's reading against the daily goal, as a ribbon meter at the foot
+/// of the sidebar.
+struct SidebarTodayMeter: View {
+    @Environment(LibraryStore.self) private var library
+    @Environment(\.palette) private var palette
+
+    private var goalSeconds: Int { library.preferences.dailyGoalMinutes * 60 }
+    private var fraction: Double {
+        goalSeconds > 0 ? min(1, Double(library.readingSecondsToday) / Double(goalSeconds)) : 0
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("Today").chickenEyebrow(palette)
+                Spacer(minLength: 4)
+                Text("\(library.readingSecondsToday / 60)")
+                    .font(.chickenDisplay(15))
+                    .foregroundStyle(palette.text)
+                Text("of \(library.preferences.dailyGoalMinutes) min")
+                    .font(.chickenSerif(12, italic: true))
+                    .foregroundStyle(palette.muted)
+            }
+            .lineLimit(1)
+            .fixedSize(horizontal: false, vertical: true)
+            .monospacedDigit()
+            ProgressLine(progress: fraction, height: 3)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Read today")
+        .accessibilityValue("\(library.readingSecondsToday / 60) of \(library.preferences.dailyGoalMinutes) minutes")
     }
 }

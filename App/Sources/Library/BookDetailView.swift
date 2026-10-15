@@ -2,6 +2,7 @@ import ChickenKit
 import SwiftUI
 
 /// About a book: cover, description, where you are, and what's in it.
+/// Shown as a sheet, or as a page when a book is picked in the sidebar.
 struct BookDetailView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
@@ -9,24 +10,39 @@ struct BookDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
     let bookID: UUID
+    var isPage = false
     @State private var summaryExpanded = false
     @State private var confirmingRemoval = false
 
     var body: some View {
+        if isPage {
+            page
+                .pageTitle(library.book(id: bookID)?.title ?? "Book")
+                .toolbar { LibraryToolbar() }
+        } else {
+            sheet
+        }
+    }
+
+    private var page: some View {
+        Group {
+            if let book = library.book(id: bookID) {
+                content(book)
+            } else {
+                ContentUnavailableView("Book Unavailable", systemImage: "book.closed")
+            }
+        }
+        .background(palette.background.ignoresSafeArea())
+    }
+
+    private var sheet: some View {
         NavigationStack {
-            Group {
-                if let book = library.book(id: bookID) {
-                    content(book)
-                } else {
-                    ContentUnavailableView("Book Unavailable", systemImage: "book.closed")
+            page
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Close", systemImage: "xmark") { dismiss() }
+                    }
                 }
-            }
-            .background(palette.background.ignoresSafeArea())
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close", systemImage: "xmark") { dismiss() }
-                }
-            }
         }
         #if os(macOS)
         .frame(minWidth: 560, idealWidth: 640, minHeight: 600, idealHeight: 720)
@@ -70,7 +86,7 @@ struct BookDetailView: View {
                 .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
                 .shadow(color: palette.shadow, radius: 22, x: 4, y: 16)
                 .coverRibbon(book.progress > 0 && !book.isFinished, length: 26, width: 12)
-                .padding(.top, 12)
+                .padding(.top, isPage ? 36 : 12)
                 .padding(.bottom, 10)
             VStack(spacing: 8) {
                 Text(book.title)
