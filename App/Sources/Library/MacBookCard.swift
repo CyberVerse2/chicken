@@ -114,8 +114,12 @@ struct MacBookCard: View {
             .shadow(color: .black.opacity(offset == 0 ? 0.35 : 0.25), radius: offset == 0 ? 30 : 18, y: 12)
     }
 
+    /// Empty when the sequence has shrunk under the card (a book removed
+    /// here or on another device), rather than an invalid range.
     private func visibleRange(around index: Int) -> [Int] {
-        Array(max(0, index - 2)...min(sequence.count - 1, index + 2))
+        let lower = max(0, index - 2)
+        let upper = min(sequence.count - 1, index + 2)
+        return lower <= upper ? Array(lower...upper) : []
     }
 
     /// Where a card sits: neighbours just clear the middle card by `gap`.

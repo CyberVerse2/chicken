@@ -1,76 +1,77 @@
 # Chicken
 
-Chicken is a private, local-first reading app for PDFs and EPUBs on Mac, iPad, and iPhone. It finds the books you already have in folders you choose, keeps its own copy, and gives you a calm reader with highlights, bookmarks, themes, and reading goals. No account, no backend.
+A reading app for the PDFs and EPUBs you already own, on Mac, iPad, and iPhone. Chicken finds books in folders you choose, keeps its own copy, and syncs your library, place, and highlights through your own iCloud account. No Chicken account, no tracking.
 
-## Platforms
+One SwiftUI app target builds natively for macOS 26, iPadOS 26, and iOS 26 (not Mac Catalyst).
 
-One SwiftUI app target builds natively for **macOS 26, iPadOS 26, and iOS 26** (not Mac Catalyst). Liquid Glass is used for controls that float over content — toolbars, the reader's progress bar, the highlight picker, popovers — while the reading surface itself stays paper, sepia, or ink.
+## What it does
 
-| | Mac | iPad | iPhone |
-|---|---|---|---|
-| Opening a book | New window per book | Full-screen reader | Full-screen reader |
-| Contents | Sidebar | Sidebar | Sheet |
-| Highlights & bookmarks | Inspector | Inspector | Sheet |
-| Default flow | Scroll | Scroll | Pages |
-| Page turns | Arrow keys, space, trackpad swipe, edge click | Swipe, edge tap | Swipe, edge tap |
-
-## Features
-
-- **Formats:** PDF (PDFKit), EPUB (WebKit, via a pure-Swift ZIP/OPF parser), plain text, Markdown, and RTF.
-- **Reading:** scroll, paged, and two-page spread layouts; adjustable size, spacing, and width; search; zen mode; position saved per book and restored exactly.
-- **Highlights** in every format, with notes, plus bookmarks.
-- **Discovery:** share folders once (security-scoped bookmarks); Chicken scores what it finds ("is this a book?") and imports only what you pick.
-- **Goals:** daily reading time and books-per-year, counted only while a book is open in front of you.
-- **Widget** and **Shortcuts** action for continuing the current book.
+- **Reads** PDF (PDFKit), EPUB (WebKit, with a pure-Swift ZIP/OPF parser), plain text, Markdown, and RTF. Scroll, paged, and two-page spread layouts; on iPhone and iPad pages slide under your finger.
+- **Remembers** your place to the exact page, plus highlights with notes, bookmarks, and per-book type settings.
+- **Finds books** in folders you pick (security-scoped bookmarks), scores what it finds, and imports only what you choose.
+- **Syncs** through iCloud: the library database via CloudKit, book files and covers via Chicken's iCloud container. Other devices download a book when it's opened, or ahead of time with Download / Keep on This Device.
+- **Tracks goals:** daily reading minutes and books per year, counted only while a book is open in front of you, per device and summed. Your Reading shows the time read this week and year, the year's finished books, and the latest highlight.
+- **Reaches beyond the app:** widgets (Continue Reading, Reading Goal), a Live Activity while reading, Siri and Shortcuts actions, a Control Center control, Spotlight for books and highlights, a Focus filter, read aloud with Now Playing, and a menu bar reading panel on the Mac.
 
 ## Project layout
 
 ```
-App/                  App target (folder-synced): SwiftUI views, SwiftData models, services
-  Resources/          Assets, ChickenReader.js (EPUB runtime), container-migration.plist
+App/                    App target (folder-synced)
+  Resources/            Assets, ChickenReader.js (EPUB runtime), privacy manifest
   Sources/
-    App/              Entry point, scenes, routing, menu commands
-    Design/           Themes, type, glass components
-    Library/          Library, covers, discovery
-    Reader/           Reader shell, PDF / EPUB / text engines
-    Models/           SwiftData models (CloudKit-compatible shape)
-    Services/         LibraryStore: importing, discovery, reading time, migration, widget
-Widget/               Widget extension
-Packages/ChickenKit/  Platform-neutral core: ZIP, EPUB, PDF metadata, covers, discovery, legacy import
-Config/               Info.plists and entitlements per platform
+    App/                Entry point, scenes, routing, menu commands
+    Design/             Theme, type, shared components
+    Intents/            App Intents, Focus filter, Spotlight entities
+    Library/            Home, Library, Notebook, Search, covers, book details
+    Models/             SwiftData models (CloudKit-compatible)
+    Reader/             Reader shell; PDF, EPUB, and text engines; read aloud
+    Services/           LibraryStore and its parts: import, iCloud, downloads,
+                        reading time, widgets, Spotlight, Live Activity
+    Settings/           Settings
+Widget/                 Widgets, Live Activity, Control Center control
+Packages/ChickenKit/    Platform-neutral core: ZIP, EPUB, PDF metadata, covers,
+                        discovery, title casing, duplicate detection
+Config/                 Info.plists and entitlements per platform
+AppStore/               Store metadata and icon sources
 ```
 
-`LibraryStore` owns the database and files; views read with `@Query` and call the store to change anything. Readers implement a small `ReaderEngine` protocol driven by an observable `ReaderModel`, so the toolbar, progress bar, and panels work the same for every format.
+`LibraryStore` owns the database and the files behind it. Views read with `@Query` and call the store to change anything. Readers implement a small `ReaderEngine` protocol driven by an observable `ReaderModel`, so the toolbar, progress bar, and panels work the same for every format.
 
 ## Building
 
-Requires Xcode 26 or later.
+Requires Xcode 26 or later. Open `Chicken.xcodeproj` and run the **Chicken** scheme on My Mac, an iPad, or an iPhone.
 
 ```sh
-open Chicken.xcodeproj            # run the "Chicken" scheme on My Mac, an iPad, or an iPhone
 swift test --package-path Packages/ChickenKit
 ```
 
-Debug builds use their own library folder (`Application Support/Chicken Development`), so running from Xcode never touches your real library. To develop against real data, point a debug build at an APFS clone instead:
+iCloud needs a signed build: the app and widget share the App Group `group.cyberverse.Chicken`, and the app uses the iCloud container `iCloud.cyberverse.Chicken`. An unsigned build runs without sync.
 
-```sh
-cp -cR ~/Library/Application\ Support/Chicken /tmp/chicken-dev-library
-# Xcode › Scheme › Run › Environment: CHICKEN_LIBRARY_ROOT=/tmp/chicken-dev-library
-# Optional: CHICKEN_DEBUG_OPEN=continue (or a book UUID) opens a reader at launch.
-```
+### Development builds
 
-`CHICKEN_REAL_LIBRARY=<folder> swift test --package-path Packages/ChickenKit` also runs a read-only check that every EPUB in a library parses and every saved position still resolves.
+Debug builds keep a separate library (`Chicken Development`) and sync with CloudKit's development environment, keeping their files in a `Development` folder in the iCloud container. Running from Xcode never touches your real library.
 
-## Data and privacy
+| Environment variable | Effect (Debug builds) |
+|---|---|
+| `CHICKEN_LIBRARY_ROOT=<folder>` | Use this folder as the library. It never syncs. |
+| `CHICKEN_DEBUG_SEED=<folder>` | Fill an empty library with the books in a folder, with sample progress and highlights. |
+| `CHICKEN_DEBUG_OPEN=continue` or a book UUID | Open a reader at launch. |
+| `CHICKEN_DEBUG_TAB=library\|notebook\|search\|reading` | Start on that tab (`reading` is Your Reading, in the sidebar on Mac and iPad). |
+| `CHICKEN_DEBUG_PANEL=…` | Open a panel at launch: `discovery`, `settings`, `detail:<uuid>`, `contents`, `annotations`, `typography`, `search`, or `menubar` (Mac). |
+| `CHICKEN_DEBUG_THEME=paper\|sepia\|ink` | Force a reading theme. |
+| `CHICKEN_DEBUG_FURTHER=continue` | Pretend an iPad read the current book further, to see the reader's offer to jump there. |
 
-The SwiftData store `Library.store` lives in `Application Support/Chicken` and syncs through the user's private CloudKit database, so progress, highlights, bookmarks, and reading time follow them across Mac, iPad, and iPhone. The models avoid unique constraints and non-optional relationships, as CloudKit requires. Book copies and covers live in Chicken's iCloud container (`iCloud.cyberverse.Chicken`, outside its Documents folder so iCloud Drive doesn't list them); other devices download a book when it's opened (`LibraryStore+ICloud.swift`). The same file added on two devices is merged into one book.
+`CHICKEN_REAL_LIBRARY=<library folder> swift test --package-path Packages/ChickenKit` also runs a read-only check that every EPUB in a library parses and every saved position still resolves.
 
-Without iCloud (signed out, turned off for Chicken, or an unsigned build) nothing syncs: files stay in the local `Books` and `Covers` folders and everything else works the same. Debug builds sync with CloudKit's development environment and keep their files in a separate `Development` folder in the container; `CHICKEN_LIBRARY_ROOT` clones never sync.
+## Data
 
-### Upgrading from Chicken 1.x (Mac)
+- **Database:** SwiftData store `Library.store` in Application Support, mirrored to the user's private CloudKit database. Models avoid unique constraints and required relationships, as CloudKit requires; a model change needs the schema deployed to production (see [RELEASE.md](RELEASE.md)).
+- **Book files and covers:** Chicken's iCloud container, outside Documents so iCloud Drive doesn't list them. Without iCloud they stay in local `Books` and `Covers` folders.
+- **Per-device:** theme, goals, which books to keep downloaded, and "Download all books" (on by default on the Mac) live in UserDefaults.
+- **Duplicates:** the same file added on two devices merges into one book, keeping the earlier import and the most recent reading position.
+- **Chicken 1.x (Mac):** on first launch the old JSON catalog is converted into the new store; books keep their IDs and positions.
 
-Chicken 1.x kept a JSON catalog outside the sandbox. On the first sandboxed launch, macOS moves that folder into the app container (`container-migration.plist`), then `LegacyMigrator` converts `library.json`, highlights, bookmarks, per-book settings, and the reading log into the new store. Books keep their IDs and saved positions; the JSON files are left untouched.
+## More
 
-## Releases
-
-See [RELEASE.md](RELEASE.md).
+- [RELEASE.md](RELEASE.md): versioning, App Store, and GitHub releases.
+- [DESIGN.md](DESIGN.md): the visual system.
