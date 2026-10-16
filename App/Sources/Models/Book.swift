@@ -44,6 +44,13 @@ final class Book {
     @Relationship(deleteRule: .cascade, inverse: \Bookmark.book)
     var bookmarks: [Bookmark]? = []
 
+    /// Where each device last was in this book.
+    @Relationship(deleteRule: .cascade, inverse: \ReadingPosition.book)
+    var positions: [ReadingPosition]? = []
+
+    @Relationship(inverse: \BookCollection.books)
+    var collections: [BookCollection]? = []
+
     init(id: UUID = UUID(), title: String, format: BookFormat, originalFileName: String, storedFileName: String) {
         self.id = id
         self.title = title
@@ -135,6 +142,39 @@ final class Bookmark {
     }
 }
 
+/// Where one device last was in a book. Each device keeps its own row, so a
+/// device opening a book can see that another read further since.
+@Model
+final class ReadingPosition {
+    /// `AppPreferences.deviceID`.
+    var device: String = ""
+    /// "iPhone", "iPad", or "Mac", for saying where the position came from.
+    var deviceKind: String = ""
+    var progress: Double = 0
+    var location: String?
+    var chapterIndex: Int = 0
+    var updatedAt: Date = Date()
+    var book: Book?
+
+    init(device: String, deviceKind: String) {
+        self.device = device
+        self.deviceKind = deviceKind
+    }
+}
+
+/// A group of books you make: "To read", "Work", a series.
+@Model
+final class BookCollection {
+    var id: UUID = UUID()
+    var name: String = ""
+    var createdAt: Date = Date()
+    var books: [Book]? = []
+
+    init(name: String) {
+        self.name = name
+    }
+}
+
 /// Seconds of active reading on one calendar day (`yyyy-MM-dd`), on one
 /// device. Each device keeps its own rows so two devices reading on the same
 /// day never overwrite each other's time; a day's total is the sum.
@@ -153,5 +193,7 @@ final class ReadingDay {
 }
 
 enum ChickenSchema {
-    static let models: [any PersistentModel.Type] = [Book.self, Highlight.self, Bookmark.self, ReadingDay.self]
+    static let models: [any PersistentModel.Type] = [
+        Book.self, Highlight.self, Bookmark.self, ReadingDay.self, ReadingPosition.self, BookCollection.self,
+    ]
 }

@@ -8,6 +8,7 @@ struct SettingsView: View {
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
     @Query private var books: [Book]
+    @State private var confirmingRemoveDownloads = false
 
     var body: some View {
         let preferences = library.preferences
@@ -16,31 +17,6 @@ struct SettingsView: View {
             ChickenSection("Reading theme") {
                 ThemeSwatchPicker()
                     .padding(14)
-            }
-
-            ChickenSection("Goals", footer: "Reading time counts only while a book is open and in front of you.") {
-                ChickenRow {
-                    goalRow(
-                        label: "Daily reading",
-                        value: "\(preferences.dailyGoalMinutes)",
-                        unit: "min",
-                        canDecrease: preferences.dailyGoalMinutes > AppPreferences.dailyGoalRange.lowerBound,
-                        canIncrease: preferences.dailyGoalMinutes < AppPreferences.dailyGoalRange.upperBound,
-                        decrease: { preferences.dailyGoalMinutes -= 5 },
-                        increase: { preferences.dailyGoalMinutes += 5 }
-                    )
-                }
-                ChickenRow(isLast: true) {
-                    goalRow(
-                        label: "Books this year",
-                        value: "\(preferences.annualBookGoal)",
-                        unit: preferences.annualBookGoal == 1 ? "book" : "books",
-                        canDecrease: preferences.annualBookGoal > AppPreferences.annualGoalRange.lowerBound,
-                        canIncrease: preferences.annualBookGoal < AppPreferences.annualGoalRange.upperBound,
-                        decrease: { preferences.annualBookGoal -= 1 },
-                        increase: { preferences.annualBookGoal += 1 }
-                    )
-                }
             }
 
             ChickenSection("Library") {
@@ -63,6 +39,12 @@ struct SettingsView: View {
                 }
             }
 
+            if library.iCloudStatus == .on {
+                storageSection
+            }
+
+            NotificationSettingsSection()
+
             ChickenSection("Privacy") {
                 ChickenRow(isLast: true) {
                     HStack(alignment: .top, spacing: 14) {
@@ -74,7 +56,8 @@ struct SettingsView: View {
                             Text(privacy.title)
                                 .font(.chickenSerif(16, weight: .semibold))
                                 .foregroundStyle(palette.text)
-                            Text("\(privacy.detail) \(books.count) books · \(library.librarySizeDescription())")
+                            // With iCloud on, Storage says how many books are here.
+                            Text(library.iCloudStatus == .on ? privacy.detail : "\(privacy.detail) \(books.count) books · \(library.librarySizeDescription())")
                                 .font(.chickenUI(13))
                                 .foregroundStyle(palette.muted)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -97,6 +80,57 @@ struct SettingsView: View {
         .toolbar { SheetDoneButton { dismiss() } }
         #endif
         .animation(.easeInOut(duration: 0.3), value: library.preferences.theme)
+    }
+
+    /// Books whose files are on this device, and the switch that brings
+    /// them all down.
+    private var storageSection: some View {
+        let downloaded = library.downloadedBooks()
+        let downloadsAll = library.preferences.downloadsAllBooks
+        return ChickenSection("Storage") {
+            ChickenRow {
+                HStack(spacing: 14) {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.system(size: 17, weight: .light))
+                        .foregroundStyle(palette.muted)
+                        .frame(width: 26)
+                    Text("Download all books")
+                        .font(.chickenSerif(16, weight: .semibold))
+                        .foregroundStyle(palette.text)
+                    Spacer(minLength: 8)
+                    Toggle("Download all books", isOn: Binding(get: { downloadsAll }, set: { library.setDownloadsAllBooks($0) }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .tint(palette.ribbon)
+                }
+            }
+            ChickenRow(isLast: true) {
+                if downloadsAll || downloaded.count == 0 {
+                    actionRowLabel(icon: "internaldrive", title: "On this \(Self.deviceName)", detail: storageDetail(downloaded))
+                } else {
+                    actionRow(icon: "internaldrive", title: "On this \(Self.deviceName)", detail: storageDetail(downloaded), button: "Remove…") {
+                        confirmingRemoveDownloads = true
+                    }
+                }
+            }
+        }
+        .confirmationDialog("Remove downloaded books from this \(Self.deviceName)?", isPresented: $confirmingRemoveDownloads, titleVisibility: .visible) {
+            Button("Remove Downloads", role: .destructive) { library.removeDownload(books) }
+        } message: {
+            Text("They stay in iCloud. Books you keep on this \(Self.deviceName) stay here.")
+        }
+    }
+
+    private func storageDetail(_ downloaded: (count: Int, bytes: Int64)) -> String {
+        "\(downloaded.count) of \(books.count) books · \(ByteCountFormatter.string(fromByteCount: downloaded.bytes, countStyle: .file))"
+    }
+
+    private static var deviceName: String {
+        #if os(macOS)
+        "Mac"
+        #else
+        UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        #endif
     }
 
     private var privacy: (icon: String, title: String, detail: String) {
@@ -130,37 +164,18 @@ struct SettingsView: View {
         #endif
     }
 
-    private func goalRow(
-        label: String, value: String, unit: String,
-        canDecrease: Bool, canIncrease: Bool,
-        decrease: @escaping () -> Void, increase: @escaping () -> Void
-    ) -> some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(label)
-                    .font(.chickenUI(13))
-                    .foregroundStyle(palette.muted)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(value)
-                        .font(.chickenDisplay(26))
-                        .foregroundStyle(palette.text)
-                        .contentTransition(.numericText())
-                    Text(unit)
-                        .font(.chickenSerif(14, italic: true))
-                        .foregroundStyle(palette.muted)
-                }
-                .monospacedDigit()
-            }
-            Spacer()
-            GlassStepper(label: label, canDecrease: canDecrease, canIncrease: canIncrease, decrease: {
-                withAnimation(.snappy) { decrease() }
-            }, increase: {
-                withAnimation(.snappy) { increase() }
-            })
+    private func actionRow(icon: String, title: String, detail: String, button: String, action: @escaping () -> Void) -> some View {
+        HStack(spacing: 14) {
+            actionRowLabel(icon: icon, title: title, detail: detail)
+            Spacer(minLength: 8)
+            Button(button, action: action)
+                .font(.chickenUI(13, weight: .medium))
+                .foregroundStyle(palette.text)
+                .buttonStyle(.glass)
         }
     }
 
-    private func actionRow(icon: String, title: String, detail: String, button: String, action: @escaping () -> Void) -> some View {
+    private func actionRowLabel(icon: String, title: String, detail: String) -> some View {
         HStack(spacing: 14) {
             Image(systemName: icon)
                 .font(.system(size: 17, weight: .light))
@@ -177,11 +192,6 @@ struct SettingsView: View {
                         .lineLimit(2)
                 }
             }
-            Spacer(minLength: 8)
-            Button(button, action: action)
-                .font(.chickenUI(13, weight: .medium))
-                .foregroundStyle(palette.text)
-                .buttonStyle(.glass)
         }
     }
 }

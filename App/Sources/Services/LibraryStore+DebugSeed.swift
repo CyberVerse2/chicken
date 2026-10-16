@@ -1,6 +1,7 @@
 #if DEBUG
 import ChickenKit
 import Foundation
+import SwiftData
 
 extension LibraryStore {
     /// `CHICKEN_DEBUG_SEED=<folder>` fills an empty debug library with the
@@ -79,6 +80,32 @@ extension LibraryStore {
         save()
         recomputeReadingStats()
         publishWidgetSnapshot()
+    }
+}
+#endif
+
+#if DEBUG
+extension LibraryStore {
+    /// `CHICKEN_DEBUG_FURTHER=continue` pretends an iPad read the book you're
+    /// reading a chapter and 15% further a minute ago, to check the reader's
+    /// offer to jump there.
+    func addDebugFurtherPositionIfRequested() {
+        guard ProcessInfo.processInfo.environment["CHICKEN_DEBUG_FURTHER"] == "continue",
+              let book = continueReadingBook() else { return }
+        for position in book.positions ?? [] where position.device == "debug-ipad" {
+            context.delete(position)
+        }
+        let position = ReadingPosition(device: "debug-ipad", deviceKind: "iPad")
+        position.book = book
+        position.progress = min(1, book.progress + 0.15)
+        // The start of the next chapter, as a real EPUB position when there is one.
+        let current = EPUBLocation.decode(book.lastLocation)
+        let next = (current?.spineIndex ?? 0) + 1
+        position.location = EPUBLocation(href: current?.href ?? "", spineIndex: next, progression: 0, globalProgression: position.progress).encoded
+        position.chapterIndex = next
+        position.updatedAt = Date().addingTimeInterval(-60)
+        context.insert(position)
+        save()
     }
 }
 #endif

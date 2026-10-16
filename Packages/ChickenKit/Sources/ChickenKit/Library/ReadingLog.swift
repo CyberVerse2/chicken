@@ -13,6 +13,35 @@ public enum ReadingLog {
         return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
     }
 
+    /// A year of reading from `(dayKey, seconds)` rows, which may hold several
+    /// rows per day (one per device). Rows from other years are ignored.
+    public struct Year: Equatable, Sendable {
+        public var totalSeconds = 0
+        /// Seconds per month, January first.
+        public var monthSeconds = Array(repeating: 0, count: 12)
+        /// Days with any reading.
+        public var daysRead = 0
+
+        public init() {}
+    }
+
+    public static func year(_ year: Int, from rows: [(dayKey: String, seconds: Int)]) -> Year {
+        let prefix = String(format: "%04d-", year)
+        var byDay: [String: Int] = [:]
+        for row in rows where row.dayKey.hasPrefix(prefix) && row.seconds > 0 {
+            byDay[row.dayKey, default: 0] += row.seconds
+        }
+        var result = Year()
+        for (key, seconds) in byDay {
+            let month = Int(key.dropFirst(5).prefix(2)) ?? 0
+            guard (1...12).contains(month) else { continue }
+            result.monthSeconds[month - 1] += seconds
+            result.totalSeconds += seconds
+            result.daysRead += 1
+        }
+        return result
+    }
+
     /// Splits a reading session into per-day seconds so a session that
     /// crosses midnight credits each day honestly.
     public static func split(from start: Date, to end: Date, calendar: Calendar = .current) -> [(dayKey: String, seconds: Int)] {

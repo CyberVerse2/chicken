@@ -96,6 +96,8 @@ final class ReaderModel {
     var error: String?
     var selection: ReaderSelection?
     var currentLocation: String?
+    /// The last progress the engine reported in this session.
+    @ObservationIgnored var reportedProgress: Double?
 
     // Typography and flow.
     var fontSize: Double
@@ -141,6 +143,12 @@ final class ReaderModel {
     func jump(toHighlight highlight: Highlight) {
         selection = nil
         engine?.jump(to: highlight.location, chapterIndex: highlight.chapterIndex)
+    }
+
+    /// Where another device got to.
+    func jump(to position: ReadingPosition) {
+        selection = nil
+        engine?.jump(to: position.location, chapterIndex: position.chapterIndex)
     }
 
     func jump(toBookmark bookmark: Bookmark) {
@@ -205,6 +213,7 @@ final class ReaderModel {
     }
 
     func reportProgress(_ progress: Double, location: String?) {
+        reportedProgress = progress
         if let location { currentLocation = location }
         // Updates the Live Activity too, once the progress is written.
         library.updateProgress(for: book, progress: progress, location: location)

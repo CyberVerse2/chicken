@@ -86,6 +86,23 @@ extension LibraryStore {
         readingSecondsToday = (secondsByDay[todayKey] ?? 0) + live
     }
 
+    /// This year's reading on every device, including a session still
+    /// running, which isn't in the stored rows yet.
+    func readingYear(of date: Date = Date()) -> ReadingLog.Year {
+        let rows = ((try? context.fetch(FetchDescriptor<ReadingDay>())) ?? []).map { (dayKey: $0.day, seconds: $0.seconds) }
+        let calendar = Calendar.current
+        var year = ReadingLog.year(calendar.component(.year, from: date), from: rows)
+        let todayKey = ReadingLog.dayKey(for: date)
+        let stored = rows.filter { $0.dayKey == todayKey }.reduce(0) { $0 + $1.seconds }
+        let live = readingSecondsToday - stored
+        if live > 0 {
+            year.totalSeconds += live
+            year.monthSeconds[calendar.component(.month, from: date) - 1] += live
+            if stored == 0 { year.daysRead += 1 }
+        }
+        return year
+    }
+
     func booksFinished(inYearOf date: Date = Date()) -> [Book] {
         let calendar = Calendar.current
         guard let interval = calendar.dateInterval(of: .year, for: date) else { return [] }

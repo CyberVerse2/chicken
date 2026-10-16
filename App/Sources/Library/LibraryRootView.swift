@@ -8,6 +8,8 @@ enum AppTab: Hashable {
     case library
     case notebook
     case search
+    /// Time read, the year's finished books, and goals.
+    case yourReading
     /// A book you're reading, picked from the sidebar's Reading section.
     case book(UUID)
 }
@@ -27,6 +29,10 @@ struct LibraryRootView: View {
     @Query private var highlights: [Highlight]
 
     @State private var tab: AppTab = LibraryRootView.initialTab
+    // The Library's own choices, set here when a notification opens it.
+    @AppStorage("Chicken.libraryFilter") private var libraryFilter: LibraryFilter = .all
+    @AppStorage("Chicken.librarySort") private var librarySort: LibrarySort = .recent
+    @AppStorage("Chicken.libraryCollection") private var libraryCollection = ""
     /// Covers, the reader, and the details sheet share this so books zoom
     /// open from wherever they were tapped (iPhone and iPad).
     @Namespace private var coverNamespace
@@ -42,6 +48,7 @@ struct LibraryRootView: View {
         case "library": return .library
         case "notebook": return .notebook
         case "search": return .search
+        case "reading": return .yourReading
         default: return .home
         }
         #else
@@ -102,6 +109,10 @@ struct LibraryRootView: View {
             return true
         }
         .overlay(alignment: .bottom) { ActivityToast() }
+        .collectionPicker()
+        .onReceive(NotificationCenter.default.publisher(for: .chickenShowLibrary)) { notification in
+            showLibrary(notification.userInfo?["place"] as? String)
+        }
         .onOpenURL(perform: handle)
         .spotlightIndexing(library: library, bookCount: books.count, highlightCount: highlights.count) { target in
             switch target {
@@ -141,6 +152,7 @@ struct LibraryRootView: View {
                 case .library: NavigationStack { BooksView() }
                 case .notebook: NavigationStack { NotebookView() }
                 case .search: NavigationStack { SearchView() }
+                case .yourReading: NavigationStack { YourReadingView() }
                 case .book(let id): NavigationStack { BookDetailView(bookID: id, isPage: true) }.id(id)
                 }
             }
@@ -169,6 +181,13 @@ struct LibraryRootView: View {
             Tab(value: AppTab.search, role: .search) {
                 NavigationStack { SearchView() }
             }
+            // In the sidebar only; on iPhone it opens from Home's goal cards.
+            if sizeClass == .regular {
+                Tab("Your Reading", systemImage: "chart.bar", value: AppTab.yourReading) {
+                    NavigationStack { YourReadingView() }
+                }
+                .defaultVisibility(.hidden, for: .tabBar)
+            }
             // Only where there's a sidebar: on iPhone these tabs would
             // crowd the tab bar into a "More" tab.
             if sizeClass == .regular && !reading.isEmpty {
@@ -187,8 +206,26 @@ struct LibraryRootView: View {
         }
         .tabViewStyle(.sidebarAdaptable)
         .tabViewSidebarHeader { SidebarHeader() }
-        .tabViewSidebarBottomBar { SidebarTodayMeter() }
+        .tabViewSidebarBottomBar { SidebarTodayMeter { tab = .yourReading } }
         #endif
+    }
+
+    /// A notification was tapped: the books just downloaded, or the books
+    /// just added.
+    private func showLibrary(_ place: String?) {
+        switch place {
+        case "downloadedBooks":
+            libraryFilter = .onDevice
+        case "recentlyAdded":
+            libraryFilter = .all
+            librarySort = .added
+        default:
+            return
+        }
+        libraryCollection = ""
+        router.presentedBookID = nil
+        router.detailBookID = nil
+        tab = .library
     }
 
     // MARK: Opening books
@@ -231,6 +268,7 @@ struct LibraryRootView: View {
             // Presentations don't inherit environment set on the presenter.
             .environment(\.coverNamespace, coverNamespace)
             .readingTheme(library.preferences.theme)
+            .collectionPicker()
             .zoomTransition(from: router.detailSource, in: coverNamespace)
     }
 
@@ -364,6 +402,8 @@ private struct SidebarHeader: View {
 struct SidebarTodayMeter: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
+    /// Opens Your Reading.
+    var open: () -> Void = {}
 
     private var goalSeconds: Int { library.preferences.dailyGoalMinutes * 60 }
     private var fraction: Double {
@@ -371,6 +411,11 @@ struct SidebarTodayMeter: View {
     }
 
     var body: some View {
+        Button(action: open) { meter }
+            .buttonStyle(.plain)
+    }
+
+    private var meter: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text("Today").chickenEyebrow(palette)
@@ -389,6 +434,7 @@ struct SidebarTodayMeter: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
+        .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Read today")
         .accessibilityValue("\(library.readingSecondsToday / 60) of \(library.preferences.dailyGoalMinutes) minutes")

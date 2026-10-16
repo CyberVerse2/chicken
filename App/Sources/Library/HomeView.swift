@@ -70,8 +70,15 @@ struct HomeView: View {
                         BookShelf(title: "Also reading", books: alsoReading, gutter: gutter, showsProgress: true)
                     }
 
-                    GoalsRow(finishedThisYear: finishedThisYear, annualGoal: library.preferences.annualBookGoal)
-                        .padding(.horizontal, gutter)
+                    NavigationLink {
+                        YourReadingView()
+                    } label: {
+                        GoalsRow(finishedThisYear: finishedThisYear, annualGoal: library.preferences.annualBookGoal)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens Your Reading")
+                    .padding(.horizontal, gutter)
 
                     BookShelf(title: "Recently added", books: recentlyAdded, gutter: gutter)
 
@@ -283,6 +290,7 @@ private struct ShelfItem: View {
                 BookCover(book: book, style: .tile)
                     .frame(width: width, height: width * 1.5)
                     .coverTransitionSource(book.id)
+                    .downloadBadge(book)
                     .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
                     .offset(y: hovering ? -6 : 0)
                     .coverRibbon(inProgress)

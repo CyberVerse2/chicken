@@ -24,6 +24,18 @@ final class AppPreferences {
     /// Identifies this device's reading-time rows in the synced library.
     let deviceID: String
 
+    /// Download every book in iCloud to this device, new ones included.
+    /// On by default on the Mac, which has the room.
+    var downloadsAllBooks: Bool {
+        didSet { defaults.set(downloadsAllBooks, forKey: Keys.downloadsAll) }
+    }
+
+    /// Books kept on this device: downloaded, and fetched again if the
+    /// system clears them to free space.
+    var keptBookIDs: Set<UUID> {
+        didSet { defaults.set(keptBookIDs.map(\.uuidString), forKey: Keys.keptBooks) }
+    }
+
     static let dailyGoalRange = 5...180
     static let annualGoalRange = 1...365
 
@@ -39,6 +51,12 @@ final class AppPreferences {
         dailyGoalMinutes = daily > 0 ? daily : 30
         let annual = defaults.integer(forKey: Keys.annualGoal)
         annualBookGoal = annual > 0 ? annual : 12
+        #if os(macOS)
+        downloadsAllBooks = defaults.object(forKey: Keys.downloadsAll) as? Bool ?? true
+        #else
+        downloadsAllBooks = defaults.object(forKey: Keys.downloadsAll) as? Bool ?? false
+        #endif
+        keptBookIDs = Set((defaults.stringArray(forKey: Keys.keptBooks) ?? []).compactMap(UUID.init(uuidString:)))
         if let existing = defaults.string(forKey: Keys.deviceID) {
             deviceID = existing
         } else {
@@ -53,5 +71,7 @@ final class AppPreferences {
         static let dailyGoal = "Chicken.dailyReadingMinutesGoal"
         static let annualGoal = "Chicken.annualBookGoal"
         static let deviceID = "Chicken.deviceID"
+        static let downloadsAll = "Chicken.downloadsAllBooks"
+        static let keptBooks = "Chicken.keptBooks"
     }
 }

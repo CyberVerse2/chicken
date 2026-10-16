@@ -337,6 +337,7 @@ struct BookDetailView: View {
                 BookCover(book: book, style: .hero)
                     .frame(width: 168, height: 252)
                     .coverTransitionSource(book.id)
+                    .downloadBadge(book, size: 28)
                     .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
                     .shadow(color: palette.shadow, radius: 22, x: 4, y: 16)
                     .coverRibbon(book.progress > 0 && !book.isFinished, length: 26, width: 12)
@@ -389,6 +390,7 @@ struct BookDetailView: View {
             Button { read(book) } label: {
                 BookCover(book: book, style: .hero)
                     .frame(width: 200, height: 300)
+                    .downloadBadge(book, size: 28)
                     .shadow(color: .black.opacity(0.3), radius: 2, x: 1, y: 1)
                     .shadow(color: .black.opacity(0.35), radius: 22, x: 4, y: 16)
                     .coverRibbon(book.progress > 0 && !book.isFinished, length: 30, width: 13)
@@ -497,6 +499,8 @@ struct BookDetailView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([library.fileURL(for: book)])
             }
             #endif
+            CollectionMenuItem(book: book)
+            DownloadMenuItems(book: book)
             Divider()
             Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
         } label: {
@@ -523,6 +527,8 @@ struct BookDetailView: View {
                     Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {
                         library.setFinished(!book.isFinished, for: book)
                     }
+                    CollectionMenuItem(book: book)
+                    DownloadMenuItems(book: book)
                     Divider()
                     Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
                 } label: {

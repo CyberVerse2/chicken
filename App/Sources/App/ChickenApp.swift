@@ -36,6 +36,7 @@ struct ChickenApp: App {
                 .environment(router)
                 .modelContainer(library.container)
                 .readingTheme(library.preferences.theme)
+                .task { ChickenNotifications.shared.start(library: library) }
         }
         #if os(macOS)
         .defaultSize(width: 1200, height: 820)
@@ -43,9 +44,13 @@ struct ChickenApp: App {
         #endif
         .onChange(of: scenePhase) { _, phase in
             switch phase {
-            case .active: library.appDidBecomeActive()
+            case .active:
+                library.appDidBecomeActive()
+                ChickenNotifications.shared.refresh()
             case .background, .inactive:
                 library.appDidResignActive()
+                // Reading today moves the nudge to tomorrow.
+                ChickenNotifications.shared.refresh()
                 #if os(iOS)
                 // Today's minutes were just counted; the island shows them.
                 ReadingActivityController.shared.refresh()
@@ -107,11 +112,19 @@ final class AppRouter {
         detailSource = source
         detailBookID = id
     }
+    /// Books being added to a collection; shows the collection picker.
+    var collectingBooks: CollectingBooks?
     var showingImporter = false
     var showingDiscovery = false
     var showingSettings = false
     /// Set by the "Continue Reading" intent; the library opens the book once it appears.
     var pendingDestination: ChickenLink.Destination?
+}
+
+/// The books "Add to Collection" is for.
+struct CollectingBooks: Identifiable {
+    let id = UUID()
+    let bookIDs: [UUID]
 }
 
 /// Opens a book in the platform-appropriate way: a new window on the Mac, a

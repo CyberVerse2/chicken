@@ -5,6 +5,8 @@ struct BookGrid: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var typeSize
     let books: [Book]
+    /// Set while picking books: a tap selects instead of opening.
+    var selection: Binding<Set<UUID>>?
 
     private var spacing: CGFloat { sizeClass == .compact ? 18 : 32 }
 
@@ -19,7 +21,7 @@ struct BookGrid: View {
     var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: sizeClass == .compact ? 34 : 46) {
             ForEach(books) { book in
-                BookTile(book: book, ledgeOverhang: spacing / 2)
+                BookTile(book: book, ledgeOverhang: spacing / 2, selection: selection)
                     .id(book.id)
             }
         }
@@ -38,16 +40,38 @@ private struct BookTile: View {
     /// Each tile's ledge reaches halfway into the gap on either side, so a
     /// row of tiles reads as one continuous shelf.
     let ledgeOverhang: CGFloat
+    var selection: Binding<Set<UUID>>?
     @State private var hovering = false
+
+    private var isSelected: Bool { selection?.wrappedValue.contains(book.id) ?? false }
+
+    private func tapped() {
+        guard let selection else {
+            selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id))
+            return
+        }
+        if isSelected { selection.wrappedValue.remove(book.id) } else { selection.wrappedValue.insert(book.id) }
+    }
 
     private var inProgress: Bool { book.progress > 0 && !book.isFinished }
 
     var body: some View {
-        Button { selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
+        Button(action: tapped) {
             VStack(alignment: .leading, spacing: 14) {
                 BookCover(book: book, style: .tile)
                     .aspectRatio(2.0 / 3.0, contentMode: .fit)
                     .coverTransitionSource(book.id)
+                    .downloadBadge(book)
+                    .overlay(alignment: .topTrailing) {
+                        if selection != nil {
+                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20, weight: .medium))
+                                .foregroundStyle(isSelected ? palette.ribbon : palette.muted)
+                                .background(palette.surface.opacity(0.92), in: .circle)
+                                .padding(6)
+                                .transition(.opacity)
+                        }
+                    }
                     .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
                     .offset(y: hovering ? -6 : 0)
                     .background(alignment: .bottom) {
@@ -80,6 +104,7 @@ private struct BookTile: View {
         .animation(.smooth(duration: 0.25), value: hovering)
         .bookContextMenu(book)
         .accessibilityLabel("\(book.displayTitle) by \(book.displayAuthor)")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
         .accessibilityValue(statusText)
     }
 
@@ -142,6 +167,8 @@ private struct BookContextMenu: ViewModifier {
                 } else {
                     Button("Mark as Finished", systemImage: "checkmark.circle") { library.setFinished(true, for: book) }
                 }
+                CollectionMenuItem(book: book)
+                DownloadMenuItems(book: book)
                 Divider()
                 Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
             } preview: {

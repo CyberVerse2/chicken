@@ -53,6 +53,12 @@ struct ReaderView: View {
     @State private var bookFile: URL?
     @State private var downloadError: String?
     @State private var downloadAttempt = 0
+    /// When this device last had the book open, taken before this session
+    /// writes anything; another device's position counts if it's newer.
+    @State private var positionBaseline: Date?
+    /// Another device that read further since, offered once per position.
+    @State private var furtherPosition: ReadingPosition?
+    @State private var dismissedPosition: Date?
 
     init(book: Book, library: LibraryStore) {
         self.library = library
@@ -135,7 +141,9 @@ struct ReaderView: View {
         .animation(.easeInOut(duration: 0.18), value: showChapters)
         .animation(.easeInOut(duration: 0.4), value: library.preferences.theme)
         .onAppear {
+            positionBaseline = library.position(for: book)?.updatedAt ?? .distantPast
             library.markOpened(book)
+            library.setOpen(true, book)
             library.readerDidAppear()
         }
         #if DEBUG
@@ -156,6 +164,7 @@ struct ReaderView: View {
             model.readAloud.stop()
             model.engine?.captureLocation()
             model.savePreferences()
+            library.setOpen(false, book)
             library.readerDidDisappear()
             library.save()
         }
@@ -219,6 +228,21 @@ struct ReaderView: View {
     private var readingSurface: some View {
         engineView
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .top) {
+                if let furtherPosition {
+                    furtherBanner(furtherPosition)
+                        .padding(.top, 12)
+                        .padding(.horizontal, 16)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.smooth(duration: 0.3), value: furtherPosition?.updatedAt)
+            .task {
+                // Give a position from another device a moment to arrive.
+                try? await Task.sleep(for: .seconds(2))
+                checkFurtherPosition()
+            }
+            .onChange(of: library.remoteChangeGeneration) { checkFurtherPosition() }
             .overlay {
                 if isWaitingForFirstPage {
                     ZStack {
@@ -363,6 +387,54 @@ struct ReaderView: View {
         }
     }
 
+    // MARK: Another device read further
+
+    private func checkFurtherPosition() {
+        guard let baseline = positionBaseline, furtherPosition == nil else { return }
+        let current = model.reportedProgress ?? book.progress
+        guard let candidate = library.furtherPosition(for: book, than: current, since: baseline) else { return }
+        if let dismissed = dismissedPosition, candidate.updatedAt <= dismissed { return }
+        furtherPosition = candidate
+    }
+
+    private func dismissFurther() {
+        dismissedPosition = furtherPosition?.updatedAt
+        furtherPosition = nil
+    }
+
+    /// "62% on your iPad, 2 hours ago", with a way there.
+    private func furtherBanner(_ position: ReadingPosition) -> some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(Int((position.progress * 100).rounded()))% on your \(position.deviceKind.isEmpty ? "other device" : position.deviceKind)")
+                    .font(.chickenUI(13.5, weight: .semibold))
+                    .foregroundStyle(palette.text)
+                Text(position.updatedAt, format: .relative(presentation: .named))
+                    .font(.chickenSerif(12.5, italic: true))
+                    .foregroundStyle(palette.muted)
+            }
+            Button("Go") {
+                model.jump(to: position)
+                dismissFurther()
+            }
+            .font(.chickenUI(13, weight: .medium))
+            .inkProminentButton()
+            Button(action: dismissFurther) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(palette.muted)
+                    .frame(width: 26, height: 26)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Stay here")
+        }
+        .padding(.leading, 18)
+        .padding(.trailing, 10)
+        .padding(.vertical, 9)
+        .glassEffect(.regular, in: .capsule)
+    }
+
     /// The book's cover while its file comes down from iCloud.
     private var downloadingView: some View {
         VStack(spacing: 22) {
@@ -384,7 +456,7 @@ struct ReaderView: View {
                 }
             } else {
                 Label {
-                    Text("Downloading from iCloud…")
+                    Text(library.download(for: book)?.progress.map { "Downloading from iCloud… \(Int(($0 * 100).rounded()))%" } ?? "Downloading from iCloud…")
                 } icon: {
                     ProgressView().controlSize(.small)
                 }

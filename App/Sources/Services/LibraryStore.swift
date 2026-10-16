@@ -31,6 +31,9 @@ final class LibraryStore {
     /// Bumped when covers arrive from iCloud, so covers waiting on a
     /// download look again.
     var cloudFilesGeneration = 0
+    /// Bumped when changes arrive from another device, so an open reader can
+    /// check whether that device read further.
+    var remoteChangeGeneration = 0
 
     // Reading time, kept live while a reader is open.
     var readingSecondsToday = 0
@@ -49,6 +52,20 @@ final class LibraryStore {
     /// Covers in iCloud that are on this device, kept by `cloudWatcher` so
     /// showing a cover never has to ask iCloud. Nil until its first report.
     @ObservationIgnored var downloadedCloudCovers: Set<String>?
+    /// Book files in iCloud by name, from `cloudWatcher`; nil until its
+    /// first report. `bookDownloads` hands out what views observe.
+    @ObservationIgnored var bookFileStates: [String: CloudFileWatcher.BookFile]?
+    @ObservationIgnored var bookDownloads: [String: BookDownload] = [:]
+    @ObservationIgnored var openBookIDs: Set<UUID> = []
+    /// Book files the user asked to download, and how many in this batch,
+    /// for "Ready to read offline" when the last one lands.
+    @ObservationIgnored var requestedDownloads: Set<String> = []
+    @ObservationIgnored var requestedDownloadCount = 0
+    // Sync health, for telling the user about problems once.
+    @ObservationIgnored var syncDatabaseFull = false
+    @ObservationIgnored var syncFilesFull = false
+    @ObservationIgnored var syncSignedOut = false
+    @ObservationIgnored var syncLastHealthy = false
     @ObservationIgnored var cloudObservers: [NSObjectProtocol] = []
     @ObservationIgnored var cloudMoveTask: Task<Void, Never>?
     @ObservationIgnored var cloudChangeTask: Task<Void, Never>?
@@ -64,6 +81,7 @@ final class LibraryStore {
         publishWidgetSnapshot()
         #if DEBUG
         seedDebugLibraryIfRequested()
+        addDebugFurtherPositionIfRequested()
         #endif
     }
 
@@ -212,6 +230,7 @@ final class LibraryStore {
         } else if !nowFinished && wasFinished {
             book.finishedAt = nil
         }
+        recordPosition(for: book, progress: clamped, location: location)
         publishWidgetSnapshot()
     }
 
@@ -286,6 +305,7 @@ final class LibraryStore {
 
     func delete(_ book: Book) {
         let files = storedFiles(of: book)
+        preferences.keptBookIDs.remove(book.id)
         context.delete(book)
         save()
         Task.detached(priority: .utility) {

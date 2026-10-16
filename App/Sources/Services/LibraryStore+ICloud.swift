@@ -15,7 +15,11 @@ extension LibraryStore {
             return
         }
         iCloudStatus = .checking
-        observeRemoteChanges()
+        // Once, even when iCloud connects again after signing back in.
+        if cloudObservers.isEmpty {
+            observeRemoteChanges()
+            watchSyncHealth()
+        }
         Task.detached(priority: .utility) { [weak self] in
             let folders = CloudFolders.resolve()
             await MainActor.run {
@@ -29,6 +33,7 @@ extension LibraryStore {
                 self.watchICloudFiles()
                 self.moveFilesToICloud(thenRefreshDerivedData: true)
                 self.mergeDuplicateBooks()
+                self.mergeDuplicateCollections()
             }
         }
     }
@@ -99,6 +104,7 @@ extension LibraryStore {
         }
         watcher.start()
         cloudWatcher = watcher
+        updateWantedDownloads()
     }
 
     private func cloudFilesDidChange(_ change: CloudFileWatcher.Change) {
@@ -107,8 +113,10 @@ extension LibraryStore {
             cloudFilesGeneration += 1
             publishWidgetSnapshot()
         }
+        applyBookFileStates(change.bookFiles)
+        iCloudFilesOverQuota(change.uploadsBlockedByQuota)
         // A duplicate waits for the kept copy's file; this may be it.
-        if change.bookFilesChanged { mergeDuplicateBooks() }
+        if change.bookFilesAddedOrRemoved { mergeDuplicateBooks() }
     }
 
     /// Books, highlights, and reading time changed on another device.
@@ -125,8 +133,10 @@ extension LibraryStore {
             try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled, let self else { return }
             self.mergeDuplicateBooks()
+            self.mergeDuplicateCollections()
             self.recomputeReadingStats()
             self.publishWidgetSnapshot()
+            self.remoteChangeGeneration += 1
         }
     }
 
@@ -185,6 +195,23 @@ extension LibraryStore {
             } else {
                 bookmark.book = keeper
             }
+        }
+        // One position per device: the more recent one stays.
+        for position in duplicate.positions ?? [] {
+            if let existing = keeper.positions?.first(where: { $0.device == position.device }) {
+                if position.updatedAt > existing.updatedAt {
+                    existing.progress = position.progress
+                    existing.location = position.location
+                    existing.chapterIndex = position.chapterIndex
+                    existing.updatedAt = position.updatedAt
+                }
+                context.delete(position)
+            } else {
+                position.book = keeper
+            }
+        }
+        for collection in duplicate.collections ?? [] where !(collection.books ?? []).contains(where: { $0 === keeper }) {
+            collection.books?.append(keeper)
         }
 
         let keptNames = [keeper.storedFileName, keeper.coverImageName]

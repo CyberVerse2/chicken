@@ -183,7 +183,7 @@ struct GoalsRow: View {
     }
 }
 
-private struct GoalCard<Content: View>: View {
+struct GoalCard<Content: View>: View {
     @Environment(\.palette) private var palette
     @ViewBuilder var content: Content
 
@@ -200,7 +200,7 @@ private struct GoalCard<Content: View>: View {
 }
 
 /// A large figure in the display face over an italic unit.
-private struct GoalFigure: View {
+struct GoalFigure: View {
     @Environment(\.palette) private var palette
     let value: String
     let unit: String

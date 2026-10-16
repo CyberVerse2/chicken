@@ -15,6 +15,7 @@ struct MacSidebar: View {
                 Label("Library", systemImage: "books.vertical").tag(AppTab.library)
                 Label("Notebook", systemImage: "highlighter").tag(AppTab.notebook)
                 Label("Search", systemImage: "magnifyingglass").tag(AppTab.search)
+                Label("Your Reading", systemImage: "chart.bar").tag(AppTab.yourReading)
             }
             if !reading.isEmpty {
                 Section("Reading") {
@@ -38,7 +39,7 @@ struct MacSidebar: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            SidebarTodayMeter()
+            SidebarTodayMeter { selection = .yourReading }
                 .padding(.horizontal, 6)
                 .padding(.bottom, 8)
         }
