@@ -5,7 +5,7 @@ import SwiftUI
 struct ContinueReadingIntent: AppIntent {
     static let title: LocalizedStringResource = "Continue Reading"
     static let description = IntentDescription("Opens the book you were reading most recently, at your place.")
-    static let openAppWhenRun = true
+    static let supportedModes: IntentModes = .foreground
 
     @MainActor
     func perform() async throws -> some IntentResult {
@@ -17,7 +17,7 @@ struct ContinueReadingIntent: AppIntent {
 struct OpenBookIntent: AppIntent {
     static let title: LocalizedStringResource = "Open Book"
     static let description = IntentDescription("Opens a book from your library at your place.")
-    static let openAppWhenRun = true
+    static let supportedModes: IntentModes = .foreground
 
     @Parameter(title: "Book")
     var book: BookEntity
@@ -33,29 +33,22 @@ struct OpenBookIntent: AppIntent {
     }
 }
 
-/// Opens the book you last highlighted, at that passage.
 struct OpenLastHighlightIntent: AppIntent {
     static let title: LocalizedStringResource = "Open My Last Highlight"
     static let description = IntentDescription("Opens the book with your most recent highlight, at that passage.")
-    static let openAppWhenRun = true
+    static let supportedModes: IntentModes = .foreground
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let library = LibraryStore.shared
-        let latest = library.allBooks()
-            .flatMap { $0.highlights ?? [] }
-            .max { $0.createdAt < $1.createdAt }
-        guard let highlight = latest, let book = highlight.book else {
+        guard let highlight = library.latestHighlight(), let book = highlight.book else {
             return .result(dialog: "You haven't highlighted anything yet.")
         }
-        if let location = highlight.location { book.lastLocation = location }
-        library.save()
-        AppRouter.shared.pendingDestination = .book(book.id)
+        AppRouter.shared.pendingDestination = .highlight(highlight.id)
         return .result(dialog: "Opening \(book.displayTitle).")
     }
 }
 
-/// "How much have I read today?" Answers without opening the app.
 struct ReadingTodayIntent: AppIntent {
     static let title: LocalizedStringResource = "Reading Today"
     static let description = IntentDescription("Tells you how many minutes you've read today, against your daily goal.")
@@ -75,7 +68,12 @@ struct ReadingTodayIntent: AppIntent {
             dialog = "You've read \(minutes) of \(goal) minutes today, \(goal - minutes) to go."
         }
         return .result(value: minutes, dialog: dialog) {
-            ReadingTodaySnippet(minutes: minutes, goal: goal, days: library.lastSevenDays.map { $0.seconds / 60 })
+            ReadingTodaySnippet(
+                minutes: minutes,
+                goal: goal,
+                days: library.lastSevenDays.map { $0.seconds / 60 },
+                ribbonHex: library.preferences.theme.palette.ribbonHex
+            )
         }
     }
 }
@@ -104,25 +102,28 @@ struct MarkBookFinishedIntent: AppIntent {
     }
 }
 
-/// The answer card for "Reading Today": the goal ring and the week.
 private struct ReadingTodaySnippet: View {
     let minutes: Int
     let goal: Int
     let days: [Int]
+    let ribbonHex: UInt32
 
     private var fraction: Double { goal > 0 ? min(1, Double(minutes) / Double(goal)) : 0 }
-    private let ribbon = Color(red: 0.8, green: 0.553, blue: 0.27)
+    private var ribbon: Color { .hex(ribbonHex) }
 
     var body: some View {
         HStack(spacing: 20) {
             ZStack {
                 Circle().stroke(.secondary.opacity(0.25), lineWidth: 6)
-                Circle()
-                    .trim(from: 0, to: max(0.02, fraction))
-                    .stroke(ribbon, style: StrokeStyle(lineWidth: 6, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
+                if minutes > 0 {
+                    Circle()
+                        .trim(from: 0, to: max(0.03, fraction))
+                        .stroke(ribbon, style: StrokeStyle(lineWidth: 6, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                }
                 VStack(spacing: 0) {
-                    Text("\(minutes)").font(.custom("Superclarendon-Regular", size: 22))
+                    Text("\(minutes)")
+                        .font(.system(size: 22, weight: .semibold, design: .serif))
                     Text("of \(goal) min").font(.caption2).foregroundStyle(.secondary)
                 }
                 .monospacedDigit()
@@ -136,7 +137,7 @@ private struct ReadingTodaySnippet: View {
                     ForEach(Array(days.enumerated()), id: \.offset) { index, value in
                         RoundedRectangle(cornerRadius: 2)
                             .fill(index == days.count - 1 ? ribbon : .secondary.opacity(0.5))
-                            .frame(width: 10, height: max(3, 44 * CGFloat(value) / CGFloat(scale)))
+                            .frame(width: 10, height: value == 0 ? 2 : max(4, 44 * CGFloat(value) / CGFloat(scale)))
                     }
                 }
                 .frame(height: 44, alignment: .bottom)

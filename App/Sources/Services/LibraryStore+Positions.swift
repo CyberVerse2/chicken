@@ -1,22 +1,11 @@
 import ChickenKit
 import Foundation
 import SwiftData
-#if os(iOS)
-import UIKit
-#endif
 
 /// Where each device is in each book. The book itself keeps whichever
 /// position was saved last; these rows let a device notice that another
 /// read further since it last had the book open.
 extension LibraryStore {
-    static var deviceKind: String {
-        #if os(macOS)
-        "Mac"
-        #else
-        UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
-        #endif
-    }
-
     /// This device's row for the book, if it has read it.
     func position(for book: Book) -> ReadingPosition? {
         let device = preferences.deviceID
@@ -25,7 +14,7 @@ extension LibraryStore {
 
     func recordPosition(for book: Book, progress: Double, location: String?) {
         let position = self.position(for: book) ?? {
-            let position = ReadingPosition(device: preferences.deviceID, deviceKind: Self.deviceKind)
+            let position = ReadingPosition(device: preferences.deviceID, deviceKind: Platform.deviceName)
             position.book = book
             context.insert(position)
             return position

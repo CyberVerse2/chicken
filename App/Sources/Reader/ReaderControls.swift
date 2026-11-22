@@ -1,16 +1,13 @@
 import ChickenKit
 import SwiftUI
 
-// MARK: - Progress
-
-/// Floating glass bar at the bottom of the reader: progress, a scrubber,
-/// and where you are in the book.
 struct ReaderProgressBar: View {
     @Environment(\.palette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: ReaderModel
     let compact: Bool
     @State private var dragProgress: Double?
+    @State private var lastSeekTime: Date = .distantPast
 
     private var shown: Double { min(1, max(0, dragProgress ?? model.overallProgress)) }
 
@@ -19,64 +16,82 @@ struct ReaderProgressBar: View {
             Text("\(Int((shown * 100).rounded()))%")
                 .font(.chickenMono(11, weight: .medium))
                 .foregroundStyle(palette.muted)
-                .frame(minWidth: 34, alignment: .leading)
+                .frame(width: 38, alignment: .leading)
                 .contentTransition(.numericText())
 
             scrubber
 
             VStack(alignment: .trailing, spacing: 2) {
-                // At the end the readout turns to serif italic: a quiet
-                // marker that the book is finished.
                 Text(model.pageReadout)
                     .font(model.isOnLastPage ? .chickenSerif(12, italic: true) : .chickenMono(11))
                     .foregroundStyle(palette.muted)
-                if !compact {
-                    if !model.timeReadout.isEmpty {
-                        Text(model.timeReadout)
-                            .font(.chickenMono(10))
-                            .foregroundStyle(palette.faint)
-                            .lineLimit(1)
-                    }
+                if !compact, !model.timeReadout.isEmpty {
+                    Text(model.timeReadout)
+                        .font(.chickenMono(10))
+                        .foregroundStyle(palette.faint)
+                        .lineLimit(1)
                 }
             }
             .monospacedDigit()
             .fixedSize()
         }
         .padding(.horizontal, 18)
-        .padding(.vertical, compact ? 10 : 12)
+        .padding(.vertical, compact ? 8 : 10)
         .frame(maxWidth: 820)
         .glassEffect(.regular, in: .capsule)
-        .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: shown)
+        .animation(reduceMotion || dragProgress != nil ? nil : ChickenMotion.micro, value: shown)
     }
 
     private var scrubber: some View {
         GeometryReader { geometry in
             let width = max(geometry.size.width, 1)
+            let isDragging = dragProgress != nil
+            let thumbSize: CGFloat = isDragging ? 14 : 10
+            let trackOffset = (width - thumbSize) * shown
             ZStack(alignment: .leading) {
-                Capsule().fill(palette.text.opacity(0.12)).frame(height: 3)
-                Capsule().fill(palette.ribbon).frame(width: width * shown, height: 3)
+                HStack(spacing: 0) {
+                    ForEach(0..<18, id: \.self) { index in
+                        let fraction = Double(index) / 17.0
+                        Rectangle()
+                            .fill(fraction <= shown ? palette.ribbon.opacity(0.45) : palette.text.opacity(0.12))
+                            .frame(width: 1, height: index % 3 == 0 ? 7 : 4)
+                        if index < 17 { Spacer(minLength: 0) }
+                    }
+                }
+                .offset(y: 7)
+                .allowsHitTesting(false)
+
+                Capsule().fill(palette.text.opacity(0.14)).frame(height: 3)
+                Capsule().fill(palette.ribbon).frame(width: max(thumbSize / 2, width * shown), height: 3)
                 Circle()
                     .fill(palette.ribbon)
-                    .overlay(Circle().stroke(palette.background.opacity(0.8), lineWidth: 1.5))
-                    .frame(width: dragProgress == nil ? 9 : 13, height: dragProgress == nil ? 9 : 13)
-                    .offset(x: min(width - 9, max(0, width * shown - 4.5)))
+                    .overlay(Circle().stroke(palette.background.opacity(0.85), lineWidth: 1.5))
+                    .frame(width: thumbSize, height: thumbSize)
+                    .offset(x: trackOffset)
             }
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        if dragProgress == nil { Haptics.selection() }
                         let progress = min(1, max(0, value.location.x / width))
                         dragProgress = progress
-                        model.seek(to: progress)
+                        let now = Date()
+                        if now.timeIntervalSince(lastSeekTime) >= 0.08 {
+                            lastSeekTime = now
+                            model.seek(to: progress)
+                        }
                     }
                     .onEnded { value in
-                        model.seek(to: min(1, max(0, value.location.x / width)))
+                        let finalProgress = min(1, max(0, value.location.x / width))
+                        model.seek(to: finalProgress)
                         dragProgress = nil
+                        Haptics.impact(.light)
                     }
             )
         }
-        .frame(height: 24)
+        .frame(height: 36)
         .accessibilityElement()
         .accessibilityLabel("Reading position")
         .accessibilityValue("\(Int((shown * 100).rounded())) percent")
@@ -87,15 +102,14 @@ struct ReaderProgressBar: View {
     }
 }
 
-// MARK: - Highlighting
-
-/// Appears while text is selected: pick a color to highlight it.
 struct HighlightPicker: View {
     @Environment(\.palette) private var palette
     let model: ReaderModel
+    var onShareSelection: ((String) -> Void)?
+    @State private var copied = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 4) {
             ForEach(HighlightColor.allCases) { color in
                 Button {
                     model.addHighlight(color: color)
@@ -104,20 +118,49 @@ struct HighlightPicker: View {
                         .fill(color.bar)
                         .frame(width: 24, height: 24)
                         .overlay(Circle().stroke(palette.text.opacity(0.15), lineWidth: 0.5))
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TactilePressStyle())
                 .accessibilityLabel("Highlight \(color.label)")
             }
-            Divider().frame(height: 18)
-            Button("Copy", systemImage: "doc.on.doc") {
-                if let text = model.selection?.text { Clipboard.copy(text) }
+            Divider().frame(height: 18).padding(.horizontal, 2)
+            Button {
+                if let text = model.selection?.text {
+                    Clipboard.copy(text)
+                    Haptics.impact(.light)
+                    copied = true
+                    Task {
+                        try? await Task.sleep(for: .seconds(1.2))
+                        copied = false
+                    }
+                }
+            } label: {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(copied ? palette.ribbon : palette.muted)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Circle())
             }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.plain)
-            .foregroundStyle(palette.muted)
+            .buttonStyle(TactilePressStyle())
+            .accessibilityLabel(copied ? "Copied" : "Copy")
+
+            if let onShareSelection, let text = model.selection?.text {
+                Button {
+                    onShareSelection(text)
+                } label: {
+                    Image(systemName: "square.and.arrow.up")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(palette.muted)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(TactilePressStyle())
+                .accessibilityLabel("Share Quote Card")
+            }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
         .glassEffect(.regular.interactive(), in: .capsule)
     }
 }
@@ -133,47 +176,62 @@ enum Clipboard {
     }
 }
 
-// MARK: - Search
-
 struct ReaderSearchBar: View {
     @Environment(\.palette) private var palette
     @Binding var text: String
+    let matchSummary: String?
     let onSearch: (_ backwards: Bool) -> Void
     let onClose: () -> Void
     @FocusState private var focused: Bool
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").foregroundStyle(palette.faint)
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(palette.faint)
+                .padding(.leading, 6)
             TextField("Search in book", text: $text)
                 .textFieldStyle(.plain)
                 .font(.chickenUI(14))
                 .focused($focused)
                 .onSubmit { onSearch(false) }
-                .frame(minWidth: 180)
-            Button("Previous match", systemImage: "chevron.up") { onSearch(true) }
+                .frame(minWidth: 140)
+            if let matchSummary {
+                Text(matchSummary)
+                    .font(.chickenMono(11))
+                    .foregroundStyle(palette.faint)
+                    .fixedSize()
+            }
+            searchButton("Previous match", systemImage: "chevron.up") { onSearch(true) }
                 .keyboardShortcut("g", modifiers: [.command, .shift])
-            Button("Next match", systemImage: "chevron.down") { onSearch(false) }
+            searchButton("Next match", systemImage: "chevron.down") { onSearch(false) }
                 .keyboardShortcut("g")
-            Button("Close search", systemImage: "xmark") { onClose() }
+            searchButton("Close search", systemImage: "xmark") { onClose() }
         }
-        .labelStyle(.iconOnly)
-        .buttonStyle(.plain)
-        .foregroundStyle(palette.muted)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .frame(maxWidth: 420)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .frame(maxWidth: 460)
         .glassEffect(.regular, in: .capsule)
         .padding(.horizontal, 16)
         .onAppear { focused = true }
     }
+
+    private func searchButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(palette.muted)
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
+        }
+        .buttonStyle(TactilePressStyle(scale: 0.92))
+        .accessibilityLabel(title)
+    }
 }
 
-// MARK: - Typography
-
 struct TypographyPanel: View {
-    @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Bindable var model: ReaderModel
     let isCompact: Bool
 
@@ -185,6 +243,7 @@ struct TypographyPanel: View {
             VStack(alignment: .leading, spacing: 22) {
                 if hasTypography {
                     sample
+                        .padding(.horizontal, 20)
                     typefacePicker
                     VStack(spacing: 0) {
                         row(
@@ -211,7 +270,12 @@ struct TypographyPanel: View {
                             )
                         }
                     }
-                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.surface))
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(palette.surface)
+                            .stroke(palette.border, lineWidth: 0.5)
+                    )
+                    .padding(.horizontal, 20)
                 }
 
                 if model.book.format.supportsFlowModes {
@@ -223,24 +287,51 @@ struct TypographyPanel: View {
                             }
                         }
                     }
+                    .padding(.horizontal, 20)
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Theme").chickenEyebrow(palette)
                     ThemeSwatchPicker(compact: true)
                 }
+                .padding(.horizontal, 20)
+
+                if model.book.format == .pdf && palette.isDark {
+                    Toggle(isOn: $model.darkModePDF) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Dark pages")
+                                .font(.chickenUI(14, weight: .medium))
+                                .foregroundStyle(palette.text)
+                            Text("Invert bright PDF pages in Ink mode")
+                                .font(.chickenUI(12))
+                                .foregroundStyle(palette.muted)
+                        }
+                    }
+                    .tint(palette.ribbon)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 16, style: .continuous)
+                            .fill(palette.surface)
+                            .stroke(palette.border, lineWidth: 0.5)
+                    )
+                    .padding(.horizontal, 20)
+                }
 
                 if hasTypography {
                     Button("Reset to Defaults", systemImage: "arrow.counterclockwise") {
-                        withAnimation(.snappy) { model.resetTypography() }
+                        Haptics.selection()
+                        withAnimation(reduceMotion ? nil : ChickenMotion.snappy) { model.resetTypography() }
                     }
                     .font(.chickenUI(13, weight: .medium))
                     .foregroundStyle(palette.muted)
-                    .buttonStyle(.plain)
+                    .buttonStyle(TactilePressStyle(scale: 0.96))
                     .frame(maxWidth: .infinity)
+                    .frame(minHeight: 36)
+                    .padding(.horizontal, 20)
                 }
             }
-            .padding(20)
+            .padding(.vertical, 20)
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(width: isCompact ? nil : 340)
@@ -248,14 +339,14 @@ struct TypographyPanel: View {
         .background(palette.background.opacity(isCompact ? 1 : 0))
     }
 
-    /// Each face set in itself, in a horizontally scrolling row.
     private var typefacePicker: some View {
         ScrollView(.horizontal) {
             HStack(spacing: 8) {
                 ForEach(ReaderTypeface.allCases) { face in
                     let selected = model.typeface == face
                     Button {
-                        withAnimation(.snappy) { model.typeface = face }
+                        Haptics.selection()
+                        withAnimation(reduceMotion ? nil : ChickenMotion.snappy) { model.typeface = face }
                     } label: {
                         VStack(spacing: 4) {
                             Text("Ag").font(face.font(22))
@@ -264,27 +355,38 @@ struct TypographyPanel: View {
                                 .lineLimit(1)
                         }
                         .foregroundStyle(selected ? palette.text : palette.muted)
-                        .frame(minWidth: 64)
+                        .frame(minWidth: 68)
                         .padding(.vertical, 10)
-                        .padding(.horizontal, 8)
+                        .padding(.horizontal, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(selected ? palette.surface : palette.surfaceAlt.opacity(0.5))
-                                .stroke(selected ? palette.ribbon : .clear, lineWidth: 1.5)
+                                .fill(selected ? palette.surface : palette.surfaceAlt.opacity(0.6))
+                                .stroke(selected ? palette.ribbon : palette.border, lineWidth: selected ? 1.5 : 0.5)
                         )
                         .contentShape(RoundedRectangle(cornerRadius: 14))
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(TactilePressStyle())
                     .accessibilityLabel(face.label)
                     .accessibilityAddTraits(selected ? .isSelected : [])
                 }
             }
         }
         .scrollIndicators(.hidden)
-        .scrollClipDisabled()
+        .contentMargins(.horizontal, 20, for: .scrollContent)
+        .mask {
+            LinearGradient(
+                stops: [
+                    .init(color: .clear, location: 0),
+                    .init(color: .black, location: 0.03),
+                    .init(color: .black, location: 0.93),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+        }
     }
 
-    /// A live preview of the current face, size, and spacing.
     private var sample: some View {
         Text("Rain on the window, tea gone cold, and one more chapter before bed.")
             .font(model.typeface.font(min(model.fontSize, 22)))
@@ -293,10 +395,13 @@ struct TypographyPanel: View {
             .lineLimit(3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(16)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.surfaceAlt.opacity(0.6)))
-            .animation(.snappy, value: model.fontSize)
-            .animation(.snappy, value: model.lineHeight)
-            .animation(.snappy, value: model.typeface)
+            .background(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(palette.surfaceAlt.opacity(0.75))
+            )
+            .animation(reduceMotion ? nil : ChickenMotion.micro, value: model.fontSize)
+            .animation(reduceMotion ? nil : ChickenMotion.micro, value: model.lineHeight)
+            .animation(reduceMotion ? nil : ChickenMotion.micro, value: model.typeface)
             .accessibilityHidden(true)
     }
 
@@ -312,7 +417,11 @@ struct TypographyPanel: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).font(.chickenUI(14)).foregroundStyle(palette.text)
-                Text(value).font(.chickenSerif(13, italic: true)).foregroundStyle(palette.muted).monospacedDigit()
+                Text(value)
+                    .font(.chickenMono(12))
+                    .foregroundStyle(palette.muted)
+                    .contentTransition(.numericText())
+                    .animation(reduceMotion ? nil : ChickenMotion.micro, value: value)
             }
             Spacer()
             GlassStepper(label: label, canDecrease: canDecrease, canIncrease: canIncrease, decrease: decrease, increase: increase)
@@ -325,7 +434,8 @@ struct TypographyPanel: View {
     private func modeButton(_ mode: ReadingMode) -> some View {
         let selected = model.readingMode == mode
         Button {
-            withAnimation(.snappy) { model.readingMode = mode }
+            Haptics.selection()
+            withAnimation(reduceMotion ? nil : ChickenMotion.snappy) { model.readingMode = mode }
         } label: {
             VStack(spacing: 6) {
                 Image(systemName: mode.systemImage)
@@ -338,12 +448,12 @@ struct TypographyPanel: View {
             .padding(.vertical, 12)
             .background(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(selected ? palette.surface : palette.surfaceAlt.opacity(0.5))
-                    .stroke(selected ? palette.ribbon : .clear, lineWidth: 1.5)
+                    .fill(selected ? palette.surface : palette.surfaceAlt.opacity(0.6))
+                    .stroke(selected ? palette.ribbon : palette.border, lineWidth: selected ? 1.5 : 0.5)
             )
             .contentShape(RoundedRectangle(cornerRadius: 14))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressStyle())
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }

@@ -4,11 +4,6 @@ import CoreSpotlight
 import Foundation
 import SwiftData
 
-extension LibraryStore {
-    /// The one library the app, its intents, and Spotlight share.
-    @MainActor static let shared = LibraryStore()
-}
-
 /// A book in your library, as Siri, Shortcuts, and Spotlight see it.
 struct BookEntity: AppEntity, IndexedEntity {
     static let typeDisplayRepresentation = TypeDisplayRepresentation(name: "Book", numericFormat: "\(placeholder: .int) books")
@@ -25,7 +20,6 @@ struct BookEntity: AppEntity, IndexedEntity {
     @Property(title: "Progress")
     var progress: Double
 
-    /// A small cover for Shortcuts and Siri.
     var coverThumbnail: Data?
 
     var displayRepresentation: DisplayRepresentation {
@@ -38,34 +32,58 @@ struct BookEntity: AppEntity, IndexedEntity {
         )
     }
 
-    @MainActor
-    init(_ book: Book, library: LibraryStore = .shared, includeCover: Bool = false) {
+    init(_ book: Book, coverThumbnail: Data? = nil) {
         id = book.id
         title = book.displayTitle
         author = book.displayAuthor
         progress = book.progress
-        coverThumbnail = includeCover ? library.coverURL(for: book).flatMap { CoverRenderer.thumbnailJPEG(from: $0, maxPixelSize: 120) } : nil
+        self.coverThumbnail = coverThumbnail
     }
 }
 
 struct BookQuery: EntityStringQuery {
     @MainActor
     func entities(for identifiers: [UUID]) async throws -> [BookEntity] {
-        identifiers.compactMap { LibraryStore.shared.book(id: $0) }.map { BookEntity($0, includeCover: true) }
+        let library = LibraryStore.shared
+        let pairs = identifiers.compactMap { id -> (Book, URL?)? in
+            guard let book = library.book(id: id) else { return nil }
+            return (book, library.coverURL(for: book))
+        }
+        return await Self.entitiesWithThumbnails(pairs)
     }
 
     @MainActor
     func entities(matching string: String) async throws -> [BookEntity] {
-        let books = LibraryStore.shared.allBooks().filter {
-            $0.displayTitle.localizedStandardContains(string) || $0.displayAuthor.localizedStandardContains(string)
-        }
-        return books.prefix(20).map { BookEntity($0, includeCover: true) }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return try await suggestedEntities() }
+        let library = LibraryStore.shared
+        let matches = library.allBooks()
+            .filter {
+                $0.displayTitle.localizedStandardContains(trimmed) || $0.displayAuthor.localizedStandardContains(trimmed)
+            }
+            .sorted { ($0.lastOpenedAt ?? .distantPast) > ($1.lastOpenedAt ?? .distantPast) }
+            .prefix(20)
+        return await Self.entitiesWithThumbnails(matches.map { ($0, library.coverURL(for: $0)) })
     }
 
-    /// Books you've opened most recently first, then the rest.
     @MainActor
     func suggestedEntities() async throws -> [BookEntity] {
-        let books = LibraryStore.shared.allBooks().sorted { ($0.lastOpenedAt ?? .distantPast) > ($1.lastOpenedAt ?? .distantPast) }
-        return books.prefix(12).map { BookEntity($0, includeCover: true) }
+        let library = LibraryStore.shared
+        let books = library.allBooks()
+            .sorted { ($0.lastOpenedAt ?? .distantPast) > ($1.lastOpenedAt ?? .distantPast) }
+            .prefix(12)
+        return await Self.entitiesWithThumbnails(books.map { ($0, library.coverURL(for: $0)) })
+    }
+
+    private static func entitiesWithThumbnails(_ pairs: [(Book, URL?)]) async -> [BookEntity] {
+        let thumbs = await Self.renderThumbnails(pairs.map(\.1))
+        return zip(pairs, thumbs).map { pair, thumb in
+            BookEntity(pair.0, coverThumbnail: thumb)
+        }
+    }
+
+    @concurrent
+    private static func renderThumbnails(_ urls: [URL?]) async -> [Data?] {
+        urls.map { $0.flatMap { CoverRenderer.thumbnailJPEG(from: $0, maxPixelSize: 120) } }
     }
 }

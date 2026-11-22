@@ -30,6 +30,7 @@ public struct ZipArchive: Sendable {
     public let entries: [Entry]
     private let data: Data
     private let index: [String: Int]
+    private let lowercasedIndex: [String: Int]
 
     public init(url: URL) throws {
         try self.init(data: Data(contentsOf: url, options: .alwaysMapped))
@@ -37,83 +38,109 @@ public struct ZipArchive: Sendable {
 
     public init(data: Data) throws {
         self.data = data
-        let reader = ByteReader(data: data)
-        let directory = try Self.locateCentralDirectory(reader)
-        var entries: [Entry] = []
-        entries.reserveCapacity(directory.count)
+        let parsed = try data.withUnsafeBytes { rawBuffer -> [Entry] in
+            let reader = ByteReader(buffer: rawBuffer)
+            let directory = try Self.locateCentralDirectory(reader)
+            var entries: [Entry] = []
+            entries.reserveCapacity(min(directory.count, 4096))
 
-        var offset = directory.offset
-        for _ in 0..<directory.count {
-            guard reader.uint32(at: offset) == 0x0201_4B50 else { throw ZipError.corrupt }
-            let flags = reader.uint16(at: offset + 8)
-            let method = reader.uint16(at: offset + 10)
-            var compressedSize = Int(reader.uint32(at: offset + 20))
-            var uncompressedSize = Int(reader.uint32(at: offset + 24))
-            let nameLength = Int(reader.uint16(at: offset + 28))
-            let extraLength = Int(reader.uint16(at: offset + 30))
-            let commentLength = Int(reader.uint16(at: offset + 32))
-            var localHeaderOffset = Int(reader.uint32(at: offset + 42))
+            var offset = directory.offset
+            for _ in 0..<directory.count {
+                guard reader.uint32(at: offset) == 0x0201_4B50 else { throw ZipError.corrupt }
+                let flags = reader.uint16(at: offset + 8)
+                let method = reader.uint16(at: offset + 10)
+                var compressedSize = Int(reader.uint32(at: offset + 20))
+                var uncompressedSize = Int(reader.uint32(at: offset + 24))
+                let nameLength = Int(reader.uint16(at: offset + 28))
+                let extraLength = Int(reader.uint16(at: offset + 30))
+                let commentLength = Int(reader.uint16(at: offset + 32))
+                var localHeaderOffset = Int(reader.uint32(at: offset + 42))
 
-            let nameStart = offset + 46
-            guard let nameData = reader.bytes(at: nameStart, count: nameLength) else { throw ZipError.corrupt }
-            let usesUTF8 = flags & 0x0800 != 0
-            let name = (usesUTF8 ? String(data: nameData, encoding: .utf8) : nil)
-                ?? String(data: nameData, encoding: .utf8)
-                ?? String(data: nameData, encoding: .isoLatin1)
-                ?? ""
+                guard let nameStart = Self.checkedAdd(offset, 46),
+                      let nameData = reader.data(at: nameStart, count: nameLength),
+                      let extraStart = Self.checkedAdd(nameStart, nameLength),
+                      let extraEnd = Self.checkedAdd(extraStart, extraLength),
+                      let nextOffset = Self.checkedAdd(extraEnd, commentLength),
+                      nextOffset <= reader.count
+                else { throw ZipError.corrupt }
 
-            // ZIP64 extended information replaces any 32-bit field saturated at 0xFFFFFFFF.
-            var extraOffset = nameStart + nameLength
-            let extraEnd = extraOffset + extraLength
-            while extraOffset + 4 <= extraEnd {
-                let headerID = reader.uint16(at: extraOffset)
-                let size = Int(reader.uint16(at: extraOffset + 2))
-                if headerID == 0x0001 {
-                    var cursor = extraOffset + 4
-                    if uncompressedSize == 0xFFFF_FFFF {
-                        uncompressedSize = Int(reader.uint64(at: cursor))
-                        cursor += 8
+                let usesUTF8 = flags & 0x0800 != 0
+                let name = (usesUTF8 ? String(data: nameData, encoding: .utf8) : nil)
+                    ?? String(data: nameData, encoding: .utf8)
+                    ?? String(data: nameData, encoding: .isoLatin1)
+                    ?? ""
+
+                // ZIP64 extended information replaces any 32-bit field saturated at 0xFFFFFFFF.
+                var extraOffset = extraStart
+                while let fieldHeaderEnd = Self.checkedAdd(extraOffset, 4), fieldHeaderEnd <= extraEnd {
+                    let headerID = reader.uint16(at: extraOffset)
+                    let size = Int(reader.uint16(at: extraOffset + 2))
+                    guard let fieldEnd = Self.checkedAdd(fieldHeaderEnd, size), fieldEnd <= extraEnd else {
+                        throw ZipError.corrupt
                     }
-                    if compressedSize == 0xFFFF_FFFF {
-                        compressedSize = Int(reader.uint64(at: cursor))
-                        cursor += 8
+                    if headerID == 0x0001 {
+                        var cursor = fieldHeaderEnd
+                        if uncompressedSize == 0xFFFF_FFFF {
+                            guard let next = Self.checkedAdd(cursor, 8), next <= fieldEnd,
+                                  let value = Int(exactly: reader.uint64(at: cursor))
+                            else { throw ZipError.corrupt }
+                            uncompressedSize = value
+                            cursor = next
+                        }
+                        if compressedSize == 0xFFFF_FFFF {
+                            guard let next = Self.checkedAdd(cursor, 8), next <= fieldEnd,
+                                  let value = Int(exactly: reader.uint64(at: cursor))
+                            else { throw ZipError.corrupt }
+                            compressedSize = value
+                            cursor = next
+                        }
+                        if localHeaderOffset == 0xFFFF_FFFF {
+                            guard let next = Self.checkedAdd(cursor, 8), next <= fieldEnd,
+                                  let value = Int(exactly: reader.uint64(at: cursor))
+                            else { throw ZipError.corrupt }
+                            localHeaderOffset = value
+                        }
                     }
-                    if localHeaderOffset == 0xFFFF_FFFF {
-                        localHeaderOffset = Int(reader.uint64(at: cursor))
-                    }
+                    extraOffset = fieldEnd
                 }
-                extraOffset += 4 + size
-            }
 
-            entries.append(
-                Entry(
-                    path: name,
-                    uncompressedSize: uncompressedSize,
-                    compressionMethod: method,
-                    compressedSize: compressedSize,
-                    localHeaderOffset: localHeaderOffset
+                guard uncompressedSize >= 0, compressedSize >= 0, localHeaderOffset >= 0 else {
+                    throw ZipError.corrupt
+                }
+
+                entries.append(
+                    Entry(
+                        path: name,
+                        uncompressedSize: uncompressedSize,
+                        compressionMethod: method,
+                        compressedSize: compressedSize,
+                        localHeaderOffset: localHeaderOffset
+                    )
                 )
-            )
-            offset = nameStart + nameLength + extraLength + commentLength
+                offset = nextOffset
+            }
+            return entries
         }
 
-        self.entries = entries
+        self.entries = parsed
         var index: [String: Int] = [:]
-        for (position, entry) in entries.enumerated() where index[entry.path] == nil {
-            index[entry.path] = position
+        var lowercasedIndex: [String: Int] = [:]
+        index.reserveCapacity(parsed.count)
+        lowercasedIndex.reserveCapacity(parsed.count)
+        for (position, entry) in parsed.enumerated() {
+            if index[entry.path] == nil { index[entry.path] = position }
+            let lowered = entry.path.lowercased()
+            if lowercasedIndex[lowered] == nil { lowercasedIndex[lowered] = position }
         }
         self.index = index
+        self.lowercasedIndex = lowercasedIndex
     }
 
     public func entry(_ path: String) -> Entry? {
         if let position = index[path] { return entries[position] }
-        // Some packagers percent-encode or vary case in hrefs; fall back to a
-        // case-insensitive match before giving up.
-        let lowered = path.lowercased()
-        return entries.first { $0.path.lowercased() == lowered }
+        if let position = lowercasedIndex[path.lowercased()] { return entries[position] }
+        return nil
     }
-
-    public func contains(_ path: String) -> Bool { entry(path) != nil }
 
     public func data(for path: String) throws -> Data {
         guard let entry = entry(path) else { throw ZipError.missingEntry(path) }
@@ -121,14 +148,23 @@ public struct ZipArchive: Sendable {
     }
 
     public func data(for entry: Entry) throws -> Data {
+        guard entry.uncompressedSize >= 0, entry.compressedSize >= 0 else { throw ZipError.corrupt }
         guard entry.uncompressedSize <= Self.maxEntrySize else { throw ZipError.entryTooLarge }
-        let reader = ByteReader(data: data)
-        let header = entry.localHeaderOffset
-        guard reader.uint32(at: header) == 0x0403_4B50 else { throw ZipError.corrupt }
-        let nameLength = Int(reader.uint16(at: header + 26))
-        let extraLength = Int(reader.uint16(at: header + 28))
-        let start = header + 30 + nameLength + extraLength
-        guard let compressed = reader.bytes(at: start, count: entry.compressedSize) else { throw ZipError.corrupt }
+
+        let compressed = try data.withUnsafeBytes { rawBuffer -> Data in
+            let reader = ByteReader(buffer: rawBuffer)
+            let header = entry.localHeaderOffset
+            guard let fixedEnd = Self.checkedAdd(header, 30), fixedEnd <= reader.count,
+                  reader.uint32(at: header) == 0x0403_4B50
+            else { throw ZipError.corrupt }
+            let nameLength = Int(reader.uint16(at: header + 26))
+            let extraLength = Int(reader.uint16(at: header + 28))
+            guard let afterName = Self.checkedAdd(fixedEnd, nameLength),
+                  let start = Self.checkedAdd(afterName, extraLength),
+                  let slice = reader.data(at: start, count: entry.compressedSize)
+            else { throw ZipError.corrupt }
+            return slice
+        }
 
         switch entry.compressionMethod {
         case 0:
@@ -173,11 +209,14 @@ public struct ZipArchive: Sendable {
         return destination
     }
 
-    // MARK: - Internals
-
     private struct CentralDirectory {
         let offset: Int
         let count: Int
+    }
+
+    private static func checkedAdd(_ lhs: Int, _ rhs: Int) -> Int? {
+        let (sum, overflow) = lhs.addingReportingOverflow(rhs)
+        return overflow || sum < 0 ? nil : sum
     }
 
     private static func locateCentralDirectory(_ reader: ByteReader) throws -> CentralDirectory {
@@ -204,13 +243,17 @@ public struct ZipArchive: Sendable {
         if count == 0xFFFF || offset == 0xFFFF_FFFF {
             let locator = eocd - 20
             guard locator >= 0, reader.uint32(at: locator) == 0x0706_4B50 else { throw ZipError.corrupt }
-            let record = Int(reader.uint64(at: locator + 8))
-            guard reader.uint32(at: record) == 0x0606_4B50 else { throw ZipError.corrupt }
-            count = Int(reader.uint64(at: record + 32))
-            offset = Int(reader.uint64(at: record + 48))
+            guard let record = Int(exactly: reader.uint64(at: locator + 8)),
+                  let recordEnd = checkedAdd(record, 56), recordEnd <= reader.count,
+                  reader.uint32(at: record) == 0x0606_4B50,
+                  let zip64Count = Int(exactly: reader.uint64(at: record + 32)),
+                  let zip64Offset = Int(exactly: reader.uint64(at: record + 48))
+            else { throw ZipError.corrupt }
+            count = zip64Count
+            offset = zip64Offset
         }
 
-        guard offset >= 0, offset < reader.count else { throw ZipError.corrupt }
+        guard count >= 0, offset >= 0, offset < reader.count else { throw ZipError.corrupt }
         return CentralDirectory(offset: offset, count: count)
     }
 
@@ -236,31 +279,39 @@ public struct ZipArchive: Sendable {
     }
 }
 
-/// Little-endian reads at absolute offsets with bounds checks. Out-of-range
-/// reads return zero so a truncated archive fails a signature check rather
-/// than trapping.
 private struct ByteReader {
-    let data: Data
+    let buffer: UnsafeRawBufferPointer
 
-    var count: Int { data.count }
+    var count: Int { buffer.count }
 
-    func uint16(at offset: Int) -> UInt16 { UInt16(truncatingIfNeeded: value(at: offset, size: 2)) }
-    func uint32(at offset: Int) -> UInt32 { UInt32(truncatingIfNeeded: value(at: offset, size: 4)) }
-    func uint64(at offset: Int) -> UInt64 { value(at: offset, size: 8) }
-
-    func bytes(at offset: Int, count: Int) -> Data? {
-        guard offset >= 0, count >= 0, offset + count <= data.count else { return nil }
-        let start = data.startIndex + offset
-        return data.subdata(in: start..<(start + count))
+    func uint16(at offset: Int) -> UInt16 {
+        guard offset >= 0, let end = checkedEnd(offset, 2), end <= buffer.count else { return 0 }
+        return UInt16(buffer[offset]) | (UInt16(buffer[offset + 1]) << 8)
     }
 
-    private func value(at offset: Int, size: Int) -> UInt64 {
-        guard offset >= 0, offset + size <= data.count else { return 0 }
-        var result: UInt64 = 0
-        let start = data.startIndex + offset
-        for position in 0..<size {
-            result |= UInt64(data[start + position]) << (8 * UInt64(position))
-        }
-        return result
+    func uint32(at offset: Int) -> UInt32 {
+        guard offset >= 0, let end = checkedEnd(offset, 4), end <= buffer.count else { return 0 }
+        return UInt32(buffer[offset])
+            | (UInt32(buffer[offset + 1]) << 8)
+            | (UInt32(buffer[offset + 2]) << 16)
+            | (UInt32(buffer[offset + 3]) << 24)
+    }
+
+    func uint64(at offset: Int) -> UInt64 {
+        guard offset >= 0, let end = checkedEnd(offset, 8), end <= buffer.count else { return 0 }
+        let low = UInt64(uint32(at: offset))
+        let high = UInt64(uint32(at: offset + 4))
+        return low | (high << 32)
+    }
+
+    func data(at offset: Int, count: Int) -> Data? {
+        guard offset >= 0, count >= 0, let end = checkedEnd(offset, count), end <= buffer.count else { return nil }
+        guard count > 0, let base = buffer.baseAddress else { return Data() }
+        return Data(bytes: base.advanced(by: offset), count: count)
+    }
+
+    private func checkedEnd(_ offset: Int, _ length: Int) -> Int? {
+        let (end, overflow) = offset.addingReportingOverflow(length)
+        return overflow ? nil : end
     }
 }

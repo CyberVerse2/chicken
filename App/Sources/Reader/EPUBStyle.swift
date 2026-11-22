@@ -15,10 +15,9 @@ struct EPUBStyle: Equatable {
         let text = ReaderPalette.css(palette.textHex)
         let muted = ReaderPalette.css(palette.mutedHex)
         let horizontal = mode.isHorizontal
-        let size = mode == .spread ? max(fontSize + 2, fontSize * 1.12) : fontSize
+        let size = fontSize
         let serif = typeface.cssFamily
-        // Chapter headings in the house display face.
-        let display = "'Superclarendon', 'Superclarendon-Regular', \(serif)"
+        let display = "ui-serif, 'New York', Georgia, serif"
 
         let layout: String
         switch mode {
@@ -27,17 +26,14 @@ struct EPUBStyle: Equatable {
             html { --chicken-page-width: \(Int(columnWidth))px; --chicken-column-gap: 0px; }
             body {
               max-width: \(Int(columnWidth))px;
-              padding: calc(40px + env(safe-area-inset-top)) clamp(20px, 6vw, 56px) calc(96px + env(safe-area-inset-bottom)) !important;
+              padding: calc(44px + env(safe-area-inset-top)) clamp(20px, 6vw, 56px) calc(124px + env(safe-area-inset-bottom)) !important;
               overflow-x: hidden !important;
             }
             """
         case .paged:
-            // One full-width column per screen; the reading measure comes
-            // from per-page padding so page turns are exactly one viewport.
-            // (Sized by width: WebKit ignores `column-count: 1` entirely.)
             layout = columnsCSS(count: 1, inset: "max(24px, calc((100vw - \(Int(columnWidth))px) / 2))")
         case .spread:
-            layout = columnsCSS(count: 2, inset: "clamp(28px, 4vw, 80px)") + """
+            layout = columnsCSS(count: 2, inset: "clamp(32px, 4vw, 80px)") + """
             .chicken-spine-section h1, .chicken-spine-section h2, .chicken-spine-section h3,
             .chicken-spine-section h4, .chicken-spine-section h5, .chicken-spine-section h6,
             .chicken-spine-section header, .chicken-spine-section figure, .chicken-spine-section table {
@@ -67,8 +63,6 @@ struct EPUBStyle: Equatable {
           font-size: \(size)px !important;
           line-height: \(lineHeight) !important;
         }
-        /* Justified, hyphenated text gives paged modes a printed rag; widows
-           and orphans keep single lines from dangling at column breaks. */
         .chicken-spine-section p, .chicken-spine-section li, .chicken-spine-section blockquote {
           text-align: \(horizontal ? "justify" : "start");
           hyphens: \(horizontal ? "auto" : "manual");
@@ -80,13 +74,12 @@ struct EPUBStyle: Equatable {
         .chicken-spine-section h4, .chicken-spine-section h5, .chicken-spine-section h6 {
           color: \(text) !important;
           font-family: \(display) !important;
-          font-weight: normal !important;
-          letter-spacing: -0.01em;
-          line-height: 1.2 !important;
+          font-weight: 600 !important;
+          letter-spacing: -0.02em;
+          line-height: 1.18 !important;
         }
-        /* Scene breaks render as a quiet asterism. */
         .chicken-spine-section hr {
-          border: 0 !important; height: auto !important; margin: 1.6em auto !important;
+          border: 0 !important; height: auto !important; margin: 1.8em auto !important;
           text-align: center !important; color: \(muted) !important; background: transparent !important;
           font-family: \(serif) !important; font-size: 0.9em !important; letter-spacing: 0.6em !important; line-height: 1 !important;
         }
@@ -100,30 +93,26 @@ struct EPUBStyle: Equatable {
         }
         .chicken-spine-section a { color: \(muted) !important; }
         .chicken-spine-section img, .chicken-spine-section svg, .chicken-spine-section video {
-          max-width: 100% !important; height: auto !important; \(horizontal ? "max-height: calc(100vh - 160px) !important; object-fit: contain;" : "")
+          max-width: 100% !important; height: auto !important; \(horizontal ? "max-height: calc(100dvh - 180px) !important; object-fit: contain;" : "")
         }
         mark.chicken-hl { border-radius: 2px; padding: 0 1px; }
-        ::selection { background: rgba(189, 153, 87, 0.36); }
+        ::selection { background: rgba(196, 123, 43, 0.30); }
         .chicken-speaking {
-          background: rgba(189, 153, 87, 0.13) !important; border-radius: 3px;
-          box-shadow: 0 0 0 0.3em rgba(189, 153, 87, 0.13); -webkit-box-decoration-break: clone;
+          background: rgba(196, 123, 43, 0.14) !important; border-radius: 4px;
+          box-shadow: 0 0 0 0.3em rgba(196, 123, 43, 0.14); -webkit-box-decoration-break: clone;
+          scroll-margin-top: 18vh;
         }
         """
     }
 
-    /// Room under each page for the floating progress bar. On the Mac the
-    /// bar and the soft edge beneath it sit higher than the page's own
-    /// safe area reports, and a smaller margin cut the last line in half.
     private static var pagedBottomPadding: Int {
         #if os(macOS)
-        return 116
+        124
         #else
-        return 76
+        96
         #endif
     }
 
-    /// iPhone and iPad scroll the columns by hand (the web view pages them);
-    /// on the Mac they move only by script.
     private static var columnOverflow: String {
         #if os(iOS)
         "overflow-x: auto !important; overflow-y: hidden !important;"
@@ -136,9 +125,9 @@ struct EPUBStyle: Equatable {
         """
         html, body { width: 100vw !important; max-width: none !important; }
         body {
-          height: 100vh !important;
+          height: 100dvh !important;
           margin: 0 !important;
-          padding: calc(28px + env(safe-area-inset-top)) 0 calc(\(Self.pagedBottomPadding)px + env(safe-area-inset-bottom)) !important;
+          padding: calc(32px + env(safe-area-inset-top)) 0 calc(\(Self.pagedBottomPadding)px + env(safe-area-inset-bottom)) !important;
           \(count == 1 ? "column-width: 100vw !important; column-count: auto !important;" : "column-count: \(count) !important;")
           column-gap: 0 !important;
           column-fill: auto !important;

@@ -1,8 +1,6 @@
 #if os(macOS)
 import SwiftUI
 
-/// The Mac's sidebar: the house lockup, the four places, the books you're
-/// reading (each with its cover and how far in), and today's reading.
 struct MacSidebar: View {
     @Environment(\.palette) private var palette
     @Binding var selection: AppTab
@@ -28,9 +26,8 @@ struct MacSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        // The theme's own paper rather than the system's cool grey.
         .scrollContentBackground(.hidden)
-        .background(palette.surfaceAlt.opacity(0.55))
+        .background(palette.surfaceAlt.opacity(0.6))
         .safeAreaInset(edge: .top, spacing: 0) {
             BrandLockup(size: 18)
                 .padding(.horizontal, 18)
@@ -46,8 +43,6 @@ struct MacSidebar: View {
     }
 }
 
-/// A book in progress: a small cover with its ribbon, the title, and a
-/// ribbon meter.
 private struct MacSidebarBookRow: View {
     @Environment(\.palette) private var palette
     let book: Book
@@ -56,10 +51,10 @@ private struct MacSidebarBookRow: View {
         HStack(spacing: 11) {
             BookCover(book: book, style: .mini)
                 .frame(width: 24, height: 36)
-                .shadow(color: palette.shadow, radius: 1.5, x: 0.5, y: 1)
-            VStack(alignment: .leading, spacing: 5) {
+                .shadow(color: palette.shadow, radius: 1.5, x: 0, y: 1)
+            VStack(alignment: .leading, spacing: 4) {
                 Text(book.displayTitle)
-                    .font(.chickenSerif(13, weight: .semibold))
+                    .font(.chickenUI(13, weight: .medium))
                     .foregroundStyle(palette.text)
                     .lineLimit(1)
                 HStack(spacing: 6) {

@@ -13,15 +13,16 @@ struct ChickenPage<Content: View>: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 30) {
-                VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 26) {
+                VStack(alignment: .leading, spacing: 6) {
+                    let fontSize: CGFloat = sizeClass == .compact ? 30 : 36
                     Text(title)
-                        .font(.chickenDisplay(sizeClass == .compact ? 32 : 38))
-                        .tracking(-0.6)
+                        .font(.chickenDisplay(fontSize, weight: .bold))
+                        .opticalDisplayTracking(for: fontSize)
                         .foregroundStyle(palette.text)
                     if let subtitle {
                         Text(subtitle)
-                            .font(.chickenSerif(16, italic: true))
+                            .font(.chickenSerif(15.5, italic: true))
                             .foregroundStyle(palette.muted)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -29,7 +30,7 @@ struct ChickenPage<Content: View>: View {
                 content
             }
             .padding(.horizontal, sizeClass == .compact ? 20 : 32)
-            .padding(.top, 8)
+            .padding(.top, 10)
             .padding(.bottom, 48)
             .frame(maxWidth: 720, alignment: .leading)
             .frame(maxWidth: .infinity)
@@ -49,17 +50,18 @@ struct PageHeader: View {
     var subtitle: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
             if let eyebrow {
                 Text(eyebrow).chickenEyebrow(palette)
             }
+            let fontSize: CGFloat = sizeClass == .compact ? 32 : 42
             Text(title)
-                .font(.chickenDisplay(sizeClass == .compact ? 38 : 52))
-                .tracking(sizeClass == .compact ? -0.8 : -1.2)
+                .font(.chickenDisplay(fontSize, weight: .bold))
+                .opticalDisplayTracking(for: fontSize)
                 .foregroundStyle(palette.text)
             if let subtitle {
                 Text(subtitle)
-                    .font(.chickenSerif(sizeClass == .compact ? 16 : 18, italic: true))
+                    .font(.chickenSerif(sizeClass == .compact ? 15 : 16.5, italic: true))
                     .foregroundStyle(palette.muted)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -92,7 +94,7 @@ struct ChickenSection<Content: View, Accessory: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
                 SectionLabel(text: title, count: count)
                 Spacer(minLength: 8)
@@ -105,11 +107,11 @@ struct ChickenSection<Content: View, Accessory: View>: View {
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(palette.surface)
-                    .stroke(palette.border, lineWidth: 0.5)
+                    .stroke(palette.border, lineWidth: 0.75)
             )
             if let footer {
                 Text(footer)
-                    .font(.chickenSerif(12, italic: true))
+                    .font(.chickenUI(12))
                     .foregroundStyle(palette.muted)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 4)
@@ -148,10 +150,16 @@ struct GlassStepper: View {
     var body: some View {
         GlassEffectContainer(spacing: 6) {
             HStack(spacing: 6) {
-                Button("Decrease \(label)", systemImage: "minus", action: decrease)
-                    .disabled(!canDecrease)
-                Button("Increase \(label)", systemImage: "plus", action: increase)
-                    .disabled(!canIncrease)
+                Button("Decrease \(label)", systemImage: "minus") {
+                    Haptics.selection()
+                    decrease()
+                }
+                .disabled(!canDecrease)
+                Button("Increase \(label)", systemImage: "plus") {
+                    Haptics.selection()
+                    increase()
+                }
+                .disabled(!canIncrease)
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.glass)
@@ -163,6 +171,7 @@ struct GlassStepper: View {
 /// Large tappable previews of the three reading themes.
 struct ThemeSwatchPicker: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var compact = false
 
     var body: some View {
@@ -171,25 +180,28 @@ struct ThemeSwatchPicker: View {
                 let swatch = theme.palette
                 let selected = library.preferences.theme == theme
                 Button {
-                    withAnimation(.easeInOut(duration: 0.3)) { library.preferences.theme = theme }
+                    Haptics.selection()
+                    withAnimation(reduceMotion ? ChickenMotion.reduced : ChickenMotion.theme) {
+                        library.preferences.theme = theme
+                    }
                 } label: {
                     VStack(alignment: .leading, spacing: compact ? 4 : 8) {
                         Text("Aa")
-                            .font(.chickenDisplay(compact ? 20 : 26))
+                            .font(.chickenDisplay(compact ? 20 : 25, weight: .bold))
                         HStack(spacing: 5) {
                             Capsule().fill(swatch.ribbon).frame(width: 3, height: 10)
                             Text(theme.label)
-                                .font(.chickenSerif(12.5, italic: true))
-                                .foregroundStyle(swatch.muted)
+                                .font(.chickenUI(12, weight: selected ? .semibold : .medium))
+                                .foregroundStyle(selected ? swatch.text : swatch.muted)
                         }
                     }
                     .foregroundStyle(swatch.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(compact ? 12 : 16)
+                    .padding(compact ? 12 : 15)
                     .background(
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(swatch.background)
-                            .stroke(selected ? swatch.ribbon : swatch.border, lineWidth: selected ? 2 : 0.5)
+                            .stroke(selected ? swatch.ribbon : swatch.borderStrong, lineWidth: selected ? 2 : 0.75)
                     )
                     .overlay(alignment: .topTrailing) {
                         if selected {
@@ -199,9 +211,9 @@ struct ThemeSwatchPicker: View {
                                 .padding(10)
                         }
                     }
-                    .contentShape(RoundedRectangle(cornerRadius: 14))
+                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TactilePressStyle())
                 .accessibilityLabel("\(theme.label) theme")
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }

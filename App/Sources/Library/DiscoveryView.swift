@@ -2,12 +2,11 @@ import ChickenKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// "Ask before looking": the user chooses folders, Chicken lists what it
-/// finds, and nothing is imported without review.
 struct DiscoveryView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var choosingFolder = false
     @State private var showingAllOthers = false
 
@@ -27,13 +26,11 @@ struct DiscoveryView: View {
             }
             .pageTitle("Find Books")
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done", systemImage: "checkmark") { dismiss() }
-                }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Scan Again", systemImage: "arrow.clockwise") { library.scanFolders() }
                         .disabled(library.folders.isEmpty || library.scanState.isScanning)
                 }
+                SheetDoneButton { dismiss() }
             }
             .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
                 if case .success(let url) = result { library.addFolder(url) }
@@ -48,22 +45,22 @@ struct DiscoveryView: View {
         }
     }
 
-    // MARK: Folders
-
     private var foldersSection: some View {
         ChickenSection("Folders", count: library.folders.isEmpty ? nil : library.folders.count) {
-            Button("Add Folder", systemImage: "plus") { choosingFolder = true }
-                .font(.chickenUI(13, weight: .medium))
-                .foregroundStyle(palette.text)
-                .buttonStyle(.glass)
+            if !library.folders.isEmpty {
+                Button("Add Folder", systemImage: "plus") { choosingFolder = true }
+                    .font(.chickenUI(13, weight: .medium))
+                    .foregroundStyle(palette.text)
+                    .buttonStyle(.glass)
+            }
         } content: {
             if library.folders.isEmpty {
                 ChickenRow(isLast: true) {
                     VStack(alignment: .leading, spacing: 14) {
-                        HStack(spacing: 14) {
+                        HStack(spacing: 12) {
                             ForEach(["arrow.down.circle", "doc", "books.vertical"], id: \.self) { icon in
                                 Image(systemName: icon)
-                                    .font(.system(size: 20, weight: .light))
+                                    .font(.system(size: 19, weight: .light))
                                     .foregroundStyle(palette.muted)
                                     .frame(width: 44, height: 44)
                                     .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(palette.surfaceAlt))
@@ -93,7 +90,7 @@ struct DiscoveryView: View {
                 ProgressView().controlSize(.small)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Looking through \(folder.isEmpty ? "your folders" : folder)…")
-                        .font(.chickenSerif(15, italic: true))
+                        .font(.chickenUI(14, weight: .medium))
                         .foregroundStyle(palette.text)
                     Text("\(checked.formatted()) files checked · \(found) found")
                         .font(.chickenMono(11))
@@ -102,20 +99,28 @@ struct DiscoveryView: View {
                 }
             }
             .padding(.horizontal, 18)
-            .padding(.vertical, 12)
+            .padding(.vertical, 11)
+            .glassEffect(.regular, in: .capsule)
+        case .enriching(let found):
+            HStack(spacing: 12) {
+                ProgressView().controlSize(.small)
+                Text("Reading metadata for \(found) \(found == 1 ? "file" : "files")…")
+                    .font(.chickenUI(14, weight: .medium))
+                    .foregroundStyle(palette.text)
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 11)
             .glassEffect(.regular, in: .capsule)
         case .finished(let found):
             HStack(spacing: 10) {
                 Image(systemName: found == 0 ? "checkmark.circle" : "sparkles")
                     .foregroundStyle(palette.muted)
                 Text(found == 0 ? "Everything in these folders is already in your library." : "Found \(found) new \(found == 1 ? "file" : "files").")
-                    .font(.chickenSerif(15, italic: true))
+                    .font(.chickenUI(14))
                     .foregroundStyle(palette.muted)
             }
         }
     }
-
-    // MARK: Results
 
     private var likelySection: some View {
         ChickenSection("Likely books", count: likely.count) {
@@ -142,11 +147,13 @@ struct DiscoveryView: View {
             }
             if !showingAllOthers && others.count > 5 {
                 ChickenRow(isLast: true) {
-                    Button("Show \(others.count - 5) more") { withAnimation(.smooth) { showingAllOthers = true } }
-                        .font(.chickenUI(13, weight: .semibold))
-                        .foregroundStyle(palette.muted)
-                        .buttonStyle(.plain)
-                        .frame(maxWidth: .infinity)
+                    Button("Show \(others.count - 5) more") {
+                        withAnimation(reduceMotion ? nil : ChickenMotion.standard) { showingAllOthers = true }
+                    }
+                    .font(.chickenUI(13, weight: .semibold))
+                    .foregroundStyle(palette.muted)
+                    .buttonStyle(.plain)
+                    .frame(maxWidth: .infinity)
                 }
             }
         }
@@ -162,26 +169,29 @@ private struct FolderRow: View {
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: reachable ? "folder.fill" : "folder.badge.questionmark")
-                .font(.system(size: 18))
+                .font(.system(size: 17))
                 .foregroundStyle(palette.muted)
                 .frame(width: 40, height: 40)
                 .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(palette.surfaceAlt))
             VStack(alignment: .leading, spacing: 2) {
                 Text(folder.name)
-                    .font(.chickenSerif(16, weight: .semibold))
+                    .font(.chickenUI(15, weight: .semibold))
                     .foregroundStyle(palette.text)
                 Text(reachable ? folder.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") : "Can't reach this folder. Remove it and add it again.")
-                    .font(.chickenUI(11))
+                    .font(.chickenUI(11.5))
                     .foregroundStyle(palette.faint)
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
             Spacer(minLength: 8)
-            Button("Remove \(folder.name)", systemImage: "xmark") { library.removeFolder(folder) }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-                .foregroundStyle(palette.muted)
+            CircularGlassButton(
+                title: "Remove \(folder.name)",
+                systemImage: "xmark",
+                diameter: 34,
+                iconSize: 13.5,
+                foreground: palette.muted,
+                action: { library.removeFolder(folder) }
+            )
         }
         .task { reachable = folder.isReachable }
     }
@@ -191,6 +201,7 @@ private struct DiscoveredRow: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let book: DiscoveredBook
 
     var body: some View {
@@ -200,11 +211,11 @@ private struct DiscoveredRow: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(book.title.readableTitle)
-                    .font(.chickenSerif(15, weight: .semibold))
+                    .font(.chickenUI(14.5, weight: .semibold))
                     .foregroundStyle(palette.text)
                     .lineLimit(2)
                 Text(metaLine)
-                    .font(.chickenUI(11))
+                    .font(.chickenUI(11.5))
                     .foregroundStyle(palette.muted)
                     .lineLimit(1)
             }
@@ -219,11 +230,16 @@ private struct DiscoveredRow: View {
                         .buttonStyle(.glass)
                         .disabled(library.importState.isImporting)
                     if sizeClass != .compact {
-                        Button("Dismiss", systemImage: "xmark") { withAnimation(.smooth) { library.dismissDiscovered(book) } }
-                            .labelStyle(.iconOnly)
-                            .buttonStyle(.glass)
-                            .buttonBorderShape(.circle)
-                            .foregroundStyle(palette.muted)
+                        CircularGlassButton(
+                            title: "Dismiss",
+                            systemImage: "xmark",
+                            diameter: 34,
+                            iconSize: 13.5,
+                            foreground: palette.muted,
+                            action: {
+                                withAnimation(reduceMotion ? nil : ChickenMotion.standard) { library.dismissDiscovered(book) }
+                            }
+                        )
                     }
                 }
             }
@@ -244,14 +260,13 @@ private struct DiscoveredRow: View {
     }
 }
 
-/// A tiny stand-in cover for files that aren't in the library yet.
 private struct FormatSlip: View {
     let format: BookFormat
     let title: String
 
     var body: some View {
         let preset = CoverPreset.preset(forTitle: title)
-        RoundedRectangle(cornerRadius: 3, style: .continuous)
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
             .fill(preset.cloth)
             .overlay(alignment: .bottomLeading) {
                 Text(format.label)
@@ -261,13 +276,11 @@ private struct FormatSlip: View {
                     .padding(5)
             }
             .overlay(alignment: .topLeading) {
-                Rectangle().fill(preset.ink.opacity(0.5)).frame(width: 12, height: 1).padding(6)
+                Rectangle().fill(preset.ink.opacity(0.45)).frame(width: 12, height: 1).padding(6)
             }
             .shadow(color: .black.opacity(0.12), radius: 2, y: 1)
     }
 }
-
-// MARK: - Empty library
 
 struct EmptyLibraryView: View {
     @Environment(AppRouter.self) private var router
@@ -275,16 +288,23 @@ struct EmptyLibraryView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
 
     var body: some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 20) {
             FannedCovers()
-                .frame(height: 170)
+                .frame(height: 164)
                 .padding(.bottom, 4)
 
-            Text("Bring your books home to roost")
-                .font(.chickenDisplay(sizeClass == .compact ? 26 : 34))
-                .tracking(-0.5)
-                .foregroundStyle(palette.text)
-                .multilineTextAlignment(.center)
+            VStack(spacing: 6) {
+                Text("Your library is quiet")
+                    .font(.chickenDisplay(sizeClass == .compact ? 24 : 30))
+                    .tracking(-0.5)
+                    .foregroundStyle(palette.text)
+                    .multilineTextAlignment(.center)
+                Text("Import EPUBs, PDFs, or text files from anywhere on your device.")
+                    .font(.chickenUI(14.5))
+                    .foregroundStyle(palette.muted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+            }
 
             GlassEffectContainer(spacing: 12) {
                 ViewThatFits {
@@ -293,11 +313,11 @@ struct EmptyLibraryView: View {
                 }
             }
         }
-        .padding(.vertical, sizeClass == .compact ? 40 : 64)
+        .padding(.vertical, sizeClass == .compact ? 36 : 56)
         .padding(.horizontal, 24)
         .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 28, style: .continuous)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .fill(palette.surface)
                 .stroke(palette.border, lineWidth: 0.5)
         )
@@ -305,12 +325,11 @@ struct EmptyLibraryView: View {
 
     @ViewBuilder
     private var buttons: some View {
-        PrimaryActionButton(title: "Find books in folders", systemImage: "folder") { router.showingDiscovery = true }
+        PrimaryActionButton(title: "Find books in folders", systemImage: "folder") { router.presentSheet(.discovery) }
         SecondaryActionButton(title: "Import files", systemImage: "plus") { router.showingImporter = true }
     }
 }
 
-/// Three cloth covers fanned like a hand of cards.
 private struct FannedCovers: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var spread = false
@@ -327,11 +346,11 @@ private struct FannedCovers: View {
                 let sample = Self.samples[index]
                 ClothCover(title: sample.title, author: sample.author, preset: CoverPreset.all[sample.preset], style: .tile)
                     .background(CoverPreset.all[sample.preset].cloth)
-                    .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
-                    .frame(width: 100, height: 150)
-                    .shadow(color: .black.opacity(0.18), radius: 10, y: 6)
-                    .rotationEffect(.degrees(spread ? Double(index - 1) * 11 : 0), anchor: .bottom)
-                    .offset(x: spread ? CGFloat(index - 1) * 46 : 0, y: index == 1 ? -6 : 0)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .frame(width: 98, height: 147)
+                    .shadow(color: .black.opacity(0.16), radius: 12, y: 6)
+                    .rotationEffect(.degrees(spread ? Double(index - 1) * 10 : 0), anchor: .bottom)
+                    .offset(x: spread ? CGFloat(index - 1) * 44 : 0, y: index == 1 ? -6 : 0)
                     .zIndex(index == 1 ? 1 : 0)
             }
         }
@@ -340,7 +359,7 @@ private struct FannedCovers: View {
             if reduceMotion {
                 spread = true
             } else {
-                withAnimation(.spring(response: 0.7, dampingFraction: 0.75).delay(0.15)) { spread = true }
+                withAnimation(.spring(response: 0.55, dampingFraction: 0.78).delay(0.1)) { spread = true }
             }
         }
     }

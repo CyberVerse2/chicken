@@ -4,11 +4,6 @@ import ChickenKit
 import SwiftData
 import SwiftUI
 
-/// Chicken in the menu bar: the house egg, filling up as you read toward
-/// today's goal. Click it for the book you're in and the others on the go,
-/// one click from their pages. Hide it from System Settings › Menu Bar.
-/// (Binding `isInserted` to a setting loops forever on macOS 26: the status
-/// item saves its own visibility and SwiftUI writes it straight back.)
 struct MenuBarReading: Scene {
     let library: LibraryStore
     let router: AppRouter
@@ -29,7 +24,6 @@ struct MenuBarReading: Scene {
         .menuBarExtraStyle(.window)
 
         #if DEBUG
-        // `CHICKEN_DEBUG_PANEL=menubar` shows the panel in a window, for review.
         Window("Menu Bar Panel", id: "menubar-preview") {
             MenuBarPanel()
                 .environment(library)
@@ -62,9 +56,6 @@ private struct MenuBarPreviewOpener: ViewModifier {
 }
 #endif
 
-/// The menu bar icon: an egg outline whose yolk rises with today's minutes,
-/// solid once the goal is met. Rendered as a template image so it follows
-/// the menu bar's light, dark, and tinted looks.
 private struct MenuBarEgg: View {
     let fraction: Double
 
@@ -73,9 +64,8 @@ private struct MenuBarEgg: View {
             .accessibilityLabel("Chicken")
     }
 
-    @MainActor private static var cache: [Double: NSImage] = [:]
+    private static var cache: [Double: NSImage] = [:]
 
-    @MainActor
     private static func image(for fraction: Double) -> NSImage {
         if let cached = cache[fraction] { return cached }
         let egg = ZStack(alignment: .bottom) {
@@ -153,10 +143,8 @@ private struct MenuBarPanel: View {
     }
 
     private var divider: some View {
-        Rectangle().fill(palette.border).frame(height: 1)
+        Rectangle().fill(palette.border).frame(height: 0.5)
     }
-
-    // MARK: Today
 
     private var minutes: Int { library.readingSecondsToday / 60 }
     private var goal: Int { library.preferences.dailyGoalMinutes }
@@ -179,7 +167,7 @@ private struct MenuBarPanel: View {
                         .font(.chickenDisplay(22))
                         .monospacedDigit()
                     Text("of \(goal) min today")
-                        .font(.chickenSerif(13, italic: true))
+                        .font(.chickenUI(12.5))
                         .foregroundStyle(palette.muted)
                 }
                 Text(fraction >= 1 ? "Goal done. Anything more is a bonus." : "\(goal - minutes) min to go")
@@ -190,21 +178,21 @@ private struct MenuBarPanel: View {
         .accessibilityElement(children: .combine)
     }
 
-    // MARK: Books
-
     private func currentBook(_ book: Book) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 14) {
                 BookCover(book: book, style: .mini)
-                    .frame(width: 56, height: 84)
+                    .frame(width: 54, height: 81)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(book.displayTitle)
-                        .font(.chickenDisplay(16))
+                        .font(.chickenDisplay(15.5))
                         .lineLimit(2)
-                    Text(book.displayAuthor)
-                        .font(.chickenSerif(12, italic: true))
-                        .foregroundStyle(palette.muted)
-                        .lineLimit(1)
+                    if let author = book.author, !author.isEmpty {
+                        Text(author)
+                            .font(.chickenUI(12))
+                            .foregroundStyle(palette.muted)
+                            .lineLimit(1)
+                    }
                     Spacer(minLength: 6)
                     HStack(spacing: 4) {
                         Text("\(Int((book.progress * 100).rounded()))%")
@@ -214,11 +202,11 @@ private struct MenuBarPanel: View {
                             Text(chapter).lineLimit(1)
                         }
                     }
-                    .font(.chickenUI(11))
+                    .font(.chickenMono(11))
                     .foregroundStyle(palette.muted)
                     ProgressLine(progress: book.progress)
                 }
-                .frame(height: 84, alignment: .top)
+                .frame(height: 81, alignment: .top)
             }
 
             Button { open(book) } label: {
@@ -230,7 +218,7 @@ private struct MenuBarPanel: View {
                     .foregroundStyle(palette.background)
                     .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TactilePressStyle())
             .keyboardShortcut(.defaultAction)
         }
     }
@@ -241,16 +229,18 @@ private struct MenuBarPanel: View {
                 .frame(width: 22, height: 33)
             VStack(alignment: .leading, spacing: 1) {
                 Text(book.displayTitle)
-                    .font(.chickenSerif(13))
+                    .font(.chickenUI(13, weight: .medium))
                     .lineLimit(1)
-                Text(book.displayAuthor)
-                    .font(.chickenUI(10.5))
-                    .foregroundStyle(palette.muted)
-                    .lineLimit(1)
+                if let author = book.author, !author.isEmpty {
+                    Text(author)
+                        .font(.chickenUI(10.5))
+                        .foregroundStyle(palette.muted)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             Text("\(Int((book.progress * 100).rounded()))%")
-                .font(.chickenUI(11).monospacedDigit())
+                .font(.chickenMono(11))
                 .foregroundStyle(palette.muted)
         }
     }
@@ -273,7 +263,6 @@ private struct MenuBarPanel: View {
     }
 }
 
-/// A full-width row that lights up under the pointer, like a menu item.
 private struct MenuRowStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         MenuRow(configuration: configuration)

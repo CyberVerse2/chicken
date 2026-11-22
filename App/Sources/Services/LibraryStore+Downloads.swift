@@ -6,24 +6,18 @@ import Observation
 /// cover following its download redraws on its own.
 @Observable
 final class BookDownload {
-    /// The book opens without the network.
-    var isOnDevice: Bool
-    /// 0...1 while downloading.
-    var progress: Double?
-    /// iCloud has the file, so this device's copy can be removed.
-    var isUploaded: Bool
+    var status: CloudFileWatcher.TransferState
 
-    init(isOnDevice: Bool, progress: Double? = nil, isUploaded: Bool = true) {
-        self.isOnDevice = isOnDevice
-        self.progress = progress
-        self.isUploaded = isUploaded
+    var isOnDevice: Bool { status.isDownloaded }
+    var progress: Double? { status.progress }
+    var isUploaded: Bool { status.isUploaded }
+
+    init(status: CloudFileWatcher.TransferState) {
+        self.status = status
     }
 
-    fileprivate func update(isOnDevice: Bool, progress: Double?, isUploaded: Bool) {
-        // Observation reports every assignment; only assign what changed.
-        if self.isOnDevice != isOnDevice { self.isOnDevice = isOnDevice }
-        if self.progress != progress { self.progress = progress }
-        if self.isUploaded != isUploaded { self.isUploaded = isUploaded }
+    fileprivate func update(to newStatus: CloudFileWatcher.TransferState) {
+        if status != newStatus { status = newStatus }
     }
 }
 
@@ -35,8 +29,7 @@ extension LibraryStore {
         guard cloud != nil else { return nil }
         let name = book.storedFileName
         if let existing = bookDownloads[name] { return existing }
-        let state = fileState(named: name)
-        let download = BookDownload(isOnDevice: state.isOnDevice, progress: state.progress, isUploaded: state.isUploaded)
+        let download = BookDownload(status: fileTransferState(named: name))
         bookDownloads[name] = download
         return download
     }
@@ -57,9 +50,7 @@ extension LibraryStore {
         noteRequestedDownloads(wanted)
         let urls = wanted.map { cloud.books.appendingPathComponent($0.storedFileName) }
         guard !urls.isEmpty else { return }
-        Task.detached(priority: .userInitiated) {
-            for url in urls { try? FileManager.default.startDownloadingUbiquitousItem(at: url) }
-        }
+        Task { await CloudFolders.startDownloadingAll(urls) }
     }
 
     /// Kept books are downloaded, and fetched again if the system clears
@@ -86,9 +77,7 @@ extension LibraryStore {
         guard let cloud else { return }
         let urls = books.filter(canRemoveDownload).map { cloud.books.appendingPathComponent($0.storedFileName) }
         guard !urls.isEmpty else { return }
-        Task.detached(priority: .utility) {
-            for url in urls { try? FileManager.default.evictUbiquitousItem(at: url) }
-        }
+        Task { await CloudFolders.evictAll(urls) }
     }
 
     func setDownloadsAllBooks(_ on: Bool) {
@@ -97,69 +86,77 @@ extension LibraryStore {
     }
 
     /// Books on this device and the space their files take.
-    func downloadedBooks() -> (count: Int, bytes: Int64) {
-        let books = allBooks().filter(isOnDevice)
-        return (books.count, books.reduce(0) { $0 + $1.fileSize })
+    func downloadedBooks(in books: [Book]? = nil) -> (count: Int, bytes: Int64) {
+        let source = books ?? allBooks()
+        let onDevice = source.filter(isOnDevice)
+        return (onDevice.count, onDevice.reduce(0) { $0 + $1.fileSize })
     }
 
     /// The reader marks the book it has open, so its file isn't removed
     /// from under it.
     func setOpen(_ open: Bool, _ book: Book) {
-        if open { openBookIDs.insert(book.id) } else { openBookIDs.remove(book.id) }
+        if open {
+            openBookIDs.insert(book.id)
+            if isAppActive { resumeReadingSession() }
+        } else {
+            openBookIDs.remove(book.id)
+            if openBookIDs.isEmpty { pauseReadingSession() }
+        }
     }
 
     // MARK: From the watcher
 
-    /// Tells the watcher which book files to keep on this device.
     func updateWantedDownloads() {
         let kept = preferences.keptBookIDs
         let names = Set(allBooks().filter { kept.contains($0.id) }.map(\.storedFileName))
         cloudWatcher?.keepDownloaded(all: preferences.downloadsAllBooks, names: names)
     }
 
-    func applyBookFileStates(_ states: [String: CloudFileWatcher.BookFile]) {
+    func applyBookFileStates(_ states: [String: CloudFileWatcher.TransferState]) {
         bookFileStates = states
         for (name, download) in bookDownloads {
-            let state = fileState(named: name)
-            download.update(isOnDevice: state.isOnDevice, progress: state.progress, isUploaded: state.isUploaded)
+            download.update(to: fileTransferState(named: name))
         }
         finishRequestedDownloads(states)
     }
 
     // MARK: Downloads the user asked for
 
-    /// Books the user chose to download join the current batch; "Download
-    /// all books" and opening a book don't come through here.
     private func noteRequestedDownloads(_ books: [Book]) {
         let added = Set(books.map(\.storedFileName)).subtracting(requestedDownloads)
         requestedDownloads.formUnion(added)
         requestedDownloadCount += added.count
     }
 
-    /// When the batch's last book lands, says so once for the whole batch.
-    private func finishRequestedDownloads(_ states: [String: CloudFileWatcher.BookFile]) {
+    private func finishRequestedDownloads(_ states: [String: CloudFileWatcher.TransferState]) {
         guard !requestedDownloads.isEmpty else { return }
         for name in requestedDownloads {
             guard let state = states[name] else {
-                // Removed meanwhile: it no longer counts.
                 requestedDownloads.remove(name)
-                requestedDownloadCount -= 1
+                requestedDownloadCount = max(0, requestedDownloadCount - 1)
                 continue
             }
-            if state.isDownloaded { requestedDownloads.remove(name) }
+            switch state {
+            case .downloaded:
+                requestedDownloads.remove(name)
+            case .failed:
+                requestedDownloads.remove(name)
+                requestedDownloadCount = max(0, requestedDownloadCount - 1)
+            case .cloudOnly, .downloading:
+                break
+            }
         }
         guard requestedDownloads.isEmpty else { return }
-        ChickenNotifications.shared.downloadsFinished(count: requestedDownloadCount)
+        if requestedDownloadCount > 0 {
+            ChickenNotifications.shared.downloadsFinished(count: requestedDownloadCount)
+        }
         requestedDownloadCount = 0
     }
 
-    /// Until the watcher's first report, every book counts as here, so
-    /// covers don't flash cloud marks at launch. A file iCloud doesn't know
-    /// is either still in the local folder or hasn't arrived yet.
-    private func fileState(named name: String) -> (isOnDevice: Bool, progress: Double?, isUploaded: Bool) {
-        guard let states = bookFileStates else { return (true, nil, true) }
-        if let file = states[name] { return (file.isDownloaded, file.progress, file.isUploaded) }
+    private func fileTransferState(named name: String) -> CloudFileWatcher.TransferState {
+        guard let states = bookFileStates else { return .downloaded(isUploaded: true) }
+        if let file = states[name] { return file }
         let isLocal = FileManager.default.fileExists(atPath: paths.bookFile(named: name).path)
-        return (isLocal, nil, !isLocal)
+        return isLocal ? .downloaded(isUploaded: false) : .cloudOnly
     }
 }

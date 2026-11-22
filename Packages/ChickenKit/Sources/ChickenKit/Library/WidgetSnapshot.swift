@@ -82,19 +82,54 @@ public struct WidgetSnapshot: Codable, Sendable, Hashable {
     public static var coverURL: URL? { containerURL?.appendingPathComponent("widget-cover.jpg") }
 
     public static func load() -> WidgetSnapshot? {
-        guard let url = snapshotURL, let data = try? Data(contentsOf: url) else { return nil }
-        return try? JSONDecoder().decode(WidgetSnapshot.self, from: data)
+        guard let url = snapshotURL else { return nil }
+        var loadedData: Data?
+        var coordinatorError: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordinatorError) { readURL in
+            loadedData = try? Data(contentsOf: readURL)
+        }
+        if let coordinatorError {
+            ChickenLog.widgets.error("Failed to coordinate widget snapshot read: \(coordinatorError.localizedDescription, privacy: .public)")
+        }
+        guard let data = loadedData else { return nil }
+        do {
+            return try JSONDecoder().decode(WidgetSnapshot.self, from: data)
+        } catch {
+            ChickenLog.widgets.error("Failed to decode widget snapshot: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     public func save(coverJPEG: Data?) {
-        guard let url = Self.snapshotURL, let data = try? JSONEncoder().encode(self) else { return }
-        try? data.write(to: url, options: .atomic)
-        if let coverURL = Self.coverURL {
-            if let coverJPEG {
-                try? coverJPEG.write(to: coverURL, options: .atomic)
-            } else {
-                try? FileManager.default.removeItem(at: coverURL)
+        guard let url = Self.snapshotURL else { return }
+        let data: Data
+        do {
+            data = try JSONEncoder().encode(self)
+        } catch {
+            ChickenLog.widgets.error("Failed to encode widget snapshot: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        var coordinatorError: NSError?
+        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinatorError) { writeURL in
+            do {
+                try data.write(to: writeURL, options: .atomic)
+            } catch {
+                ChickenLog.widgets.error("Failed to write widget snapshot: \(error.localizedDescription, privacy: .public)")
             }
+            if let coverURL = Self.coverURL {
+                if let coverJPEG {
+                    do {
+                        try coverJPEG.write(to: coverURL, options: .atomic)
+                    } catch {
+                        ChickenLog.widgets.error("Failed to write widget cover: \(error.localizedDescription, privacy: .public)")
+                    }
+                } else {
+                    try? FileManager.default.removeItem(at: coverURL)
+                }
+            }
+        }
+        if let coordinatorError {
+            ChickenLog.widgets.error("Failed to coordinate widget snapshot write: \(coordinatorError.localizedDescription, privacy: .public)")
         }
     }
 }
@@ -104,13 +139,31 @@ public enum ChickenLink {
     public static let scheme = "chicken"
 
     public static func book(_ id: UUID) -> URL {
-        URL(string: "\(scheme)://book/\(id.uuidString)")!
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "book"
+        components.path = "/\(id.uuidString)"
+        return components.url ?? URL(fileURLWithPath: "/")
     }
 
-    public static let continueReading = URL(string: "\(scheme)://continue")!
+    public static func highlight(_ id: UUID) -> URL {
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "highlight"
+        components.path = "/\(id.uuidString)"
+        return components.url ?? URL(fileURLWithPath: "/")
+    }
+
+    public static let continueReading: URL = {
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "continue"
+        return components.url ?? URL(fileURLWithPath: "/")
+    }()
 
     public enum Destination: Equatable, Sendable {
         case book(UUID)
+        case highlight(UUID)
         case continueReading
     }
 
@@ -119,6 +172,8 @@ public enum ChickenLink {
         switch url.host() {
         case "book":
             return url.pathComponents.dropFirst().first.flatMap(UUID.init(uuidString:)).map(Destination.book)
+        case "highlight":
+            return url.pathComponents.dropFirst().first.flatMap(UUID.init(uuidString:)).map(Destination.highlight)
         case "continue":
             return .continueReading
         default:

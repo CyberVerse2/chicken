@@ -8,30 +8,41 @@ import UniformTypeIdentifiers
 public enum CoverRenderer {
     /// Longest edge of a stored cover, in pixels.
     static let maxPixelSize = 1200
+    private static let sRGBColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    private static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "webp"]
 
     /// Writes `<id>.jpg` into `directory` and returns the file name, or nil
     /// when the document has no usable cover (the UI then draws a stylized one).
     public static func generateCover(for url: URL, format: BookFormat, id: UUID, in directory: URL) -> String? {
-        let name = "\(id.uuidString).jpg"
-        let destination = directory.appendingPathComponent(name)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
         switch format {
         case .pdf:
-            // Many PDFs open on a page of text rather than a cover; those get
-            // a typographic cover instead of a picture of their first page.
-            guard let image = renderFirstPDFPage(url), !looksLikeTextPage(image) else { return nil }
-            return writeJPEG(image, to: destination) ? name : nil
+            return generatePDFCover(for: url, id: id, in: directory)
         case .epub:
-            guard
-                let archive = try? ZipArchive(url: url),
-                let data = epubCoverData(archive: archive),
-                let image = downsampledImage(from: data)
-            else { return nil }
-            return writeJPEG(image, to: destination) ? name : nil
+            guard let archive = try? ZipArchive(url: url) else { return nil }
+            let package = try? EPUBPackage(archive: archive)
+            return generateEPUBCover(archive: archive, package: package, id: id, in: directory)
         case .text, .document, .unknown:
             return nil
         }
+    }
+
+    static func generatePDFCover(for url: URL, id: UUID, in directory: URL) -> String? {
+        let name = "\(id.uuidString).jpg"
+        let destination = directory.appendingPathComponent(name)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let image = renderFirstPDFPage(url), !looksLikeTextPage(image) else { return nil }
+        return writeJPEG(image, to: destination) ? name : nil
+    }
+
+    static func generateEPUBCover(archive: ZipArchive, package: EPUBPackage?, id: UUID, in directory: URL) -> String? {
+        let name = "\(id.uuidString).jpg"
+        let destination = directory.appendingPathComponent(name)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard
+            let data = epubCoverData(archive: archive, package: package),
+            let image = downsampledImage(from: data)
+        else { return nil }
+        return writeJPEG(image, to: destination) ? name : nil
     }
 
     // MARK: PDF
@@ -50,7 +61,7 @@ public enum CoverRenderer {
             height: Int(height),
             bitsPerComponent: 8,
             bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+            space: sRGBColorSpace,
             bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
         ) else { return nil }
 
@@ -77,7 +88,7 @@ public enum CoverRenderer {
                 height: height,
                 bitsPerComponent: 8,
                 bytesPerRow: width * 4,
-                space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                space: sRGBColorSpace,
                 bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
             ) else { return false }
             context.interpolationQuality = .medium
@@ -107,9 +118,9 @@ public enum CoverRenderer {
 
     // MARK: EPUB
 
-    static func epubCoverData(archive: ZipArchive) -> Data? {
-        if let package = try? EPUBPackage(archive: archive),
-           let path = package.coverImagePath,
+    static func epubCoverData(archive: ZipArchive, package: EPUBPackage? = nil) -> Data? {
+        if let resolved = package ?? (try? EPUBPackage(archive: archive)),
+           let path = resolved.coverImagePath,
            let data = try? archive.data(for: path) {
             return data
         }
@@ -120,7 +131,7 @@ public enum CoverRenderer {
     /// with cover-like names, then the largest image.
     private static func bestImageGuess(in archive: ZipArchive) -> Data? {
         let candidates = archive.entries
-            .filter { $0.path.range(of: #"\.(jpe?g|png|webp)$"#, options: [.regularExpression, .caseInsensitive]) != nil }
+            .filter { imageExtensions.contains(($0.path as NSString).pathExtension.lowercased()) }
             .prefix(48)
 
         var best: (score: Double, data: Data)?
@@ -153,14 +164,17 @@ public enum CoverRenderer {
 
     // MARK: Encoding
 
-    static func downsampledImage(from data: Data) -> CGImage? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
-        let options: [CFString: Any] = [
+    private static func thumbnailOptions(maxPixelSize: Int) -> CFDictionary {
+        [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-        ]
-        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+        ] as CFDictionary
+    }
+
+    static func downsampledImage(from data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions(maxPixelSize: maxPixelSize))
     }
 
     @discardableResult
@@ -175,13 +189,8 @@ public enum CoverRenderer {
     /// Small JPEG used by the widget snapshot.
     public static func thumbnailJPEG(from url: URL, maxPixelSize: Int = 360) -> Data? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
-        ]
         guard
-            let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+            let image = CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions(maxPixelSize: maxPixelSize)),
             let data = CFDataCreateMutable(nil, 0),
             let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)
         else { return nil }

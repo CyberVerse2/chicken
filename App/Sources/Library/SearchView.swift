@@ -2,7 +2,6 @@ import ChickenKit
 import SwiftData
 import SwiftUI
 
-/// Search across titles, authors, publishers, and the text of highlights.
 struct SearchView: View {
     @Environment(\.palette) private var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -16,14 +15,14 @@ struct SearchView: View {
     private var matchingBooks: [Book] {
         guard !trimmed.isEmpty else { return [] }
         return books.filter {
-            $0.title.localizedStandardContains(trimmed)
+            $0.displayTitle.localizedStandardContains(trimmed)
+                || $0.title.localizedStandardContains(trimmed)
                 || $0.displayAuthor.localizedStandardContains(trimmed)
                 || ($0.publisher?.localizedStandardContains(trimmed) ?? false)
                 || $0.originalFileName.localizedStandardContains(trimmed)
         }
     }
 
-    /// The books currently listed, in order: suggestions or results.
     private var listedBooks: [Book] {
         trimmed.isEmpty ? Array(books.filter { $0.lastOpenedAt != nil }.prefix(6)) : Array(matchingBooks.prefix(60))
     }
@@ -35,27 +34,27 @@ struct SearchView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
+            VStack(alignment: .leading, spacing: 26) {
                 if trimmed.isEmpty {
                     suggestions
                 } else if matchingBooks.isEmpty && matchingHighlights.isEmpty {
                     VStack(spacing: 10) {
                         Image(systemName: "magnifyingglass")
-                            .font(.system(size: 28, weight: .light))
+                            .font(.system(size: 26, weight: .light))
                             .foregroundStyle(palette.faint)
                         Text("Nothing matches \u{201C}\(trimmed)\u{201D}")
-                            .font(.chickenSerif(18, italic: true))
+                            .font(.chickenUI(15.5))
                             .foregroundStyle(palette.muted)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 80)
                 } else {
                     if !matchingBooks.isEmpty {
-                        VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 12) {
                             SectionLabel(text: "Books", count: matchingBooks.count)
                             VStack(spacing: 0) {
                                 ForEach(Array(matchingBooks.prefix(60).enumerated()), id: \.element.id) { index, book in
-                                    SearchBookRow(book: book, query: trimmed)
+                                    SearchBookRow(book: book)
                                     if index < min(matchingBooks.count, 60) - 1 {
                                         Rectangle().fill(palette.border).frame(height: 0.5).padding(.leading, 74)
                                     }
@@ -69,7 +68,7 @@ struct SearchView: View {
                         }
                     }
                     if !matchingHighlights.isEmpty {
-                        VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 12) {
                             SectionLabel(text: "In your highlights", count: matchingHighlights.count)
                             ForEach(matchingHighlights.prefix(40)) { highlight in
                                 SearchHighlightCard(highlight: highlight)
@@ -79,28 +78,29 @@ struct SearchView: View {
                 }
             }
             .padding(.horizontal, gutter)
-            .padding(.top, 12)
-            .padding(.bottom, 80)
+            .padding(.top, sizeClass == .compact ? 2 : 12)
+            .padding(.bottom, 96)
             .coverCollection("search", books: listedBooks.map(\.id))
             .frame(maxWidth: 820, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollContentBackground(.hidden)
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(palette.background.ignoresSafeArea())
         .pageTitle("Search")
         .searchable(text: $query, prompt: "Titles, authors, highlights")
     }
 
     private var suggestions: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             PageHeader(title: "Search")
             let recent = books.filter { $0.lastOpenedAt != nil }.prefix(6)
             if !recent.isEmpty {
                 SectionLabel(text: "Recently opened")
-                    .padding(.top, 12)
+                    .padding(.top, 8)
                 VStack(spacing: 0) {
                     ForEach(Array(recent.enumerated()), id: \.element.id) { index, book in
-                        SearchBookRow(book: book, query: "")
+                        SearchBookRow(book: book)
                         if index < recent.count - 1 {
                             Rectangle().fill(palette.border).frame(height: 0.5).padding(.leading, 74)
                         }
@@ -118,12 +118,10 @@ struct SearchView: View {
 
 private struct SearchBookRow: View {
     @Environment(\.palette) private var palette
-    @Environment(\.openBook) private var openBook
     @Environment(\.coverContext) private var coverContext
     @Environment(\.bookSequence) private var bookSequence
     @Environment(\.selectBook) private var selectBook
     let book: Book
-    let query: String
 
     var body: some View {
         Button { selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id)) } label: {
@@ -131,19 +129,21 @@ private struct SearchBookRow: View {
                 BookCover(book: book, style: .mini)
                     .frame(width: 40, height: 60)
                     .coverTransitionSource(book.id)
-                    .shadow(color: palette.shadow, radius: 2, y: 1)
+                    .shadow(color: palette.shadow, radius: 3, y: 2)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(book.displayTitle)
-                        .font(.chickenSerif(16, weight: .semibold))
+                        .font(.chickenUI(15, weight: .semibold))
                         .foregroundStyle(palette.text)
                         .lineLimit(2)
-                    Text(book.displayAuthor)
-                        .font(.chickenSerif(13, italic: true))
-                        .foregroundStyle(palette.muted)
-                        .lineLimit(1)
+                    if let author = book.author, !author.isEmpty {
+                        Text(author)
+                            .font(.chickenUI(13))
+                            .foregroundStyle(palette.muted)
+                            .lineLimit(1)
+                    }
                     if !meta.isEmpty {
                         Text(meta)
-                            .font(.chickenUI(11))
+                            .font(.chickenMono(11))
                             .foregroundStyle(palette.faint)
                     }
                 }
@@ -153,7 +153,7 @@ private struct SearchBookRow: View {
             .padding(.vertical, 12)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressStyle(scale: 0.99))
         .bookContextMenu(book)
     }
 
@@ -170,7 +170,6 @@ private struct SearchBookRow: View {
 }
 
 private struct SearchHighlightCard: View {
-    @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
     @Environment(\.openBook) private var openBook
     let highlight: Highlight
@@ -178,9 +177,7 @@ private struct SearchHighlightCard: View {
     var body: some View {
         Button {
             guard let book = highlight.book else { return }
-            if let location = highlight.location { book.lastLocation = location }
-            library.save()
-            openBook(book.id)
+            openBook(book.id, jumpTo: JumpTarget(location: highlight.location, chapterIndex: highlight.chapterIndex))
         } label: {
             HStack(alignment: .top, spacing: 14) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -189,12 +186,12 @@ private struct SearchHighlightCard: View {
                         text.backgroundColor = highlight.color.fill
                         return text
                     }())
-                        .font(.chickenSerif(16))
-                        .foregroundStyle(palette.text)
-                        .lineSpacing(5)
-                        .multilineTextAlignment(.leading)
-                    Text(highlight.book?.title ?? "")
-                        .font(.chickenSerif(12, italic: true))
+                    .font(.chickenSerif(16))
+                    .foregroundStyle(palette.text)
+                    .lineSpacing(5)
+                    .multilineTextAlignment(.leading)
+                    Text(highlight.book?.displayTitle ?? "")
+                        .font(.chickenUI(12.5, weight: .medium))
                         .foregroundStyle(palette.muted)
                 }
                 Spacer(minLength: 0)
@@ -207,6 +204,6 @@ private struct SearchHighlightCard: View {
             )
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressStyle(scale: 0.99))
     }
 }

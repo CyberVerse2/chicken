@@ -67,21 +67,24 @@ extension CoverImageCache {
     /// The average colour of a cover image, or nil if it can't be read.
     nonisolated func hue(for url: URL) async -> CoverHue? {
         guard let image = await image(for: url, maxPixelSize: 64) else { return nil }
-        return await Task.detached(priority: .utility) { () -> CoverHue? in
-            var pixel = [UInt8](repeating: 0, count: 4)
-            let drawn = pixel.withUnsafeMutableBytes { buffer -> Bool in
-                guard let context = CGContext(
-                    data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
-                    space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
-                    bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
-                ) else { return false }
-                context.interpolationQuality = .medium
-                context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
-                return true
-            }
-            guard drawn else { return nil }
-            return CoverHue(red: Double(pixel[0]) / 255, green: Double(pixel[1]) / 255, blue: Double(pixel[2]) / 255)
-        }.value
+        return await Self.computeAverageHue(of: image)
+    }
+
+    @concurrent
+    private static func computeAverageHue(of image: CGImage) async -> CoverHue? {
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let drawn = pixel.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8, bytesPerRow: 4,
+                space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(image, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+        guard drawn else { return nil }
+        return CoverHue(red: Double(pixel[0]) / 255, green: Double(pixel[1]) / 255, blue: Double(pixel[2]) / 255)
     }
 }
 
@@ -111,7 +114,6 @@ struct CoverTintModifier: ViewModifier {
             }
     }
 
-    @MainActor
     static func hue(for book: Book, library: LibraryStore) async -> CoverHue {
         let cloth = CoverHue(hex: CoverPreset.preset(for: book.coverTintIndex).clothHex)
         guard let url = library.coverURL(for: book) else { return cloth }

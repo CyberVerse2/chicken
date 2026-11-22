@@ -22,8 +22,9 @@ public struct EPUBPackage: Sendable {
         }
 
         public var isImage: Bool {
-            mediaType?.hasPrefix("image/") == true
-                || href.range(of: #"\.(jpe?g|png|gif|webp)$"#, options: [.regularExpression, .caseInsensitive]) != nil
+            if mediaType?.hasPrefix("image/") == true { return true }
+            let ext = (href as NSString).pathExtension.lowercased()
+            return ext == "jpg" || ext == "jpeg" || ext == "png" || ext == "gif" || ext == "webp"
         }
     }
 
@@ -45,10 +46,18 @@ public struct EPUBPackage: Sendable {
         public let level: Int
     }
 
-    public enum PackageError: Error {
+    public enum PackageError: Error, Equatable, LocalizedError {
         case missingContainer
         case missingPackage
         case emptySpine
+
+        public var errorDescription: String? {
+            switch self {
+            case .missingContainer: "Missing EPUB container descriptor."
+            case .missingPackage: "Missing EPUB package manifest."
+            case .emptySpine: "EPUB has no readable chapters."
+            }
+        }
     }
 
     public let packagePath: String
@@ -136,7 +145,7 @@ public struct EPUBPackage: Sendable {
         }
         guard !spine.isEmpty else { throw PackageError.emptySpine }
 
-        coverImagePath = Self.coverPath(package: package, manifest: manifest, archive: archive)
+        coverImagePath = Self.coverPath(package: package, manifest: manifest)
     }
 
     // MARK: - Table of contents
@@ -207,12 +216,12 @@ public struct EPUBPackage: Sendable {
 
     private static func documentTitle(archive: ZipArchive, path: String) -> String? {
         guard let raw = archive.string(for: path) else { return nil }
-        let pattern = #"<h[1-3]\b[^>]*>([\s\S]*?)</h[1-3]>|<title\b[^>]*>([\s\S]*?)</title>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
-        let ns = raw as NSString
-        guard let match = regex.firstMatch(in: raw, range: NSRange(location: 0, length: ns.length)) else { return nil }
-        for group in 1...2 where match.range(at: group).location != NSNotFound {
-            let title = cleanTitle(ns.substring(with: match.range(at: group)))
+        if let match = raw.firstMatch(of: /(?i)<h[1-3]\b[^>]*>([\s\S]*?)<\/h[1-3]>/) {
+            let title = cleanTitle(String(match.output.1))
+            if !title.isEmpty { return title }
+        }
+        if let match = raw.firstMatch(of: /(?i)<title\b[^>]*>([\s\S]*?)<\/title>/) {
+            let title = cleanTitle(String(match.output.1))
             if !title.isEmpty { return title }
         }
         return nil
@@ -224,7 +233,7 @@ public struct EPUBPackage: Sendable {
 
     // MARK: - Cover
 
-    private static func coverPath(package: MarkupNode, manifest: [String: ManifestItem], archive: ZipArchive) -> String? {
+    private static func coverPath(package: MarkupNode, manifest: [String: ManifestItem]) -> String? {
         let images = manifest.values.filter(\.isImage)
 
         if let item = images.first(where: { $0.properties?.split(separator: " ").contains("cover-image") == true }) {
@@ -237,9 +246,8 @@ public struct EPUBPackage: Sendable {
         if let item = images.first(where: { $0.id.lowercased() == "cover" || $0.id.lowercased() == "cover-image" }) {
             return item.path
         }
-        let namePattern = #"(cover|front|title|ttlpg|[_-]cv[ti]?)[^/]*\.(jpe?g|png|webp)$"#
         if let item = images
-            .filter({ $0.href.range(of: namePattern, options: [.regularExpression, .caseInsensitive]) != nil })
+            .filter({ $0.href.contains(/(?i)(cover|front|title|ttlpg|[_-]cv[ti]?)[^\/]*\.(jpe?g|png|webp)$/) })
             .sorted(by: { $0.href < $1.href })
             .first {
             return item.path
@@ -288,7 +296,7 @@ enum EPUBPath {
     static func title(fromHref href: String) -> String {
         let raw = (href.removingPercentEncoding ?? href).split(separator: "/").last.map(String.init) ?? href
         return raw
-            .replacingOccurrences(of: #"\.x?html?$"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .replacing(/(?i)\.x?html?$/, with: "")
             .replacingOccurrences(of: "_", with: " ")
             .replacingOccurrences(of: "-", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)

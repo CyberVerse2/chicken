@@ -1,80 +1,82 @@
 import ChickenKit
+import Observation
+import os
 import SwiftUI
 import UserNotifications
 
-/// The four things Chicken tells you about, and nothing else: a nudge on
-/// days you haven't read, downloads you asked for, books added from a
-/// shared folder on the Mac, and sync problems that need you. Each has its
-/// own switch in Settings.
-@MainActor
+@Observable
 final class ChickenNotifications: NSObject {
     static let shared = ChickenNotifications()
 
     enum Kind: String, CaseIterable, Identifiable {
-        case nudge, downloads, imports, sync
+        case nudge, downloads, sync
         var id: String { rawValue }
         var defaultsKey: String { "Chicken.notify.\(rawValue)" }
     }
 
-    /// Sync problems worth an interruption: ones syncing can't get past
-    /// without you.
     enum SyncProblem: String {
         case iCloudFull, signedOut
     }
 
-    /// Where a tap on a notification goes, beyond opening a book.
-    enum Place: String {
-        case downloadedBooks, recentlyAdded, settings
+    enum Place: String, Equatable {
+        case downloadedBooks, settings
     }
 
-    private let center = UNUserNotificationCenter.current()
-    private weak var library: LibraryStore?
-    private let defaults = UserDefaults.standard
+    private(set) var enabledKinds: Set<Kind>
+
+    @ObservationIgnored private let center = UNUserNotificationCenter.current()
+    @ObservationIgnored private weak var library: LibraryStore?
+    @ObservationIgnored private let defaults = UserDefaults.standard
 
     private override init() {
+        let defaults = UserDefaults.standard
+        enabledKinds = Set(Kind.allCases.filter { defaults.object(forKey: $0.defaultsKey) as? Bool ?? true })
         super.init()
     }
 
-    // MARK: Switches
-
     func isOn(_ kind: Kind) -> Bool {
-        defaults.object(forKey: kind.defaultsKey) as? Bool ?? true
+        enabledKinds.contains(kind)
     }
 
     func set(_ kind: Kind, on: Bool) {
+        if on {
+            enabledKinds.insert(kind)
+        } else {
+            enabledKinds.remove(kind)
+        }
         defaults.set(on, forKey: kind.defaultsKey)
         if kind == .nudge { scheduleNudges() }
     }
 
-    // MARK: Start
-
-    /// Called once the library is up. Asks for permission the first time,
-    /// as you chose: the nudge is on from the start.
     func start(library: LibraryStore) {
         self.library = library
         center.delegate = self
-        let askedKey = "Chicken.notify.asked"
-        guard !defaults.bool(forKey: askedKey) else {
-            refresh()
-            return
-        }
-        defaults.set(true, forKey: askedKey)
-        Task {
-            _ = try? await center.requestAuthorization(options: [.alert, .sound])
-            refresh()
+        refresh()
+    }
+
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        await center.notificationSettings().authorizationStatus
+    }
+
+    func requestAuthorizationIfNeeded() async -> Bool {
+        let status = await authorizationStatus()
+        if status == .authorized || status == .provisional { return true }
+        guard status == .notDetermined else { return false }
+        do {
+            let granted = try await center.requestAuthorization(options: [.alert, .sound])
+            if granted { refresh() }
+            return granted
+        } catch {
+            ChickenLog.notifications.error("Notification authorization failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
-    /// Whether the system lets Chicken notify at all.
     func isAllowed() async -> Bool {
-        let settings = await center.notificationSettings()
-        return settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+        let status = await authorizationStatus()
+        return status == .authorized || status == .provisional
     }
 
-    // MARK: Reading nudge
-
-    /// Reading state may have changed (the app came forward or went away):
-    /// note when you read, and reschedule the nudge around it.
     func refresh() {
         guard let library else { return }
         library.recomputeReadingStats()
@@ -82,8 +84,6 @@ final class ChickenNotifications: NSObject {
         scheduleNudges()
     }
 
-    /// When you read, learned from when today's minutes go up: the start of
-    /// each new stretch is a sample of your usual reading time.
     private func noteReadingTime(secondsToday: Int) {
         let today = ReadingLog.dayKey(for: Date())
         let seenDay = defaults.string(forKey: "Chicken.notify.seenDay")
@@ -102,19 +102,13 @@ final class ChickenNotifications: NSObject {
         defaults.set(Array(samples.suffix(20)), forKey: "Chicken.notify.samples")
     }
 
-    /// Minutes after midnight you usually start reading; evening until
-    /// there's enough to go on.
     var usualReadingMinute: Int {
         let samples = (defaults.array(forKey: "Chicken.notify.samples") as? [Int] ?? []).sorted()
         guard samples.count >= 3 else { return 20 * 60 }
         let median = samples[samples.count / 2]
-        // A few minutes before you'd usually sit down, on the quarter hour.
         return max(6 * 60, (median - 10) / 15 * 15)
     }
 
-    /// The next three days' nudges, each only on a day you haven't read
-    /// yet. Reading today cancels today's; a day's nudge is replaced the
-    /// next time Chicken runs, so it names the book you're on then.
     private func scheduleNudges() {
         let ids = (0..<3).map { "nudge-\($0)" }
         center.removePendingNotificationRequests(withIdentifiers: ids)
@@ -144,7 +138,6 @@ final class ChickenNotifications: NSObject {
             let components = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: fire)
             var trigger: UNNotificationTrigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
             #if DEBUG
-            // `CHICKEN_DEBUG_NUDGE=<seconds>` fires the next nudge that soon, for review.
             if let seconds = ProcessInfo.processInfo.environment["CHICKEN_DEBUG_NUDGE"].flatMap(Double.init) {
                 if debugNudgeScheduled { continue }
                 debugNudgeScheduled = true
@@ -152,38 +145,25 @@ final class ChickenNotifications: NSObject {
             }
             #endif
             let request = UNNotificationRequest(identifier: ids[offset], content: content, trigger: trigger)
-            center.add(request)
+            center.add(request) { error in
+                if let error {
+                    ChickenLog.notifications.error("Failed to schedule nudge: \(error.localizedDescription, privacy: .public)")
+                }
+            }
         }
     }
 
-    // MARK: Downloads, imports, sync
-
-    /// Books you chose to download are on this device now.
     func downloadsFinished(count: Int) {
         guard isOn(.downloads), count > 0 else { return }
         post(
             id: "downloads-\(UUID().uuidString)",
             title: "Ready to read offline",
-            body: "\(count) \(count == 1 ? "book" : "books") downloaded to this \(Self.deviceName)",
+            body: "\(count) \(count == 1 ? "book" : "books") downloaded to this \(Platform.deviceName)",
             place: .downloadedBooks,
             sound: true
         )
     }
 
-    /// Chicken picked up new books from a shared folder (on the Mac).
-    func booksAdded(count: Int, from folder: String) {
-        guard isOn(.imports), count > 0 else { return }
-        post(
-            id: "imports-\(UUID().uuidString)",
-            title: "Added to your library",
-            body: "\(count) \(count == 1 ? "book" : "books") from \(folder)",
-            place: .recentlyAdded,
-            sound: false
-        )
-    }
-
-    /// Syncing can't continue without you. Each problem is told once, until
-    /// `syncRecovered()` says it's gone.
     func syncProblem(_ problem: SyncProblem) {
         let key = "Chicken.notify.told.\(problem.rawValue)"
         guard isOn(.sync), !defaults.bool(forKey: key) else { return }
@@ -193,7 +173,7 @@ final class ChickenNotifications: NSObject {
             post(
                 id: "sync-\(problem.rawValue)",
                 title: "iCloud is full",
-                body: "Progress on this \(Self.deviceName) isn't reaching your other devices. Free up iCloud space to keep syncing.",
+                body: "Progress on this \(Platform.deviceName) isn't reaching your other devices. Free up iCloud space to keep syncing.",
                 place: .settings,
                 sound: true
             )
@@ -201,14 +181,13 @@ final class ChickenNotifications: NSObject {
             post(
                 id: "sync-\(problem.rawValue)",
                 title: "Signed out of iCloud",
-                body: "Chicken is keeping everything on this \(Self.deviceName) until you sign back in.",
+                body: "Chicken is keeping everything on this \(Platform.deviceName) until you sign back in.",
                 place: .settings,
                 sound: true
             )
         }
     }
 
-    /// Syncing is back; a future problem will be told again.
     func syncRecovered() {
         for problem in [SyncProblem.iCloudFull, .signedOut] {
             defaults.removeObject(forKey: "Chicken.notify.told.\(problem.rawValue)")
@@ -223,18 +202,12 @@ final class ChickenNotifications: NSObject {
         content.sound = sound ? .default : nil
         content.threadIdentifier = place.rawValue
         content.userInfo = ["place": place.rawValue]
-        center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
+        center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { error in
+            if let error {
+                ChickenLog.notifications.error("Failed to post notification: \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
-
-    static var deviceName: String {
-        #if os(macOS)
-        "Mac"
-        #else
-        UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
-        #endif
-    }
-
-    // MARK: Taps
 
     private func open(_ userInfo: [AnyHashable: Any]) {
         if let link = (userInfo["link"] as? String).flatMap(URL.init(string:)),
@@ -245,20 +218,14 @@ final class ChickenNotifications: NSObject {
         guard let place = (userInfo["place"] as? String).flatMap(Place.init(rawValue:)) else { return }
         switch place {
         case .settings:
-            AppRouter.shared.showingSettings = true
-        case .downloadedBooks, .recentlyAdded:
-            // The library shows the right shelf; see `chickenShowLibrary`.
-            NotificationCenter.default.post(name: .chickenShowLibrary, object: nil, userInfo: ["place": place.rawValue])
+            AppRouter.shared.activeSheet = .settings
+        case .downloadedBooks:
+            AppRouter.shared.pendingLibraryPlace = .downloadedBooks
         }
     }
 }
 
 extension ChickenNotifications: UNUserNotificationCenterDelegate {
-    // The completion-handler forms: UIKit requires these to finish on the
-    // main thread, which the async forms don't guarantee (a tap crashed).
-
-    /// In the app, the nudge would only interrupt what you're reading; the
-    /// others still show.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
@@ -283,11 +250,4 @@ extension ChickenNotifications: UNUserNotificationCenterDelegate {
             complete()
         }
     }
-}
-
-extension Notification.Name {
-    /// A notification asked to show part of the library. `userInfo["place"]`
-    /// is a `ChickenNotifications.Place` raw value: `downloadedBooks` (the
-    /// On This Device filter) or `recentlyAdded`.
-    static let chickenShowLibrary = Notification.Name("ChickenShowLibrary")
 }

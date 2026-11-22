@@ -17,7 +17,7 @@ struct ChickenWidgetBundle: WidgetBundle {
 
 struct ContinueReadingWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: WidgetSnapshot.widgetKind, provider: SnapshotProvider()) { entry in
+        StaticConfiguration(kind: WidgetSnapshot.widgetKind, provider: SnapshotProvider(loadsCover: true)) { entry in
             ContinueReadingView(entry: entry)
                 .containerBackground(for: .widget) { WidgetColors(theme: entry.snapshot?.theme).background }
         }
@@ -42,6 +42,12 @@ struct SnapshotEntry: TimelineEntry {
 }
 
 struct SnapshotProvider: TimelineProvider {
+    let loadsCover: Bool
+
+    init(loadsCover: Bool = true) {
+        self.loadsCover = loadsCover
+    }
+
     func placeholder(in context: Context) -> SnapshotEntry {
         SnapshotEntry(
             date: .now,
@@ -64,16 +70,17 @@ struct SnapshotProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<SnapshotEntry>) -> Void) {
-        // The app reloads the timeline whenever reading state changes; the
-        // midnight refresh resets "today" when the app hasn't been opened.
-        let midnight = Calendar.current.startOfDay(for: .now.addingTimeInterval(86_400))
-        completion(Timeline(entries: [currentEntry()], policy: .after(midnight)))
+        let calendar = Calendar.current
+        let todayStart = calendar.startOfDay(for: .now)
+        let nextMidnight = calendar.date(byAdding: .day, value: 1, to: todayStart) ?? .now.addingTimeInterval(3600)
+        completion(Timeline(entries: [currentEntry()], policy: .after(nextMidnight)))
     }
 
     private func currentEntry() -> SnapshotEntry {
         let snapshot = WidgetSnapshot.load()
         var cover: CGImage?
-        if snapshot?.currentBook?.hasCover == true,
+        if loadsCover,
+           snapshot?.currentBook?.hasCover == true,
            let url = WidgetSnapshot.coverURL,
            let source = CGImageSourceCreateWithURL(url as CFURL, nil) {
             cover = CGImageSourceCreateImageAtIndex(source, 0, nil)
@@ -87,7 +94,6 @@ struct ContinueReadingView: View {
     @Environment(\.showsWidgetContainerBackground) private var showsBackground
     let entry: SnapshotEntry
 
-    /// StandBy and the Mac's desktop drop the background: draw for dark.
     private var colors: WidgetColors { WidgetColors(theme: showsBackground ? entry.snapshot?.theme : "ink") }
     private var book: WidgetSnapshot.CurrentBook? { entry.snapshot?.currentBook }
 
@@ -102,10 +108,28 @@ struct ContinueReadingView: View {
                 default: small(book)
                 }
             } else {
-                empty
+                emptyView
             }
         }
         .widgetURL(book.map { ChickenLink.book($0.id) } ?? ChickenLink.continueReading)
+    }
+
+    @ViewBuilder
+    private var emptyView: some View {
+        switch family {
+        case .accessoryCircular:
+            ZStack {
+                AccessoryWidgetBackground()
+                Image(systemName: "book.closed")
+            }
+        case .accessoryRectangular:
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Chicken").font(.headline).widgetAccentable()
+                Text("Open a book").font(.caption)
+            }
+        default:
+            empty
+        }
     }
 
     private func small(_ book: WidgetSnapshot.CurrentBook) -> some View {
@@ -121,7 +145,8 @@ struct ContinueReadingView: View {
             }
             Spacer(minLength: 0)
             Text(book.title)
-                .font(.custom("Superclarendon-Regular", size: 14))
+                .font(.system(size: 14, weight: .semibold))
+                .tracking(-0.2)
                 .foregroundStyle(colors.text)
                 .lineLimit(2)
                 .minimumScaleFactor(0.85)
@@ -136,12 +161,13 @@ struct ContinueReadingView: View {
                 .frame(width: 78, height: 117)
             VStack(alignment: .leading, spacing: 4) {
                 Text(book.title)
-                    .font(.custom("Superclarendon-Regular", size: 18))
+                    .font(.system(size: 17.5, weight: .semibold))
+                    .tracking(-0.3)
                     .foregroundStyle(colors.text)
                     .lineLimit(2)
                     .minimumScaleFactor(0.8)
                 Text(book.author)
-                    .font(.custom("IowanOldStyle-Italic", size: 13))
+                    .font(.system(size: 12.5))
                     .foregroundStyle(colors.muted)
                     .lineLimit(1)
                 Spacer(minLength: 6)
@@ -156,7 +182,6 @@ struct ContinueReadingView: View {
         }
     }
 
-    /// The book, then the week behind it.
     private func large(_ book: WidgetSnapshot.CurrentBook) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 16) {
@@ -164,12 +189,13 @@ struct ContinueReadingView: View {
                     .frame(width: 84, height: 126)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(book.title)
-                        .font(.custom("Superclarendon-Regular", size: 20))
+                        .font(.system(size: 19.5, weight: .semibold))
+                        .tracking(-0.4)
                         .foregroundStyle(colors.text)
                         .lineLimit(3)
                         .minimumScaleFactor(0.8)
                     Text(book.author)
-                        .font(.custom("IowanOldStyle-Italic", size: 14))
+                        .font(.system(size: 13.5))
                         .foregroundStyle(colors.muted)
                         .lineLimit(1)
                     Spacer(minLength: 8)
@@ -199,7 +225,7 @@ struct ContinueReadingView: View {
                 Spacer(minLength: 10)
                 if let goal = snapshot.annualGoal, goal > 0 {
                     Text("\(snapshot.finishedThisYear ?? 0) of \(goal) books finished this year")
-                        .font(.custom("IowanOldStyle-Italic", size: 12))
+                        .font(.system(size: 12).monospacedDigit())
                         .foregroundStyle(colors.muted)
                 }
             }
@@ -234,10 +260,11 @@ struct ContinueReadingView: View {
                 .foregroundStyle(colors.muted)
             Spacer(minLength: 0)
             Text("Nothing on the go")
-                .font(.custom("Superclarendon-Regular", size: 14))
+                .font(.system(size: 14, weight: .semibold))
+                .tracking(-0.2)
                 .foregroundStyle(colors.text)
             Text("Open a book in Chicken and it waits here.")
-                .font(.custom("IowanOldStyle-Italic", size: 12))
+                .font(.system(size: 12))
                 .foregroundStyle(colors.muted)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -256,7 +283,7 @@ struct ContinueReadingView: View {
                 ZStack {
                     tint.cloth
                     Text(book.title)
-                        .font(.custom("Superclarendon-Regular", size: 9))
+                        .font(.system(size: 9.5, weight: .semibold, design: .serif))
                         .foregroundStyle(tint.ink)
                         .multilineTextAlignment(.center)
                         .lineLimit(4)
@@ -272,7 +299,6 @@ struct ContinueReadingView: View {
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
         .shadow(color: .black.opacity(0.18), radius: 3, x: 1, y: 2)
         .overlay(alignment: .bottomTrailing) {
-            // The ribbon: this is the book you're in.
             WidgetRibbon()
                 .fill(colors.ribbon)
                 .frame(width: 6, height: 13)
@@ -296,7 +322,6 @@ struct ContinueReadingView: View {
     }
 }
 
-/// The widget's subset of Chicken's reading themes (see Theme.swift).
 struct WidgetColors {
     let background: Color
     let text: Color
@@ -304,37 +329,19 @@ struct WidgetColors {
     let ribbon: Color
 
     init(theme: String?) {
-        switch theme {
-        case "sepia":
-            background = .widgetHex(0xEEDFC4)
-            text = .widgetHex(0x3B2A1A)
-            muted = .widgetHex(0x77593C)
-            ribbon = .widgetHex(0xA9642A)
-        case "ink":
-            background = .widgetHex(0x171413)
-            text = .widgetHex(0xF2E6D6)
-            muted = .widgetHex(0xA89B8C)
-            ribbon = .widgetHex(0xCB8D45)
-        default:
-            background = .widgetHex(0xF4EEE4)
-            text = .widgetHex(0x211D1C)
-            muted = .widgetHex(0x6E6259)
-            ribbon = .widgetHex(0xB57631)
-        }
+        let tokens = SharedThemeTokens.forName(theme)
+        background = .widgetHex(tokens.backgroundHex)
+        text = .widgetHex(tokens.textHex)
+        muted = .widgetHex(tokens.mutedHex)
+        ribbon = .widgetHex(tokens.ribbonHex)
     }
 
-    /// Same bookcloth as the app's typographic covers (CoverPreset).
     static func coverTint(_ index: Int) -> (cloth: Color, ink: Color) {
-        let tints: [(UInt32, UInt32)] = [
-            (0x2A2523, 0xE9D9C2), (0x76593F, 0xF2E6D6), (0xC48C44, 0x2A2118), (0x45503A, 0xE6DCC0),
-            (0x6E2C27, 0xEFD9BE), (0xE6D9C4, 0x2A2523), (0x2F3E4A, 0xDCCBA8), (0x9A4E2E, 0xF4E3CB),
-        ]
-        let tint = tints[((index % tints.count) + tints.count) % tints.count]
-        return (.widgetHex(tint.0), .widgetHex(tint.1))
+        let preset = SharedCoverCloth.preset(for: index)
+        return (.widgetHex(preset.clothHex), .widgetHex(preset.inkHex))
     }
 }
 
-/// A bookmark ribbon with a swallowtail end.
 struct WidgetRibbon: Shape {
     nonisolated func path(in rect: CGRect) -> Path {
         var path = Path()

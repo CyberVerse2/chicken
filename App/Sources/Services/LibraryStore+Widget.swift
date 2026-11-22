@@ -33,12 +33,15 @@ extension LibraryStore {
                 day: Calendar.current.startOfDay(for: .now)
             )
             guard snapshot != self.lastPublishedSnapshot else { return }
+            await Self.writeWidgetSnapshot(snapshot, coverURL: coverURL)
+            guard !Task.isCancelled else { return }
             self.lastPublishedSnapshot = snapshot
-
-            await Task.detached(priority: .utility) {
-                snapshot.save(coverJPEG: coverURL.flatMap { CoverRenderer.thumbnailJPEG(from: $0) })
-            }.value
             WidgetCenter.shared.reloadAllTimelines()
         }
+    }
+
+    @concurrent
+    private static func writeWidgetSnapshot(_ snapshot: WidgetSnapshot, coverURL: URL?) async {
+        snapshot.save(coverJPEG: coverURL.flatMap { CoverRenderer.thumbnailJPEG(from: $0) })
     }
 }

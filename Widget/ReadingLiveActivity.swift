@@ -29,11 +29,12 @@ struct ReadingLiveActivity: Widget {
                 DynamicIslandExpandedRegion(.center) {
                     VStack(alignment: .leading, spacing: 3) {
                         Text(context.attributes.title)
-                            .font(.custom("Superclarendon-Regular", size: 16))
+                            .font(.system(size: 15.5, weight: .semibold))
+                            .tracking(-0.25)
                             .foregroundStyle(LiveColors.text)
                             .lineLimit(1)
                         Text(context.state.chapter ?? context.attributes.author)
-                            .font(.custom("IowanOldStyle-Italic", size: 13))
+                            .font(.system(size: 12.5))
                             .foregroundStyle(LiveColors.text.opacity(0.7))
                             .lineLimit(1)
                     }
@@ -50,15 +51,13 @@ struct ReadingLiveActivity: Widget {
                                 Text("\(Int((context.state.progress * 100).rounded()))% read")
                             }
                             Spacer()
-                            Link(destination: ChickenLink.book(context.attributes.bookID)) {
-                                Label("Continue", systemImage: "arrow.right")
-                                    .labelStyle(.titleAndIcon)
-                                    .font(.system(size: 13, weight: .semibold))
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 6)
-                                    .background(Capsule().fill(LiveColors.text))
-                                    .foregroundStyle(Color.black.opacity(0.85))
-                            }
+                            Label("Continue", systemImage: "arrow.right")
+                                .labelStyle(.titleAndIcon)
+                                .font(.system(size: 13, weight: .semibold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(LiveColors.text))
+                                .foregroundStyle(Color.black.opacity(0.85))
                         }
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundStyle(LiveColors.text.opacity(0.75))
@@ -86,7 +85,6 @@ struct ReadingLiveActivity: Widget {
     }
 }
 
-/// The Lock Screen banner, in the book's own colour.
 private struct LockScreenBanner: View {
     let context: ActivityViewContext<ReadingActivityAttributes>
 
@@ -96,7 +94,8 @@ private struct LockScreenBanner: View {
                 .frame(width: 48, height: 72)
             VStack(alignment: .leading, spacing: 4) {
                 Text(context.attributes.title)
-                    .font(.custom("Superclarendon-Regular", size: 17))
+                    .font(.system(size: 16.5, weight: .semibold))
+                    .tracking(-0.3)
                     .foregroundStyle(LiveColors.text)
                     .lineLimit(1)
                 Group {
@@ -106,7 +105,7 @@ private struct LockScreenBanner: View {
                         Text(context.state.chapter ?? context.attributes.author)
                     }
                 }
-                .font(.custom("IowanOldStyle-Italic", size: 13))
+                .font(.system(size: 12.5))
                 .foregroundStyle(LiveColors.text.opacity(0.75))
                 .lineLimit(1)
                 Spacer(minLength: 4)
@@ -124,7 +123,6 @@ private struct LockScreenBanner: View {
     }
 }
 
-/// Today's minutes against the daily goal, as a ribbon-coloured ring.
 private struct GoalRing: View {
     let state: ReadingActivityAttributes.ContentState
     let size: CGFloat
@@ -134,14 +132,16 @@ private struct GoalRing: View {
     var body: some View {
         ZStack {
             Circle().stroke(LiveColors.text.opacity(0.2), lineWidth: lineWidth)
-            Circle()
-                .trim(from: 0, to: max(0.02, state.goalFraction))
-                .stroke(LiveColors.ribbon, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                .rotationEffect(.degrees(-90))
+            if state.minutesToday > 0 {
+                Circle()
+                    .trim(from: 0, to: max(0.03, state.goalFraction))
+                    .stroke(LiveColors.ribbon, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
             if showsMinutes {
                 VStack(spacing: -1) {
                     Text("\(state.minutesToday)")
-                        .font(.custom("Superclarendon-Regular", size: size * 0.32))
+                        .font(.system(size: size * 0.32, weight: .bold))
                         .foregroundStyle(LiveColors.text)
                     Text("min")
                         .font(.system(size: size * 0.16, weight: .medium))
@@ -167,15 +167,16 @@ private struct ProgressBar: View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
                 Capsule().fill(LiveColors.text.opacity(0.2))
-                Capsule().fill(LiveColors.ribbon)
-                    .frame(width: max(3, geometry.size.width * min(max(progress, 0), 1)))
+                if progress > 0 {
+                    Capsule().fill(LiveColors.ribbon)
+                        .frame(width: max(3, geometry.size.width * min(max(progress, 0), 1)))
+                }
             }
         }
         .frame(height: 3)
     }
 }
 
-/// The book's cover from the shared container, or its cloth colour.
 private struct LiveCover: View {
     let attributes: ReadingActivityAttributes
 
@@ -202,11 +203,9 @@ private struct LiveCover: View {
 }
 
 private enum LiveColors {
-    static let text = Color(red: 0.97, green: 0.945, blue: 0.9)
-    static let ribbon = Color(red: 0.8, green: 0.553, blue: 0.27)
+    static let text = WidgetColors(theme: "ink").text
+    static let ribbon = WidgetColors(theme: "ink").ribbon
 
-    /// The Lock Screen banner: the book's cloth colour, deepened so light
-    /// text reads on it in any wallpaper.
     static func banner(_ attributes: ReadingActivityAttributes) -> Color {
         WidgetColors.coverTint(attributes.coverTintIndex).cloth.mix(with: .black, by: 0.45)
     }

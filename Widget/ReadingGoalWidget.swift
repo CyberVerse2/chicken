@@ -9,7 +9,7 @@ struct ReadingGoalWidget: Widget {
     static let kind = "ChickenReadingGoal"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: Self.kind, provider: SnapshotProvider()) { entry in
+        StaticConfiguration(kind: Self.kind, provider: SnapshotProvider(loadsCover: false)) { entry in
             ReadingGoalView(entry: entry)
                 .containerBackground(for: .widget) { WidgetColors(theme: entry.snapshot?.theme).background }
         }
@@ -34,7 +34,7 @@ struct ReadingGoalView: View {
 
     private var colors: WidgetColors { WidgetColors(theme: showsBackground ? entry.snapshot?.theme : "ink") }
     private var minutes: Int { (entry.snapshot?.secondsToday(on: entry.date) ?? 0) / 60 }
-    private var goal: Int { entry.snapshot?.dailyGoalMinutes ?? 0 }
+    private var goal: Int { entry.snapshot?.dailyGoalMinutes ?? 30 }
     private var fraction: Double { goal > 0 ? min(1, Double(minutes) / Double(goal)) : 0 }
 
     var body: some View {
@@ -71,30 +71,34 @@ struct ReadingGoalView: View {
     private var medium: some View {
         HStack(spacing: 20) {
             ring(size: 112)
-            if let snapshot = entry.snapshot {
-                WeekChart(snapshot: snapshot, date: entry.date, colors: colors)
-            }
+            let snapshot = entry.snapshot ?? WidgetSnapshot(
+                currentBook: nil, secondsToday: 0, dailyGoalMinutes: goal, theme: "paper",
+                lastSevenDays: Array(repeating: 0, count: 7), day: entry.date
+            )
+            WeekChart(snapshot: snapshot, date: entry.date, colors: colors)
         }
     }
 
-    /// The ring fills to the goal; the number in it is today's minutes.
     private func ring(size: CGFloat?) -> some View {
         ZStack {
             Circle()
                 .stroke(colors.text.opacity(0.1), lineWidth: 9)
-            Circle()
-                .trim(from: 0, to: max(fraction, minutes > 0 ? 0.03 : 0))
-                .stroke(colors.ribbon, style: StrokeStyle(lineWidth: 9, lineCap: .round))
-                .rotationEffect(.degrees(-90))
-                .widgetAccentable()
+            if minutes > 0 {
+                Circle()
+                    .trim(from: 0, to: max(fraction, 0.03))
+                    .stroke(colors.ribbon, style: StrokeStyle(lineWidth: 9, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .widgetAccentable()
+            }
             VStack(spacing: 0) {
                 Text("\(minutes)")
-                    .font(.custom("Superclarendon-Regular", size: 34))
+                    .font(.system(size: 32, weight: .bold))
+                    .tracking(-0.6)
                     .foregroundStyle(colors.text)
                     .minimumScaleFactor(0.6)
                     .lineLimit(1)
                 Text(fraction >= 1 ? "goal done" : "of \(goal) min")
-                    .font(.custom("IowanOldStyle-Italic", size: 12))
+                    .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(colors.muted)
             }
             .monospacedDigit()
@@ -108,14 +112,13 @@ struct ReadingGoalView: View {
     }
 }
 
-/// Seven bars, today's in the ribbon colour, with the daily goal as a
-/// dashed line so a good day reads at a glance.
 struct WeekChart: View {
     let snapshot: WidgetSnapshot
     let date: Date
     let colors: WidgetColors
 
-    private var minutes: [Int] { snapshot.week(endingOn: date).map { $0 / 60 } }
+    private var weekSeconds: [Int] { snapshot.week(endingOn: date) }
+    private var minutes: [Int] { weekSeconds.map { $0 / 60 } }
     private var goal: Int { snapshot.dailyGoalMinutes }
 
     private var weekdays: [String] {
@@ -127,7 +130,7 @@ struct WeekChart: View {
     }
 
     private var total: String {
-        let sum = minutes.reduce(0, +)
+        let sum = weekSeconds.reduce(0, +) / 60
         return sum >= 60 ? "\(sum / 60)h \(sum % 60)m" : "\(sum) min"
     }
 
@@ -163,7 +166,7 @@ struct WeekChart: View {
                             RoundedRectangle(cornerRadius: 2.5, style: .continuous)
                                 .fill(isToday ? colors.ribbon : colors.text.opacity(value >= goal && goal > 0 ? 0.55 : 0.3))
                                 .frame(maxWidth: 16)
-                                .frame(height: max(3, height * CGFloat(value) / scale))
+                                .frame(height: value == 0 ? 2 : max(3, height * CGFloat(value) / scale))
                                 .frame(maxWidth: .infinity)
                                 .widgetAccentable(isToday)
                         }
@@ -173,9 +176,10 @@ struct WeekChart: View {
 
             HStack(spacing: 0) {
                 ForEach(Array(weekdays.enumerated()), id: \.offset) { index, letter in
+                    let isToday = index == weekdays.count - 1
                     Text(letter)
-                        .font(.system(size: 10, weight: index == 6 ? .bold : .regular))
-                        .foregroundStyle(index == 6 ? colors.text : colors.muted)
+                        .font(.system(size: 10, weight: isToday ? .bold : .regular))
+                        .foregroundStyle(isToday ? colors.text : colors.muted)
                         .frame(maxWidth: .infinity)
                 }
             }

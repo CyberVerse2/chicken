@@ -9,8 +9,6 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     case finished
     case pdf
     case epub
-    /// Books whose files are here, for reading offline. Shown only when
-    /// the library syncs.
     case onDevice
 
     var id: String { rawValue }
@@ -23,7 +21,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .finished: return "Finished"
         case .pdf: return "PDFs"
         case .epub: return "EPUBs"
-        case .onDevice: return "On This Device"
+        case .onDevice: return "On Device"
         }
     }
 
@@ -60,8 +58,6 @@ enum LibrarySort: String, CaseIterable, Identifiable {
     func sorted(_ books: [Book]) -> [Book] {
         switch self {
         case .recent:
-            // Books you've opened, latest first, then the ones you haven't
-            // started, newest arrivals first.
             return books.sorted { lhs, rhs in
                 switch (lhs.lastOpenedAt, rhs.lastOpenedAt) {
                 case let (left?, right?): return left > right
@@ -77,30 +73,56 @@ enum LibrarySort: String, CaseIterable, Identifiable {
     }
 }
 
-/// Every book, with quick filters and sorting.
+enum LibraryViewMode: String, CaseIterable, Identifiable {
+    case covers
+    case spines
+    case list
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .covers: "Covers"
+        case .spines: "Spines"
+        case .list: "List"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .covers: "square.grid.2x2"
+        case .spines: "books.vertical"
+        case .list: "list.bullet"
+        }
+    }
+}
+
 struct BooksView: View {
+    private enum CollectionDialog {
+        case creating
+        case renaming(BookCollection)
+        case deleting(BookCollection)
+    }
+
     @Environment(LibraryStore.self) private var library
     @Environment(AppRouter.self) private var router
     @Environment(\.palette) private var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
     @AppStorage("Chicken.libraryFilter") private var filter: LibraryFilter = .all
     @AppStorage("Chicken.librarySort") private var sort: LibrarySort = .recent
+    @AppStorage("Chicken.libraryViewMode") private var viewMode: LibraryViewMode = .covers
     @Query private var collections: [BookCollection]
-    /// The collection being shown, if any, instead of a filter.
     @AppStorage("Chicken.libraryCollection") private var collectionID = ""
 
-    /// Picking several books to collect or download at once.
-    @State private var selecting = false
-    @State private var selection: Set<UUID> = []
-
-    // Naming, renaming, and deleting collections.
-    @State private var naming = false
-    @State private var renaming: BookCollection?
-    @State private var deleting: BookCollection?
-    @State private var name = ""
+    @State private var selection: Set<UUID>?
+    @State private var dialog: CollectionDialog?
+    @State private var draftName = ""
+    @Namespace private var viewModeNamespace
 
     private var gutter: CGFloat { sizeClass == .compact ? 20 : 40 }
+    private var isSelecting: Bool { selection != nil }
 
     private var sortedCollections: [BookCollection] {
         collections.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -117,24 +139,41 @@ struct BooksView: View {
         }
         return sort.sorted(books.filter { filter.includes($0, in: library) })
     }
+
     private var filters: [LibraryFilter] {
         LibraryFilter.allCases.filter { $0 != .onDevice || library.cloud != nil }
     }
-    /// With "Download all" on, every book comes down by itself.
+
     private var canSelectDownloads: Bool { library.cloud != nil && !library.preferences.downloadsAllBooks }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                PageHeader(title: "Library")
-                    .padding(.horizontal, gutter)
+            VStack(alignment: .leading, spacing: 20) {
+                HStack(alignment: .center, spacing: 12) {
+                    PageHeader(title: "Library")
+                    Spacer(minLength: 8)
+                    if !books.isEmpty {
+                        viewModeSwitcher
+                    }
+                }
+                .padding(.horizontal, gutter)
 
-                FilterChips(
-                    selection: $filter, filters: filters, counts: counts,
-                    collections: sortedCollections, collectionID: $collectionID,
-                    newCollection: { name = ""; naming = true },
-                    rename: { collection in name = collection.name; renaming = collection },
-                    delete: { deleting = $0 }
+                LibraryFilterPills(
+                    selection: $filter,
+                    filters: filters,
+                    counts: counts,
+                    collections: sortedCollections,
+                    collectionID: $collectionID,
+                    gutter: gutter,
+                    newCollection: {
+                        draftName = ""
+                        dialog = .creating
+                    },
+                    rename: { collection in
+                        draftName = collection.name
+                        dialog = .renaming(collection)
+                    },
+                    delete: { dialog = .deleting($0) }
                 )
 
                 if books.isEmpty {
@@ -142,78 +181,176 @@ struct BooksView: View {
                         .padding(.horizontal, gutter)
                 } else if visible.isEmpty {
                     Text(emptyMessage)
-                        .font(.chickenSerif(16, italic: true))
+                        .font(.chickenUI(15))
                         .foregroundStyle(palette.muted)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 60)
                 } else {
-                    BookGrid(books: visible, selection: selecting ? $selection : nil)
-                        .padding(.horizontal, gutter)
-                        .animation(.smooth(duration: 0.3), value: visible.map(\.id))
+                    Group {
+                        switch viewMode {
+                        case .covers:
+                            BookGrid(books: visible, selection: selectionBinding)
+                        case .spines:
+                            BookSpineShelf(books: visible, selection: selectionBinding)
+                        case .list:
+                            BookEditorialList(books: visible, selection: selectionBinding)
+                        }
+                    }
+                    .padding(.horizontal, gutter)
+                    .animation(reduceMotion ? nil : ChickenMotion.standard, value: visible.map(\.id))
+                    .animation(reduceMotion ? nil : ChickenMotion.standard, value: viewMode)
                 }
             }
-            .padding(.top, sizeClass == .compact ? 4 : 20)
-            .padding(.bottom, 80)
+            .padding(.top, sizeClass == .compact ? 6 : 20)
+            .padding(.bottom, 96)
             .frame(maxWidth: 1240, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.hard, for: .top)
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(palette.background.ignoresSafeArea())
         .pageTitle("Library")
         .safeAreaInset(edge: .bottom) {
-            if selecting {
+            if isSelecting {
                 selectionBar
                     .padding(.bottom, 12)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.smooth(duration: 0.25), value: selecting)
-        // A collection deleted here or on another device.
+        .animation(reduceMotion ? nil : ChickenMotion.standard, value: isSelecting)
         .onChange(of: activeCollection == nil) { _, gone in if gone { collectionID = "" } }
-        .alert("New Collection", isPresented: $naming) {
-            TextField("Name", text: $name)
+        .alert("New Collection", isPresented: isCreatingBinding) {
+            TextField("Name", text: $draftName)
             Button("Create") {
-                if let collection = library.createCollection(named: name) { collectionID = collection.id.uuidString }
+                if let collection = library.createCollection(named: draftName) {
+                    collectionID = collection.id.uuidString
+                }
+                dialog = nil
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Cancel", role: .cancel) { dialog = nil }
         }
-        .alert("Rename Collection", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Name", text: $name)
-            Button("Rename") { if let renaming { library.rename(renaming, to: name) } }
-            Button("Cancel", role: .cancel) {}
+        .alert("Rename Collection", isPresented: isRenamingBinding) {
+            TextField("Name", text: $draftName)
+            Button("Rename") {
+                if case .renaming(let target) = dialog {
+                    library.rename(target, to: draftName)
+                }
+                dialog = nil
+            }
+            Button("Cancel", role: .cancel) { dialog = nil }
         }
         .confirmationDialog(
-            "Delete \u{201C}\(deleting?.name ?? "")\u{201D}?",
-            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            deleteDialogTitle,
+            isPresented: isDeletingBinding,
             titleVisibility: .visible
         ) {
             Button("Delete Collection", role: .destructive) {
-                if let deleting { library.delete(deleting) }
+                if case .deleting(let target) = dialog {
+                    library.delete(target)
+                }
+                dialog = nil
             }
         } message: {
             Text("The books stay in your library.")
         }
         .toolbar {
-            if !books.isEmpty {
+            if isSelecting {
                 ToolbarItem(placement: LibraryToolbar.placement) {
-                    Button(selecting ? "Done" : "Select") {
-                        if selecting { endSelecting() } else { selecting = true }
+                    Button("Done") {
+                        selection = nil
                     }
+                    .fontWeight(.semibold)
                 }
-            }
-            LibraryToolbar()
-            ToolbarItem(placement: LibraryToolbar.placement) {
-                Menu {
-                    Picker("Sort By", selection: $sort) {
-                        ForEach(LibrarySort.allCases) { Text($0.label).tag($0) }
+            } else {
+                LibraryToolbar()
+                if !books.isEmpty {
+                    ToolbarItem(placement: LibraryToolbar.placement) {
+                        Menu {
+                            Button("Select Books", systemImage: "checkmark.circle") {
+                                selection = []
+                            }
+                            Divider()
+                            Picker("Sort By", selection: $sort) {
+                                ForEach(LibrarySort.allCases) { Text($0.label).tag($0) }
+                            }
+                            .pickerStyle(.inline)
+                        } label: {
+                            Label("Library Options", systemImage: "ellipsis")
+                        }
                     }
-                    .pickerStyle(.inline)
-                } label: {
-                    Label("Sort", systemImage: "arrow.up.arrow.down")
                 }
             }
         }
+    }
+
+    private var viewModeSwitcher: some View {
+        GlassEffectContainer(spacing: 4) {
+            HStack(spacing: 2) {
+                ForEach(LibraryViewMode.allCases) { mode in
+                    let selected = viewMode == mode
+                    Button {
+                        Haptics.selection()
+                        withAnimation(reduceMotion ? nil : ChickenMotion.snappy) { viewMode = mode }
+                    } label: {
+                        Image(systemName: mode.systemImage)
+                            .font(.system(size: 13.5, weight: selected ? .semibold : .regular))
+                            .foregroundStyle(selected ? palette.background : palette.muted)
+                            .frame(width: 36, height: 32)
+                            .background {
+                                if selected {
+                                    Capsule()
+                                        .fill(palette.text)
+                                        .matchedGeometryEffect(id: "viewModeIndicator", in: viewModeNamespace)
+                                }
+                            }
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffectID(mode.rawValue, in: viewModeNamespace)
+                    .accessibilityLabel(mode.label)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
+            .padding(3)
+            .chickenGlass(in: Capsule(), interactive: true)
+        }
+    }
+
+    private var selectionBinding: Binding<Set<UUID>>? {
+        guard selection != nil else { return nil }
+        return Binding(
+            get: { selection ?? [] },
+            set: { selection = $0 }
+        )
+    }
+
+    private var isCreatingBinding: Binding<Bool> {
+        Binding(
+            get: { if case .creating = dialog { return true }; return false },
+            set: { if !$0 { dialog = nil } }
+        )
+    }
+
+    private var isRenamingBinding: Binding<Bool> {
+        Binding(
+            get: { if case .renaming = dialog { return true }; return false },
+            set: { if !$0 { dialog = nil } }
+        )
+    }
+
+    private var isDeletingBinding: Binding<Bool> {
+        Binding(
+            get: { if case .deleting = dialog { return true }; return false },
+            set: { if !$0 { dialog = nil } }
+        )
+    }
+
+    private var deleteDialogTitle: String {
+        if case .deleting(let target) = dialog {
+            return "Delete \u{201C}\(target.name)\u{201D}?"
+        }
+        return ""
     }
 
     private var counts: [LibraryFilter: Int] {
@@ -222,29 +359,23 @@ struct BooksView: View {
         })
     }
 
-    /// Collect the picked books, or download them when there's anything
-    /// to download.
     private var selectionBar: some View {
-        GlassEffectContainer(spacing: 10) {
+        let picked = selection ?? []
+        return GlassEffectContainer(spacing: 10) {
             HStack(spacing: 10) {
                 SecondaryActionButton(title: "Add to Collection", systemImage: "rectangle.stack.badge.plus") {
-                    router.collectingBooks = CollectingBooks(bookIDs: Array(selection))
-                    endSelecting()
+                    router.presentSheet(.collectionPicker(CollectingBooks(bookIDs: Array(picked))))
+                    selection = nil
                 }
                 if canSelectDownloads {
                     PrimaryActionButton(title: "Download", systemImage: "arrow.down") {
-                        library.startDownload(books.filter { selection.contains($0.id) })
-                        endSelecting()
+                        library.startDownload(books.filter { picked.contains($0.id) })
+                        selection = nil
                     }
                 }
             }
         }
-        .disabled(selection.isEmpty)
-    }
-
-    private func endSelecting() {
-        selecting = false
-        selection = []
+        .disabled(picked.isEmpty)
     }
 
     private var emptyMessage: String {
@@ -259,107 +390,251 @@ struct BooksView: View {
     }
 }
 
-/// Filters as a row of quiet text tabs; the selected one is underlined
-/// with the ribbon.
-struct FilterChips: View {
+private struct LibraryFilterPills: View {
     @Environment(\.palette) private var palette
-    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var selection: LibraryFilter
     let filters: [LibraryFilter]
     let counts: [LibraryFilter: Int]
-    /// Your collections follow the built-in filters; picking one sets
-    /// `collectionID`, and picking a filter clears it.
     var collections: [BookCollection] = []
     @Binding var collectionID: String
+    let gutter: CGFloat
     var newCollection: () -> Void = {}
     var rename: (BookCollection) -> Void = { _ in }
     var delete: (BookCollection) -> Void = { _ in }
-    @Namespace private var underline
 
-    /// The tab that's selected, kept in view as the strip scrolls.
     private var selectedTabID: String {
         collectionID.isEmpty ? "filter-\(selection.rawValue)" : collectionID
     }
 
     var body: some View {
         ScrollViewReader { proxy in
-            strip
-                .onAppear { proxy.scrollTo(selectedTabID, anchor: .center) }
-                .onChange(of: selectedTabID) { _, id in
-                    withAnimation(.smooth(duration: 0.3)) { proxy.scrollTo(id, anchor: .center) }
-                }
-        }
-    }
-
-    private var strip: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: sizeClass == .compact ? 20 : 26) {
-                ForEach(filters) { filter in
-                    tab(filter.label, count: counts[filter] ?? 0, selected: collectionID.isEmpty && filter == selection) {
-                        selection = filter
-                        collectionID = ""
+            ScrollView(.horizontal) {
+                GlassEffectContainer(spacing: 8) {
+                    HStack(spacing: 8) {
+                        ForEach(filters) { filter in
+                            pill(
+                                filter.label,
+                                count: counts[filter] ?? 0,
+                                selected: collectionID.isEmpty && filter == selection
+                            ) {
+                                selection = filter
+                                collectionID = ""
+                            }
+                            .id("filter-\(filter.rawValue)")
+                        }
+                        if !collections.isEmpty {
+                            Rectangle()
+                                .fill(palette.borderStrong)
+                                .frame(width: 1, height: 18)
+                                .padding(.horizontal, 4)
+                        }
+                        ForEach(collections) { collection in
+                            pill(
+                                collection.name,
+                                count: collection.books?.count ?? 0,
+                                selected: collectionID == collection.id.uuidString
+                            ) {
+                                collectionID = collection.id.uuidString
+                            }
+                            .id(collection.id.uuidString)
+                            .contextMenu {
+                                Button("Rename…", systemImage: "pencil") { rename(collection) }
+                                Button("Delete Collection", systemImage: "trash", role: .destructive) { delete(collection) }
+                            }
+                        }
+                        Button(action: newCollection) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "plus")
+                                    .font(.system(size: 11.5, weight: .semibold))
+                                Text("Collection")
+                                    .font(.chickenUI(12.5, weight: .medium))
+                            }
+                            .foregroundStyle(palette.muted)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 8)
+                            .chickenGlass(in: Capsule(), interactive: true)
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("New Collection")
                     }
-                    .id("filter-\(filter.rawValue)")
+                    .padding(.vertical, 4)
                 }
-                if !collections.isEmpty {
-                    Rectangle().fill(palette.border).frame(width: 0.5, height: 16)
-                }
-                ForEach(collections) { collection in
-                    tab(collection.name, count: collection.books?.count ?? 0, selected: collectionID == collection.id.uuidString) {
-                        collectionID = collection.id.uuidString
-                    }
-                    .id(collection.id.uuidString)
-                    .contextMenu {
-                        Button("Rename…", systemImage: "pencil") { rename(collection) }
-                        Button("Delete Collection", systemImage: "trash", role: .destructive) { delete(collection) }
-                    }
-                }
-                Button(action: newCollection) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(palette.muted)
-                        .padding(.vertical, 10)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("New Collection")
             }
-            .padding(.bottom, 2)
-        }
-        .scrollIndicators(.never)
-        .contentMargins(.horizontal, sizeClass == .compact ? 20 : 44, for: .scrollContent)
-        .scrollClipDisabled()
-        .background(alignment: .bottom) {
-            Rectangle().fill(palette.border).frame(height: 0.5)
+            .scrollIndicators(.never)
+            .contentMargins(.horizontal, gutter, for: .scrollContent)
+            .mask {
+                LinearGradient(
+                    stops: [
+                        .init(color: .clear, location: 0),
+                        .init(color: .black, location: 0.03),
+                        .init(color: .black, location: 0.93),
+                        .init(color: .clear, location: 1),
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+            }
+            .onAppear { proxy.scrollTo(selectedTabID, anchor: .center) }
+            .onChange(of: selectedTabID) { _, id in
+                withAnimation(reduceMotion ? nil : ChickenMotion.standard) {
+                    proxy.scrollTo(id, anchor: .center)
+                }
+            }
         }
     }
 
-    private func tab(_ label: String, count: Int, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func pill(_ label: String, count: Int, selected: Bool, action: @escaping () -> Void) -> some View {
         Button {
-            withAnimation(.smooth(duration: 0.3), action)
+            Haptics.selection()
+            withAnimation(reduceMotion ? nil : ChickenMotion.snappy, action)
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(label)
-                    .font(.chickenUI(14, weight: selected ? .semibold : .regular))
-                    .foregroundStyle(selected ? palette.text : palette.muted)
+                    .font(.chickenUI(13.5, weight: selected ? .semibold : .medium))
                     .lineLimit(1)
                 Text("\(count)")
                     .font(.chickenMono(11, weight: .medium))
-                    .foregroundStyle(selected ? palette.ribbon : palette.faint)
+                    .opacity(selected ? 0.78 : 0.6)
             }
-            .padding(.vertical, 10)
-            .overlay(alignment: .bottom) {
-                if selected {
-                    Capsule()
-                        .fill(palette.ribbon)
-                        .frame(height: 2)
-                        .matchedGeometryEffect(id: "underline", in: underline)
-                        .offset(y: 1)
-                }
-            }
-            .contentShape(Rectangle())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .chickenGlassPill(isSelected: selected)
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+private struct BookEditorialList: View {
+    @Environment(LibraryStore.self) private var library
+    @Environment(\.palette) private var palette
+    @Environment(\.openBook) private var openBook
+    @Environment(\.selectBook) private var selectBook
+    @Environment(\.coverContext) private var coverContext
+    @Environment(\.bookSequence) private var bookSequence
+    let books: [Book]
+    var selection: Binding<Set<UUID>>?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ForEach(Array(books.enumerated()), id: \.element.id) { index, book in
+                row(book)
+                if index < books.count - 1 {
+                    Rectangle()
+                        .fill(palette.border)
+                        .frame(height: 0.5)
+                        .padding(.leading, 74)
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(palette.surface)
+                .stroke(palette.border, lineWidth: 0.5)
+        )
+        .chickenSwipeActionsContainer()
+        .coverCollection("list", books: books.map(\.id))
+    }
+
+    private func row(_ book: Book) -> some View {
+        let isSelected = selection?.wrappedValue.contains(book.id) ?? false
+        let inProgress = book.progress > 0 && !book.isFinished
+        return HStack(spacing: 14) {
+            Button {
+                if let selection {
+                    if isSelected { selection.wrappedValue.remove(book.id) } else { selection.wrappedValue.insert(book.id) }
+                } else {
+                    selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id))
+                }
+            } label: {
+                HStack(spacing: 14) {
+                    if selection != nil {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 19, weight: .medium))
+                            .foregroundStyle(isSelected ? palette.ribbon : palette.faint)
+                    }
+
+                    BookCover(book: book, style: .mini)
+                        .frame(width: 44, height: 66)
+                        .downloadBadge(book, size: 18)
+                        .shadow(color: palette.shadow, radius: 3, x: 0, y: 2)
+
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(book.displayTitle)
+                            .font(.chickenUI(15, weight: .semibold))
+                            .foregroundStyle(palette.text)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+
+                        if let author = book.author, !author.isEmpty {
+                            Text(author)
+                                .font(.chickenUI(13))
+                                .foregroundStyle(palette.muted)
+                                .lineLimit(1)
+                        }
+
+                        if inProgress {
+                            HStack(spacing: 6) {
+                                ProgressLine(progress: book.progress, height: 2.5)
+                                    .frame(maxWidth: 78)
+                                Text("\(Int((book.progress * 100).rounded()))%")
+                                    .font(.chickenMono(11, weight: .semibold))
+                                    .foregroundStyle(palette.ribbon)
+                                    .fixedSize()
+                                if let left = book.estimatedPagesLeft {
+                                    Text("· \(ReadingEstimate.duration(forPages: left, minutesPerPage: library.preferences.minutesPerPage)) left")
+                                        .font(.chickenMono(11))
+                                        .foregroundStyle(palette.faint)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                }
+                            }
+                            .padding(.top, 3)
+                        } else if book.isFinished {
+                            Label("Finished", systemImage: "checkmark")
+                                .font(.chickenMono(11, weight: .medium))
+                                .foregroundStyle(palette.muted)
+                                .padding(.top, 2)
+                        } else if let pages = book.pageCount, pages > 0 {
+                            Text("\(pages) pages · \(book.format.label)")
+                                .font(.chickenMono(11))
+                                .foregroundStyle(palette.faint)
+                                .padding(.top, 2)
+                        }
+                    }
+                    Spacer(minLength: 8)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(TactilePressStyle(scale: 0.99))
+
+            if selection == nil {
+                Button {
+                    Haptics.impact(.light)
+                    openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id))
+                } label: {
+                    Text(inProgress ? "Read" : "Open")
+                        .font(.chickenUI(12, weight: .semibold))
+                        .foregroundStyle(inProgress ? palette.text : palette.muted)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 7)
+                        .chickenGlass(in: Capsule(), interactive: true)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Read \(book.displayTitle)")
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            Button(book.isFinished ? "Unread" : "Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark") {
+                library.setFinished(!book.isFinished, for: book)
+            }
+            .tint(palette.ribbon)
+        }
+        .bookContextMenu(book)
     }
 }

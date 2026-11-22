@@ -1,8 +1,6 @@
 import ChickenKit
 import SwiftUI
 
-/// Reader for plain text, Markdown, and RTF: a native text view with its own
-/// scrolling, a centered reading column, a drop cap, and highlights.
 struct TextReader: PlatformViewRepresentable {
     let model: ReaderModel
     let fileURL: URL
@@ -13,7 +11,7 @@ struct TextReader: PlatformViewRepresentable {
     let typeface: ReaderTypeface
     let onTapCenter: () -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(model: model) }
+    func makeCoordinator() -> Coordinator { Coordinator(model: model, palette: palette) }
 
     #if os(macOS)
     func makeView(context: Context) -> ColumnTextScrollView {
@@ -26,7 +24,11 @@ struct TextReader: PlatformViewRepresentable {
     func updateView(_ view: ColumnTextScrollView, context: Context) {
         view.columnWidth = columnWidth
         view.needsLayout = true
-        context.coordinator.render(palette: palette, fontSize: fontSize, lineHeight: lineHeight)
+        context.coordinator.render(palette: palette, fontSize: fontSize, lineHeight: lineHeight, typeface: typeface)
+    }
+
+    static func dismantleView(_ view: ColumnTextScrollView, coordinator: Coordinator) {
+        coordinator.teardown()
     }
     #else
     func makeView(context: Context) -> ColumnTextView {
@@ -40,38 +42,36 @@ struct TextReader: PlatformViewRepresentable {
         view.columnWidth = columnWidth
         view.setNeedsLayout()
         context.coordinator.onTapCenter = onTapCenter
-        context.coordinator.render(palette: palette, fontSize: fontSize, lineHeight: lineHeight)
+        context.coordinator.render(palette: palette, fontSize: fontSize, lineHeight: lineHeight, typeface: typeface)
     }
-    #endif
 
-    #if os(macOS)
-    static func dismantleView(_ view: ColumnTextScrollView, coordinator: Coordinator) {
-        coordinator.captureLocation()
-    }
-    #else
     static func dismantleView(_ view: ColumnTextView, coordinator: Coordinator) {
-        coordinator.captureLocation()
+        coordinator.teardown()
     }
     #endif
 
-    @MainActor
     final class Coordinator: NSObject, ReaderEngine {
         let model: ReaderModel
         var onTapCenter: () -> Void = {}
-        private var content = ""
+        private var document: TextDocument?
         private var renderKey = ""
         private var restored = false
         private var lastReported = Date.distantPast
+        private var searchQuery = ""
         private var searchRange: NSRange?
+        private var lastPalette: ReaderPalette
+        private var loadTask: Task<Void, Never>?
         #if os(macOS)
         private weak var scrollView: ColumnTextScrollView?
         private var textView: NSTextView? { scrollView?.documentView as? NSTextView }
+        private var scrollObserver: NSObjectProtocol?
         #else
         private weak var textView: ColumnTextView?
         #endif
 
-        init(model: ReaderModel) {
+        init(model: ReaderModel, palette: ReaderPalette) {
             self.model = model
+            self.lastPalette = palette
             super.init()
             model.engine = self
             model.chapters = [ReaderChapter(id: 0, title: model.book.displayTitle)]
@@ -82,7 +82,13 @@ struct TextReader: PlatformViewRepresentable {
             self.scrollView = scrollView
             scrollView.textView.delegate = self
             scrollView.contentView.postsBoundsChangedNotifications = true
-            NotificationCenter.default.addObserver(self, selector: #selector(didScroll), name: NSView.boundsDidChangeNotification, object: scrollView.contentView)
+            scrollObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.didScroll() }
+            }
         }
         #else
         func attach(_ textView: ColumnTextView, onTapCenter: @escaping () -> Void) {
@@ -93,35 +99,59 @@ struct TextReader: PlatformViewRepresentable {
         }
         #endif
 
+        func teardown() {
+            captureLocation()
+            loadTask?.cancel()
+            loadTask = nil
+            #if os(macOS)
+            if let scrollObserver {
+                NotificationCenter.default.removeObserver(scrollObserver)
+                self.scrollObserver = nil
+            }
+            #endif
+        }
+
+        isolated deinit {
+            loadTask?.cancel()
+            #if os(macOS)
+            if let scrollObserver {
+                NotificationCenter.default.removeObserver(scrollObserver)
+            }
+            #endif
+        }
+
         func load(_ url: URL) {
-            Task { [weak self] in
-                let result = await Task.detached(priority: .userInitiated) { TextDocumentLoader.load(url) }.value
-                guard let self else { return }
+            loadTask?.cancel()
+            loadTask = Task { [weak self] in
+                let result = await TextDocumentLoader.load(url)
+                guard let self, !Task.isCancelled else { return }
                 switch result {
-                case .success(let text):
-                    self.content = text
-                    self.model.error = nil
+                case .success(let doc):
+                    self.document = doc
+                    self.model.engineDidBecomeReady()
                     self.renderKey = ""
-                    self.render(palette: self.lastPalette, fontSize: self.model.fontSize, lineHeight: self.model.lineHeight)
+                    self.render(
+                        palette: self.lastPalette,
+                        fontSize: self.model.fontSize,
+                        lineHeight: self.model.lineHeight,
+                        typeface: self.model.typeface
+                    )
                 case .failure(let error):
-                    self.model.error = error.message
+                    self.model.engineDidFail(fileURL: url, detail: error.message)
                 }
             }
         }
 
-        private var lastPalette = ReadingTheme.paper.palette
-
-        func render(palette: ReaderPalette, fontSize: Double, lineHeight: Double) {
+        func render(palette: ReaderPalette, fontSize: Double, lineHeight: Double, typeface: ReaderTypeface) {
             lastPalette = palette
-            guard !content.isEmpty, let textView else { return }
+            guard let document, let textView else { return }
             let highlights = (model.book.highlights ?? []).map { "\($0.id)\($0.colorRaw)" }.sorted().joined()
-            let typeface = model.typeface
-            let key = "\(palette.backgroundHex)|\(fontSize)|\(lineHeight)|\(typeface.rawValue)|\(content.count)|\(highlights)"
+            let key = "\(palette.backgroundHex)|\(fontSize)|\(lineHeight)|\(typeface.rawValue)|\(document.fingerprint)|\(highlights)"
             guard key != renderKey else { return }
             let anchor = currentProgress
             renderKey = key
             let attributed = TextDocumentLoader.attributedString(
-                content,
+                document,
                 palette: palette,
                 fontSize: fontSize,
                 lineHeight: lineHeight,
@@ -133,18 +163,17 @@ struct TextReader: PlatformViewRepresentable {
             #else
             textView.attributedText = attributed
             #endif
-            DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
                 if !self.restored {
                     self.restored = true
-                    self.scroll(to: TextLocation.decode(self.model.book.lastLocation)?.progression ?? self.model.book.progress)
+                    let target = TextLocation.decode(self.model.preferredStartLocation)?.progression ?? self.model.book.progress
+                    self.scroll(to: target)
                 } else {
                     self.scroll(to: anchor)
                 }
             }
         }
-
-        // MARK: Scrolling
 
         private var currentProgress: Double {
             #if os(macOS)
@@ -174,7 +203,7 @@ struct TextReader: PlatformViewRepresentable {
             report(force: true)
         }
 
-        @objc fileprivate func didScroll() {
+        fileprivate func didScroll() {
             report(force: false)
         }
 
@@ -195,8 +224,6 @@ struct TextReader: PlatformViewRepresentable {
             }
         }
 
-        // MARK: ReaderEngine
-
         func goToChapter(_ index: Int) {}
 
         func seek(to progress: Double) { scroll(to: progress) }
@@ -205,39 +232,33 @@ struct TextReader: PlatformViewRepresentable {
             if let location = TextLocation.decode(location) { scroll(to: location.progression) }
         }
 
-        func turnPage(_ direction: Int) {
-            #if os(macOS)
-            direction > 0 ? scrollView?.pageDown(nil) : scrollView?.pageUp(nil)
-            #else
-            guard let textView else { return }
-            let target = textView.contentOffset.y + textView.bounds.height * 0.88 * CGFloat(direction)
-            let maxY = max(0, textView.contentSize.height - textView.bounds.height)
-            textView.setContentOffset(CGPoint(x: 0, y: min(maxY, max(0, target))), animated: true)
-            #endif
-        }
-
         func search(_ query: String, backwards: Bool) {
             guard let textView else { return }
+            if query != searchQuery {
+                searchQuery = query
+                searchRange = nil
+            }
             #if os(macOS)
             let string = textView.string as NSString
             #else
             let string = (textView.text ?? "") as NSString
             #endif
-            let start: Int
-            if let searchRange {
-                start = backwards ? searchRange.location : searchRange.location + searchRange.length
+            let matches = Self.allMatches(of: query, in: string)
+            guard !matches.isEmpty else {
+                model.searchMatchSummary = "No matches"
+                return
+            }
+            let currentIndex: Int
+            if let searchRange, let existing = matches.firstIndex(of: searchRange) {
+                currentIndex = backwards
+                    ? (existing == 0 ? matches.count - 1 : existing - 1)
+                    : (existing + 1) % matches.count
             } else {
-                start = 0
+                currentIndex = backwards ? matches.count - 1 : 0
             }
-            let range = backwards
-                ? NSRange(location: 0, length: start)
-                : NSRange(location: start, length: string.length - start)
-            var found = string.range(of: query, options: backwards ? [.caseInsensitive, .backwards] : [.caseInsensitive], range: range)
-            if found.location == NSNotFound {
-                found = string.range(of: query, options: backwards ? [.caseInsensitive, .backwards] : [.caseInsensitive])
-            }
-            guard found.location != NSNotFound else { return }
+            let found = matches[currentIndex]
             searchRange = found
+            model.searchMatchSummary = "\(currentIndex + 1) of \(matches.count)"
             #if os(macOS)
             textView.setSelectedRange(found)
             textView.scrollRangeToVisible(found)
@@ -248,23 +269,41 @@ struct TextReader: PlatformViewRepresentable {
             #endif
         }
 
+        private static func allMatches(of query: String, in string: NSString) -> [NSRange] {
+            var results: [NSRange] = []
+            var location = 0
+            while location < string.length {
+                let range = string.range(
+                    of: query,
+                    options: [.caseInsensitive],
+                    range: NSRange(location: location, length: string.length - location)
+                )
+                guard range.location != NSNotFound else { break }
+                results.append(range)
+                location = range.location + max(range.length, 1)
+            }
+            return results
+        }
+
         func clearSelection() {
             #if os(macOS)
-            textView?.setSelectedRange(NSRange(location: 0, length: 0))
+            guard let textView else { return }
+            let caret = textView.selectedRange().location
+            textView.setSelectedRange(NSRange(location: caret, length: 0))
             #else
-            textView?.selectedRange = NSRange(location: 0, length: 0)
+            guard let textView else { return }
+            let caret = textView.selectedRange.location
+            textView.selectedRange = NSRange(location: caret, length: 0)
             #endif
         }
 
         func refreshHighlights() {
-            render(palette: lastPalette, fontSize: model.fontSize, lineHeight: model.lineHeight)
+            render(palette: lastPalette, fontSize: model.fontSize, lineHeight: model.lineHeight, typeface: model.typeface)
         }
 
         func captureLocation() {
             report(force: true)
         }
-
-        // MARK: Reading aloud
 
         private var displayedText: NSString {
             #if os(macOS)
@@ -274,7 +313,6 @@ struct TextReader: PlatformViewRepresentable {
             #endif
         }
 
-        /// The first character showing at the top of the view.
         private var firstVisibleCharacter: Int {
             guard let textView else { return 0 }
             #if os(macOS)
@@ -288,7 +326,6 @@ struct TextReader: PlatformViewRepresentable {
             #endif
         }
 
-        /// Paragraphs, from the one on screen. A passage's id is its range.
         func readAloudPassages(after: String?) async -> [SpokenPassage] {
             let text = displayedText
             guard text.length > 0 else { return [] }
@@ -333,7 +370,6 @@ extension TextReader.Coordinator: NSTextViewDelegate {
     }
 }
 
-/// Scroll view whose text column stays centered at the chosen width.
 final class ColumnTextScrollView: NSScrollView {
     let textView: NSTextView
     var columnWidth: Double = 620
@@ -345,6 +381,8 @@ final class ColumnTextScrollView: NSScrollView {
         hasVerticalScroller = true
         autohidesScrollers = true
         drawsBackground = false
+        automaticallyAdjustsContentInsets = false
+        contentInsets = NSEdgeInsets(top: 12, left: 0, bottom: 112, right: 0)
         documentView = textView
         textView.isEditable = false
         textView.isSelectable = true
@@ -365,7 +403,7 @@ final class ColumnTextScrollView: NSScrollView {
         let width = contentView.bounds.width
         let inset = max(28, (width - columnWidth) / 2)
         if textView.textContainerInset.width != inset {
-            textView.textContainerInset = NSSize(width: inset, height: 56)
+            textView.textContainerInset = NSSize(width: inset, height: 48)
         }
     }
 }
@@ -381,7 +419,6 @@ extension TextReader.Coordinator: UITextViewDelegate {
     }
 }
 
-/// Text view whose text column stays centered at the chosen width.
 final class ColumnTextView: UITextView {
     var columnWidth: Double = 620
     var onTapCenter: () -> Void = {}
@@ -404,7 +441,7 @@ final class ColumnTextView: UITextView {
         super.layoutSubviews()
         let inset = max(20, (bounds.width - columnWidth) / 2)
         if textContainerInset.left != inset {
-            textContainerInset = UIEdgeInsets(top: 40, left: inset, bottom: 96, right: inset)
+            textContainerInset = UIEdgeInsets(top: 40, left: inset, bottom: 120, right: inset)
         }
     }
 
@@ -414,13 +451,27 @@ final class ColumnTextView: UITextView {
 }
 #endif
 
-/// Loading and typesetting for text documents.
+enum TextDocument: Sendable {
+    case rtf(Data)
+    case markdown(String)
+    case plain(String)
+
+    var fingerprint: String {
+        switch self {
+        case .rtf(let data): "rtf-\(data.count)"
+        case .markdown(let text): "md-\(text.count)"
+        case .plain(let text): "txt-\(text.count)"
+        }
+    }
+}
+
 enum TextDocumentLoader {
-    struct LoadError: Error {
+    struct LoadError: Error, Sendable {
         let message: String
     }
 
-    nonisolated static func load(_ url: URL) -> Result<String, LoadError> {
+    @concurrent
+    static func load(_ url: URL) async -> Result<TextDocument, LoadError> {
         let maxBytes = 12_000_000
         guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize else {
             return .failure(LoadError(message: "This book's file is missing from Chicken's library folder."))
@@ -428,34 +479,329 @@ enum TextDocumentLoader {
         guard size <= maxBytes else {
             return .failure(LoadError(message: "This text file is too large to display (\(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file)))."))
         }
-        if url.pathExtension.lowercased() == "rtf",
-           let attributed = try? NSAttributedString(url: url, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil) {
-            return .success(attributed.string)
-        }
         guard let data = try? Data(contentsOf: url) else {
             return .failure(LoadError(message: "Chicken could not read this file."))
         }
+        let ext = url.pathExtension.lowercased()
+        if ext == "rtf" {
+            return data.isEmpty ? .failure(LoadError(message: "This file is empty.")) : .success(.rtf(data))
+        }
         let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) ?? ""
-        return text.isEmpty ? .failure(LoadError(message: "This file is empty.")) : .success(text)
+        guard !text.isEmpty else { return .failure(LoadError(message: "This file is empty.")) }
+        if ext == "md" || ext == "markdown" {
+            return .success(.markdown(text))
+        }
+        return .success(.plain(text))
     }
 
     static func attributedString(
-        _ content: String,
+        _ document: TextDocument,
         palette: ReaderPalette,
         fontSize: Double,
         lineHeight: Double,
         typeface: ReaderTypeface = .default,
         highlights: [Highlight]
     ) -> NSAttributedString {
+        let result: NSMutableAttributedString
+        switch document {
+        case .rtf(let data):
+            result = renderRTF(data, palette: palette, fontSize: fontSize, lineHeight: lineHeight)
+        case .markdown(let text):
+            result = renderMarkdown(text, palette: palette, fontSize: fontSize, lineHeight: lineHeight, typeface: typeface)
+        case .plain(let text):
+            result = renderPlain(text, palette: palette, fontSize: fontSize, lineHeight: lineHeight, typeface: typeface)
+        }
+        applyHighlights(highlights, to: result)
+        return result
+    }
+
+    private static func renderRTF(
+        _ data: Data,
+        palette: ReaderPalette,
+        fontSize: Double,
+        lineHeight: Double
+    ) -> NSMutableAttributedString {
+        guard let parsed = try? NSAttributedString(
+            data: data,
+            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            documentAttributes: nil
+        ) else {
+            return NSMutableAttributedString(string: String(decoding: data, as: UTF8.self))
+        }
+        let mutable = NSMutableAttributedString(attributedString: parsed)
+        let fullRange = NSRange(location: 0, length: mutable.length)
+        let textColor = PlatformColor.hex(palette.textHex)
+        let scale = CGFloat(fontSize / 16.0)
+
+        mutable.beginEditing()
+        mutable.enumerateAttribute(.font, in: fullRange) { value, range, _ in
+            guard let font = value as? PlatformFont else { return }
+            let scaledSize = max(11, (font.pointSize * scale).rounded())
+            #if os(macOS)
+            if let resized = PlatformFont(descriptor: font.fontDescriptor, size: scaledSize) {
+                mutable.addAttribute(.font, value: resized, range: range)
+            }
+            #else
+            mutable.addAttribute(.font, value: PlatformFont(descriptor: font.fontDescriptor, size: scaledSize), range: range)
+            #endif
+        }
+        mutable.enumerateAttribute(.paragraphStyle, in: fullRange) { value, range, _ in
+            let style = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+            style.lineHeightMultiple = CGFloat(lineHeight)
+            mutable.addAttribute(.paragraphStyle, value: style, range: range)
+        }
+        mutable.addAttribute(.foregroundColor, value: textColor, range: fullRange)
+        mutable.removeAttribute(.backgroundColor, range: fullRange)
+        mutable.endEditing()
+        return mutable
+    }
+
+    private static func renderMarkdown(
+        _ content: String,
+        palette: ReaderPalette,
+        fontSize: Double,
+        lineHeight: Double,
+        typeface: ReaderTypeface
+    ) -> NSMutableAttributedString {
+        let size = CGFloat(fontSize)
+        let bodyFont = typeface.platformFont(size: size)
+        let monoFont = PlatformFont.monospacedSystemFont(ofSize: max(12, size * 0.88), weight: .regular)
+        let textColor = PlatformColor.hex(palette.textHex)
+        let mutedColor = PlatformColor.hex(palette.mutedHex)
+        let ribbonColor = PlatformColor.hex(palette.ribbonHex)
+        let codeBG = PlatformColor.hex(palette.surfaceAltHex)
+
+        let bodyParagraph = NSMutableParagraphStyle()
+        bodyParagraph.lineHeightMultiple = CGFloat(lineHeight)
+        bodyParagraph.paragraphSpacing = (size * 0.85).rounded()
+        bodyParagraph.hyphenationFactor = 0.5
+
+        let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
+        let lines = normalized.components(separatedBy: "\n")
+        let output = NSMutableAttributedString()
+
+        var index = 0
+        var inCodeBlock = false
+        var codeLines: [String] = []
+        var paragraphBuffer: [String] = []
+
+        func flushParagraph() {
+            guard !paragraphBuffer.isEmpty else { return }
+            let raw = paragraphBuffer.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            paragraphBuffer.removeAll()
+            guard !raw.isEmpty else { return }
+            appendInlineMarkdown(
+                raw,
+                baseFont: bodyFont,
+                color: textColor,
+                linkColor: ribbonColor,
+                codeBG: codeBG,
+                paragraphStyle: bodyParagraph,
+                to: output
+            )
+            output.append(NSAttributedString(string: "\n", attributes: [.font: bodyFont, .paragraphStyle: bodyParagraph]))
+        }
+
+        func flushCodeBlock() {
+            guard !codeLines.isEmpty else { return }
+            let style = NSMutableParagraphStyle()
+            style.lineHeightMultiple = 1.4
+            style.headIndent = 14
+            style.firstLineHeadIndent = 14
+            style.paragraphSpacing = (size * 0.9).rounded()
+            let joined = codeLines.joined(separator: "\n") + "\n"
+            codeLines.removeAll()
+            output.append(NSAttributedString(string: joined, attributes: [
+                .font: monoFont,
+                .foregroundColor: textColor,
+                .backgroundColor: codeBG,
+                .paragraphStyle: style,
+            ]))
+        }
+
+        while index < lines.count {
+            let line = lines[index]
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+
+            if trimmed.hasPrefix("```") {
+                flushParagraph()
+                if inCodeBlock {
+                    flushCodeBlock()
+                    inCodeBlock = false
+                } else {
+                    inCodeBlock = true
+                }
+                index += 1
+                continue
+            }
+
+            if inCodeBlock {
+                codeLines.append(line)
+                index += 1
+                continue
+            }
+
+            if trimmed.isEmpty {
+                flushParagraph()
+                index += 1
+                continue
+            }
+
+            if let heading = parseHeading(trimmed) {
+                flushParagraph()
+                let scale: CGFloat = heading.level == 1 ? 1.65 : (heading.level == 2 ? 1.35 : 1.15)
+                let headingFont = PlatformFont.systemFont(ofSize: (size * scale).rounded(), weight: .semibold)
+                let style = NSMutableParagraphStyle()
+                style.lineHeightMultiple = 1.25
+                style.paragraphSpacingBefore = output.length == 0 ? 0 : (size * 1.1).rounded()
+                style.paragraphSpacing = (size * 0.5).rounded()
+                appendInlineMarkdown(
+                    heading.text,
+                    baseFont: headingFont,
+                    color: textColor,
+                    linkColor: ribbonColor,
+                    codeBG: codeBG,
+                    paragraphStyle: style,
+                    to: output
+                )
+                output.append(NSAttributedString(string: "\n", attributes: [.font: headingFont, .paragraphStyle: style]))
+                index += 1
+                continue
+            }
+
+            if trimmed.hasPrefix(">") {
+                flushParagraph()
+                let quoteText = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+                let quoteStyle = NSMutableParagraphStyle()
+                quoteStyle.lineHeightMultiple = CGFloat(lineHeight)
+                quoteStyle.firstLineHeadIndent = 18
+                quoteStyle.headIndent = 18
+                quoteStyle.paragraphSpacing = (size * 0.8).rounded()
+                let quoteFont = italicFont(from: bodyFont)
+                appendInlineMarkdown(
+                    quoteText,
+                    baseFont: quoteFont,
+                    color: mutedColor,
+                    linkColor: ribbonColor,
+                    codeBG: codeBG,
+                    paragraphStyle: quoteStyle,
+                    to: output
+                )
+                output.append(NSAttributedString(string: "\n", attributes: [.font: quoteFont, .paragraphStyle: quoteStyle]))
+                index += 1
+                continue
+            }
+
+            if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") {
+                flushParagraph()
+                let itemText = String(trimmed.dropFirst(2))
+                let listStyle = NSMutableParagraphStyle()
+                listStyle.lineHeightMultiple = CGFloat(lineHeight)
+                listStyle.firstLineHeadIndent = 12
+                listStyle.headIndent = 24
+                listStyle.paragraphSpacing = (size * 0.45).rounded()
+                output.append(NSAttributedString(string: "•  ", attributes: [
+                    .font: bodyFont,
+                    .foregroundColor: ribbonColor,
+                    .paragraphStyle: listStyle,
+                ]))
+                appendInlineMarkdown(
+                    itemText,
+                    baseFont: bodyFont,
+                    color: textColor,
+                    linkColor: ribbonColor,
+                    codeBG: codeBG,
+                    paragraphStyle: listStyle,
+                    to: output
+                )
+                output.append(NSAttributedString(string: "\n", attributes: [.font: bodyFont, .paragraphStyle: listStyle]))
+                index += 1
+                continue
+            }
+
+            paragraphBuffer.append(trimmed)
+            index += 1
+        }
+
+        flushParagraph()
+        if inCodeBlock { flushCodeBlock() }
+        return output
+    }
+
+    private static func parseHeading(_ line: String) -> (level: Int, text: String)? {
+        var hashes = 0
+        for ch in line {
+            if ch == "#" { hashes += 1 } else { break }
+        }
+        guard (1...6).contains(hashes) else { return nil }
+        let rest = line.dropFirst(hashes)
+        guard rest.first == " " else { return nil }
+        return (hashes, rest.trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func appendInlineMarkdown(
+        _ raw: String,
+        baseFont: PlatformFont,
+        color: PlatformColor,
+        linkColor: PlatformColor,
+        codeBG: PlatformColor,
+        paragraphStyle: NSParagraphStyle,
+        to output: NSMutableAttributedString
+    ) {
+        let baseAttributes: [NSAttributedString.Key: Any] = [
+            .font: baseFont,
+            .foregroundColor: color,
+            .paragraphStyle: paragraphStyle,
+        ]
+        guard let parsed = try? AttributedString(
+            markdown: raw,
+            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        ) else {
+            output.append(NSAttributedString(string: raw, attributes: baseAttributes))
+            return
+        }
+        let chunk = NSMutableAttributedString()
+        for run in parsed.runs {
+            let text = String(parsed[run.range].characters)
+            var attrs = baseAttributes
+            if let intent = run.inlinePresentationIntent {
+                if intent.contains(.code) {
+                    attrs[.font] = PlatformFont.monospacedSystemFont(ofSize: max(12, baseFont.pointSize * 0.88), weight: .regular)
+                    attrs[.backgroundColor] = codeBG
+                } else if intent.contains(.stronglyEmphasized) && intent.contains(.emphasized) {
+                    attrs[.font] = boldItalicFont(from: baseFont)
+                } else if intent.contains(.stronglyEmphasized) {
+                    attrs[.font] = boldFont(from: baseFont)
+                } else if intent.contains(.emphasized) {
+                    attrs[.font] = italicFont(from: baseFont)
+                }
+                if intent.contains(.strikethrough) {
+                    attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
+                }
+            }
+            if let link = run.link {
+                attrs[.link] = link
+                attrs[.foregroundColor] = linkColor
+            }
+            chunk.append(NSAttributedString(string: text, attributes: attrs))
+        }
+        output.append(chunk)
+    }
+
+    private static func renderPlain(
+        _ content: String,
+        palette: ReaderPalette,
+        fontSize: Double,
+        lineHeight: Double,
+        typeface: ReaderTypeface
+    ) -> NSMutableAttributedString {
         let size = CGFloat(fontSize)
         let body = typeface.platformFont(size: size)
-        let dropCapSize = (size * 3.2).rounded()
-        let dropCap = PlatformFont(name: "Superclarendon-Regular", size: dropCapSize) ?? serifFont(size: dropCapSize, weight: .medium)
         let textColor = PlatformColor.hex(palette.textHex)
 
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = CGFloat(lineHeight)
-        paragraph.paragraphSpacing = (size * 1.1).rounded()
+        paragraph.paragraphSpacing = (size * 0.95).rounded()
         paragraph.hyphenationFactor = 0.6
 
         let attributes: [NSAttributedString.Key: Any] = [
@@ -464,45 +810,64 @@ enum TextDocumentLoader {
             .paragraphStyle: paragraph,
         ]
 
-        let paragraphs = content
-            .replacingOccurrences(of: "\r\n", with: "\n")
-            .components(separatedBy: "\n\n")
+        let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
+        let separator = normalized.contains("\n\n") ? "\n\n" : "\n"
+        let paragraphs = normalized
+            .components(separatedBy: separator)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
 
         let result = NSMutableAttributedString()
         for (index, text) in paragraphs.enumerated() {
-            if index == 0, let first = text.first {
-                result.append(NSAttributedString(string: String(first), attributes: attributes.merging([
-                    .font: dropCap,
-                    .baselineOffset: -(dropCapSize - size * 1.1).rounded(),
-                ]) { _, new in new }))
-                result.append(NSAttributedString(string: String(text.dropFirst()), attributes: attributes))
-            } else {
-                result.append(NSAttributedString(string: text, attributes: attributes))
-            }
+            result.append(NSAttributedString(string: text, attributes: attributes))
             if index < paragraphs.count - 1 {
-                result.append(NSAttributedString(string: "\n\n", attributes: attributes))
-            }
-        }
-
-        let string = result.string as NSString
-        for highlight in highlights {
-            let range = string.range(of: highlight.text)
-            if range.location != NSNotFound {
-                result.addAttribute(.backgroundColor, value: PlatformColor(highlight.color.fill), range: range)
+                result.append(NSAttributedString(string: "\n", attributes: attributes))
             }
         }
         return result
     }
 
-    private static func serifFont(size: CGFloat, weight: PlatformFont.Weight = .regular) -> PlatformFont {
-        let system = PlatformFont.systemFont(ofSize: size, weight: weight)
-        guard let descriptor = system.fontDescriptor.withDesign(.serif) else { return system }
+    private static func applyHighlights(_ highlights: [Highlight], to result: NSMutableAttributedString) {
+        let string = result.string as NSString
+        for highlight in highlights {
+            let range = string.range(of: highlight.text, options: [.caseInsensitive])
+            if range.location != NSNotFound {
+                result.addAttribute(.backgroundColor, value: PlatformColor(highlight.color.fill), range: range)
+            }
+        }
+    }
+
+    private static func boldFont(from font: PlatformFont) -> PlatformFont {
         #if os(macOS)
-        return PlatformFont(descriptor: descriptor, size: size) ?? system
+        let descriptor = font.fontDescriptor.withSymbolicTraits(.bold)
+        return PlatformFont(descriptor: descriptor, size: font.pointSize) ?? PlatformFont.boldSystemFont(ofSize: font.pointSize)
         #else
-        return PlatformFont(descriptor: descriptor, size: size)
+        guard let descriptor = font.fontDescriptor.withSymbolicTraits(.traitBold) else {
+            return PlatformFont.boldSystemFont(ofSize: font.pointSize)
+        }
+        return PlatformFont(descriptor: descriptor, size: font.pointSize)
+        #endif
+    }
+
+    private static func italicFont(from font: PlatformFont) -> PlatformFont {
+        #if os(macOS)
+        let descriptor = font.fontDescriptor.withSymbolicTraits(.italic)
+        return PlatformFont(descriptor: descriptor, size: font.pointSize) ?? font
+        #else
+        guard let descriptor = font.fontDescriptor.withSymbolicTraits(.traitItalic) else { return font }
+        return PlatformFont(descriptor: descriptor, size: font.pointSize)
+        #endif
+    }
+
+    private static func boldItalicFont(from font: PlatformFont) -> PlatformFont {
+        #if os(macOS)
+        let descriptor = font.fontDescriptor.withSymbolicTraits([.bold, .italic])
+        return PlatformFont(descriptor: descriptor, size: font.pointSize) ?? boldFont(from: font)
+        #else
+        guard let descriptor = font.fontDescriptor.withSymbolicTraits([.traitBold, .traitItalic]) else {
+            return boldFont(from: font)
+        }
+        return PlatformFont(descriptor: descriptor, size: font.pointSize)
         #endif
     }
 }

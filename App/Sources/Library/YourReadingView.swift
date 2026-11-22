@@ -2,8 +2,6 @@ import ChickenKit
 import SwiftData
 import SwiftUI
 
-/// Your reading: time read on every device, the year's clutch of finished
-/// books, the latest line you marked, and the goals it's all measured by.
 struct YourReadingView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
@@ -23,7 +21,7 @@ struct YourReadingView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 32) {
+            VStack(alignment: .leading, spacing: 26) {
                 PageHeader(title: "Your Reading")
                     .padding(.horizontal, gutter)
 
@@ -45,20 +43,18 @@ struct YourReadingView: View {
                 ReadingGoalsEditor()
                     .padding(.horizontal, gutter)
             }
-            .padding(.top, sizeClass == .compact ? 4 : 20)
-            .padding(.bottom, 80)
+            .padding(.top, sizeClass == .compact ? 6 : 20)
+            .padding(.bottom, 92)
             .frame(maxWidth: 1180, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.hard, for: .top)
+        .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(palette.background.ignoresSafeArea())
         .pageTitle("Your Reading")
-        // Refreshes as today's minutes tick over while a reader is open.
         .task(id: library.readingSecondsToday / 60) { year = library.readingYear() }
     }
-
-    // MARK: Time
 
     private var timeRead: some View {
         GoalCard {
@@ -71,6 +67,12 @@ struct YourReadingView: View {
             }
             MonthChart(seconds: year.monthSeconds, currentMonth: Calendar.current.component(.month, from: Date()))
                 .padding(.top, 6)
+            if library.preferences.hasCalibratedPace {
+                let pagesPerHour = Int((60.0 / library.preferences.minutesPerPage).rounded())
+                Text("Calibrated pace · ~\(pagesPerHour) pages/hr")
+                    .font(.chickenMono(11))
+                    .foregroundStyle(palette.faint)
+            }
         }
     }
 
@@ -86,7 +88,7 @@ struct YourReadingView: View {
 
     private func figure(_ label: String, _ seconds: Int) -> some View {
         let duration = Self.duration(seconds)
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 8) {
             Text(label).chickenEyebrow(palette)
             GoalFigure(value: duration.value, unit: duration.unit)
         }
@@ -94,14 +96,13 @@ struct YourReadingView: View {
     }
 
     private var days: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Days read").chickenEyebrow(palette)
             GoalFigure(value: "\(year.daysRead)", unit: year.daysRead == 1 ? "day" : "days")
         }
         .accessibilityElement(children: .combine)
     }
 
-    /// Minutes under an hour, hours and minutes under ten, then hours.
     static func duration(_ seconds: Int) -> (value: String, unit: String) {
         let hours = seconds / 3600
         let minutes = (seconds % 3600) / 60
@@ -110,13 +111,9 @@ struct YourReadingView: View {
         return ("\(hours)", "hours")
     }
 
-    // MARK: Latest highlight
-
     private func latest(_ highlight: Highlight, in book: Book) -> some View {
         Button {
-            if let location = highlight.location { book.lastLocation = location }
-            library.save()
-            openBook(book.id, from: nil)
+            openBook(book.id, jumpTo: JumpTarget(location: highlight.location, chapterIndex: highlight.chapterIndex))
         } label: {
             GoalCard {
                 Text("Latest highlight").chickenEyebrow(palette)
@@ -126,12 +123,12 @@ struct YourReadingView: View {
                         .frame(width: 3)
                     VStack(alignment: .leading, spacing: 10) {
                         Text(highlight.text)
-                            .font(.chickenSerif(sizeClass == .compact ? 17 : 19))
+                            .font(.chickenSerif(sizeClass == .compact ? 17 : 18.5))
                             .foregroundStyle(palette.text)
                             .lineLimit(6)
                             .multilineTextAlignment(.leading)
                         Text("\(book.displayTitle) · \(highlight.createdAt.formatted(.dateTime.month(.abbreviated).day()))")
-                            .font(.chickenSerif(13, italic: true))
+                            .font(.chickenUI(12.5, weight: .medium))
                             .foregroundStyle(palette.muted)
                             .lineLimit(1)
                     }
@@ -140,13 +137,98 @@ struct YourReadingView: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressStyle(scale: 0.99))
         .accessibilityHint("Opens the book at this passage")
     }
 }
 
-/// A year in twelve columns; this month in ribbon, the months to come
-/// as empty tracks.
+struct GoalCard<Content: View>: View {
+    @Environment(\.palette) private var palette
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) { content }
+            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(palette.surface)
+                    .stroke(palette.border, lineWidth: 0.5)
+            )
+    }
+}
+
+struct GoalFigure: View {
+    @Environment(\.palette) private var palette
+    let value: String
+    let unit: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            Text(value)
+                .font(.chickenDisplay(30))
+                .tracking(-0.6)
+                .foregroundStyle(palette.text)
+                .contentTransition(.numericText())
+            Text(unit)
+                .font(.chickenUI(13.5))
+                .foregroundStyle(palette.muted)
+        }
+        .monospacedDigit()
+    }
+}
+
+struct YearGoalCard: View {
+    @Environment(\.palette) private var palette
+    let finished: [Book]
+    let goal: Int
+
+    private var year: String { String(Calendar.current.component(.year, from: Date())) }
+
+    var body: some View {
+        GoalCard {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("\(year) reading goal").chickenEyebrow(palette)
+                GoalFigure(value: "\(finished.count)", unit: "of \(goal) books")
+            }
+
+            if goal <= 24 {
+                EggCarton(laid: finished.count, total: goal)
+            } else {
+                ProgressLine(progress: goal > 0 ? min(1, Double(finished.count) / Double(goal)) : 0, height: 3)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct EggCarton: View {
+    @Environment(\.palette) private var palette
+    let laid: Int
+    let total: Int
+
+    var body: some View {
+        let perRow = total <= 12 ? max(1, total) : min(12, (total + 1) / 2)
+        let columns = Array(repeating: GridItem(.flexible(minimum: 12, maximum: 20), spacing: 6), count: perRow)
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 7) {
+            ForEach(0..<total, id: \.self) { index in
+                let filled = index < laid
+                ZStack {
+                    EggShape()
+                        .fill(filled ? palette.ribbon : palette.surfaceAlt)
+                    if !filled {
+                        EggShape().stroke(palette.border, lineWidth: 0.5)
+                    }
+                }
+                .aspectRatio(0.78, contentMode: .fit)
+                .frame(maxWidth: 20)
+            }
+        }
+        .frame(maxWidth: CGFloat(perRow) * 26, alignment: .leading)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct MonthChart: View {
     @Environment(\.palette) private var palette
     let seconds: [Int]
@@ -161,15 +243,15 @@ private struct MonthChart: View {
                 let month = index + 1
                 VStack(spacing: 6) {
                     ZStack(alignment: .bottom) {
-                        RoundedRectangle(cornerRadius: 2).fill(palette.surfaceAlt).frame(width: 12, height: height)
+                        RoundedRectangle(cornerRadius: 3).fill(palette.surfaceAlt).frame(width: 12, height: height)
                         if month <= currentMonth, seconds[index] > 0 {
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(month == currentMonth ? palette.ribbon : palette.muted.opacity(0.55))
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(month == currentMonth ? palette.ribbon : palette.muted.opacity(0.45))
                                 .frame(width: 12, height: max(3, height * Double(seconds[index]) / Double(scale)))
                         }
                     }
                     Text(symbols[index])
-                        .font(.chickenUI(9.5, weight: month == currentMonth ? .bold : .medium))
+                        .font(.chickenUI(9.5, weight: month == currentMonth ? .semibold : .medium))
                         .foregroundStyle(month == currentMonth ? palette.text : palette.faint)
                 }
                 .frame(maxWidth: .infinity)
@@ -181,10 +263,10 @@ private struct MonthChart: View {
     }
 }
 
-/// The daily minutes and books-per-year goals, with steppers.
 struct ReadingGoalsEditor: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let preferences = library.preferences
@@ -224,22 +306,22 @@ struct ReadingGoalsEditor: View {
                 Text(label)
                     .font(.chickenUI(13))
                     .foregroundStyle(palette.muted)
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
                     Text(value)
                         .font(.chickenDisplay(26))
                         .foregroundStyle(palette.text)
                         .contentTransition(.numericText())
                     Text(unit)
-                        .font(.chickenSerif(14, italic: true))
+                        .font(.chickenUI(13.5))
                         .foregroundStyle(palette.muted)
                 }
                 .monospacedDigit()
             }
             Spacer()
             GlassStepper(label: label, canDecrease: canDecrease, canIncrease: canIncrease, decrease: {
-                withAnimation(.snappy) { decrease() }
+                withAnimation(reduceMotion ? nil : ChickenMotion.snappy) { decrease() }
             }, increase: {
-                withAnimation(.snappy) { increase() }
+                withAnimation(reduceMotion ? nil : ChickenMotion.snappy) { increase() }
             })
         }
     }

@@ -1,4 +1,6 @@
+import ChickenKit
 import Foundation
+import os
 #if os(macOS)
 import Security
 #endif
@@ -22,6 +24,8 @@ nonisolated struct CloudFolders: Sendable, Equatable {
         guard let task = SecTaskCreateFromSelf(nil) else { return false }
         let value = SecTaskCopyValueForEntitlement(task, "com.apple.developer.icloud-container-identifiers" as CFString, nil)
         return (value as? [String])?.contains(containerID) == true
+        #elseif targetEnvironment(simulator)
+        return FileManager.default.ubiquityIdentityToken != nil
         #else
         return true
         #endif
@@ -48,9 +52,15 @@ nonisolated struct CloudFolders: Sendable, Equatable {
                 try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
             }
         } catch {
+            ChickenLog.sync.error("Failed to create iCloud directories: \(error.localizedDescription, privacy: .public)")
             return nil
         }
         return folders
+    }
+
+    @concurrent
+    static func resolveAsync() async -> CloudFolders? {
+        resolve()
     }
 
     /// Moves the files named in `names` from the local `source` folder into
@@ -71,6 +81,7 @@ nonisolated struct CloudFolders: Sendable, Equatable {
                 try fileManager.setUbiquitous(true, itemAt: file, destinationURL: target)
                 moved.insert(file.lastPathComponent)
             } catch {
+                ChickenLog.sync.error("Failed to move \(file.lastPathComponent, privacy: .private) to iCloud: \(error.localizedDescription, privacy: .public)")
                 continue
             }
         }
@@ -114,7 +125,41 @@ nonisolated struct CloudFolders: Sendable, Equatable {
     static func remove(_ url: URL) {
         var coordinationError: NSError?
         NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: url, options: .forDeleting, error: &coordinationError) { url in
-            try? FileManager.default.removeItem(at: url)
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch {
+                ChickenLog.sync.error("Failed to delete file: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        if let coordinationError {
+            ChickenLog.sync.error("File coordination delete failed: \(coordinationError.localizedDescription, privacy: .public)")
+        }
+    }
+
+    @concurrent
+    static func removeAll(_ urls: [URL]) async {
+        urls.forEach(remove)
+    }
+
+    @concurrent
+    static func startDownloadingAll(_ urls: [URL]) async {
+        for url in urls {
+            do {
+                try FileManager.default.startDownloadingUbiquitousItem(at: url)
+            } catch {
+                ChickenLog.sync.error("Failed to start download: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    @concurrent
+    static func evictAll(_ urls: [URL]) async {
+        for url in urls {
+            do {
+                try FileManager.default.evictUbiquitousItem(at: url)
+            } catch {
+                ChickenLog.sync.error("Failed to evict download: \(error.localizedDescription, privacy: .public)")
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 import ChickenKit
 import Foundation
 import Observation
+import os
 import SwiftData
 
 /// Owns the library database and the files behind it. Views read books with
@@ -9,9 +10,12 @@ import SwiftData
 /// main actor and only the resulting values are applied on it.
 @Observable
 final class LibraryStore {
+    static let shared = LibraryStore()
+
     let container: ModelContainer
     let paths: LibraryPaths
     let preferences: AppPreferences
+    let cloudKitSynced: Bool
 
     var context: ModelContext { container.mainContext }
 
@@ -24,13 +28,14 @@ final class LibraryStore {
     var folders: [WatchedFolder] = []
     var migrationSummary: String?
 
-    // iCloud. `cloud` is set once the container is reachable; until then,
-    // and whenever iCloud is off, files are found in the local folders.
-    var iCloudStatus: ICloudStatus = .off
-    var cloud: CloudFolders?
+    var iCloudConnection: ICloudConnection = .off
+    var iCloudStatus: ICloudStatus { iCloudConnection.status }
+    var cloud: CloudFolders? { iCloudConnection.folders }
+
     /// Bumped when covers arrive from iCloud, so covers waiting on a
     /// download look again.
     var cloudFilesGeneration = 0
+    var coversGeneration = 0
     /// Bumped when changes arrive from another device, so an open reader can
     /// check whether that device read further.
     var remoteChangeGeneration = 0
@@ -40,32 +45,32 @@ final class LibraryStore {
     var lastSevenDays: [DayReading] = []
 
     @ObservationIgnored var sessionStart: Date?
-    @ObservationIgnored var sessionTimer: Timer?
-    @ObservationIgnored var openReaderCount = 0
+    @ObservationIgnored var sessionTask: Task<Void, Never>?
+    @ObservationIgnored var openBookIDs: Set<UUID> = []
+    @ObservationIgnored var isAppActive = true
     @ObservationIgnored var scanTask: Task<Void, Never>?
+    @ObservationIgnored var importTask: Task<Void, Never>?
+    @ObservationIgnored var coverRefreshTask: Task<Void, Never>?
     @ObservationIgnored var derivedDataTask: Task<Void, Never>?
     @ObservationIgnored var widgetTask: Task<Void, Never>?
     @ObservationIgnored var lastPublishedSnapshot: WidgetSnapshot?
     @ObservationIgnored var pendingProgress: (book: Book, progress: Double, location: String?)?
     @ObservationIgnored var progressFlushTask: Task<Void, Never>?
     @ObservationIgnored var cloudWatcher: CloudFileWatcher?
+    @ObservationIgnored var cloudConnectTask: Task<CloudFolders?, Never>?
     /// Covers in iCloud that are on this device, kept by `cloudWatcher` so
     /// showing a cover never has to ask iCloud. Nil until its first report.
     @ObservationIgnored var downloadedCloudCovers: Set<String>?
     /// Book files in iCloud by name, from `cloudWatcher`; nil until its
     /// first report. `bookDownloads` hands out what views observe.
-    @ObservationIgnored var bookFileStates: [String: CloudFileWatcher.BookFile]?
+    @ObservationIgnored var bookFileStates: [String: CloudFileWatcher.TransferState]?
     @ObservationIgnored var bookDownloads: [String: BookDownload] = [:]
-    @ObservationIgnored var openBookIDs: Set<UUID> = []
     /// Book files the user asked to download, and how many in this batch,
     /// for "Ready to read offline" when the last one lands.
     @ObservationIgnored var requestedDownloads: Set<String> = []
     @ObservationIgnored var requestedDownloadCount = 0
-    // Sync health, for telling the user about problems once.
-    @ObservationIgnored var syncDatabaseFull = false
-    @ObservationIgnored var syncFilesFull = false
-    @ObservationIgnored var syncSignedOut = false
-    @ObservationIgnored var syncLastHealthy = false
+    @ObservationIgnored var syncIssues: Set<SyncIssue> = []
+    @ObservationIgnored var hasCompletedHealthyExport = false
     @ObservationIgnored var cloudObservers: [NSObjectProtocol] = []
     @ObservationIgnored var cloudMoveTask: Task<Void, Never>?
     @ObservationIgnored var cloudChangeTask: Task<Void, Never>?
@@ -73,8 +78,13 @@ final class LibraryStore {
     init(paths: LibraryPaths = .standard(), preferences: AppPreferences = AppPreferences(), inMemory: Bool = false) {
         self.paths = paths
         self.preferences = preferences
-        container = Self.makeContainer(paths: paths, inMemory: inMemory)
+        let result = Self.makeContainer(paths: paths, inMemory: inMemory)
+        container = result.container
+        cloudKitSynced = result.cloudKitSynced
         folders = WatchedFolder.load(from: paths)
+        preferences.onWidgetRelevantChange = { [weak self] in
+            self?.publishWidgetSnapshot()
+        }
         migrateLegacyLibraryIfNeeded()
         recomputeReadingStats()
         connectToICloud()
@@ -85,29 +95,48 @@ final class LibraryStore {
         #endif
     }
 
-    private static func makeContainer(paths: LibraryPaths, inMemory: Bool) -> ModelContainer {
+    isolated deinit {
+        sessionTask?.cancel()
+        scanTask?.cancel()
+        importTask?.cancel()
+        coverRefreshTask?.cancel()
+        derivedDataTask?.cancel()
+        widgetTask?.cancel()
+        progressFlushTask?.cancel()
+        cloudConnectTask?.cancel()
+        cloudMoveTask?.cancel()
+        cloudChangeTask?.cancel()
+        cloudWatcher?.stop()
+        cloudObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
+    private static func makeContainer(paths: LibraryPaths, inMemory: Bool) -> (container: ModelContainer, cloudKitSynced: Bool) {
         let schema = Schema(ChickenSchema.models)
         if inMemory {
-            // swiftlint:disable:next force_try
-            return try! ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+            do {
+                let container = try ModelContainer(for: schema, configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+                return (container, false)
+            } catch {
+                fatalError("Chicken could not create an in-memory library database: \(error)")
+            }
         }
-        try? paths.createDirectories()
-        // Sync through the private CloudKit database when this build can.
-        // If CloudKit can't be set up, open the same store unsynced rather
-        // than treating it as unreadable.
+        do {
+            try paths.createDirectories()
+        } catch {
+            ChickenLog.library.error("Failed to create library directories: \(error.localizedDescription, privacy: .public)")
+        }
         if paths.syncsWithICloud && CloudFolders.isEnabledInThisBuild {
             let synced = ModelConfiguration("Chicken", schema: schema, url: paths.store, cloudKitDatabase: .private(CloudFolders.containerID))
-            if let container = try? ModelContainer(for: schema, configurations: synced) {
-                return container
+            do {
+                return (try ModelContainer(for: schema, configurations: synced), true)
+            } catch {
+                ChickenLog.sync.error("Failed to open CloudKit-synced store, falling back to local: \(error.localizedDescription, privacy: .public)")
             }
         }
         let configuration = ModelConfiguration("Chicken", schema: schema, url: paths.store, cloudKitDatabase: .none)
         if let container = try? ModelContainer(for: schema, configurations: configuration) {
-            return container
+            return (container, false)
         }
-        // A store that can't be opened is set aside rather than deleted; the
-        // book files themselves are untouched and the legacy JSON (if any) is
-        // re-imported on the next pass.
         let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
         for suffix in ["", "-shm", "-wal"] {
             let url = URL(fileURLWithPath: paths.store.path + suffix)
@@ -115,7 +144,7 @@ final class LibraryStore {
         }
         try? FileManager.default.removeItem(at: LegacyMigrator.markerURL(in: paths))
         do {
-            return try ModelContainer(for: schema, configurations: configuration)
+            return (try ModelContainer(for: schema, configurations: configuration), false)
         } catch {
             fatalError("Chicken could not create its library database: \(error)")
         }
@@ -126,11 +155,38 @@ final class LibraryStore {
     func book(id: UUID) -> Book? {
         var descriptor = FetchDescriptor<Book>(predicate: #Predicate { $0.id == id })
         descriptor.fetchLimit = 1
-        return try? context.fetch(descriptor).first
+        do {
+            return try context.fetch(descriptor).first
+        } catch {
+            ChickenLog.library.error("Failed to fetch book: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     func allBooks() -> [Book] {
-        (try? context.fetch(FetchDescriptor<Book>())) ?? []
+        do {
+            return try context.fetch(FetchDescriptor<Book>())
+        } catch {
+            ChickenLog.library.error("Failed to fetch books: \(error.localizedDescription, privacy: .public)")
+            return []
+        }
+    }
+
+    func latestHighlight() -> Highlight? {
+        var descriptor = FetchDescriptor<Highlight>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
+        descriptor.fetchLimit = 1
+        do {
+            return try context.fetch(descriptor).first
+        } catch {
+            ChickenLog.library.error("Failed to fetch latest highlight: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    func highlight(id: UUID) -> Highlight? {
+        var descriptor = FetchDescriptor<Highlight>(predicate: #Predicate { $0.id == id })
+        descriptor.fetchLimit = 1
+        return try? context.fetch(descriptor).first
     }
 
     /// Most recently opened unfinished book: what "Continue reading" offers.
@@ -168,15 +224,17 @@ final class LibraryStore {
     func save() {
         flushPendingProgress()
         guard context.hasChanges else { return }
-        try? context.save()
+        do {
+            try context.save()
+        } catch {
+            ChickenLog.library.error("Failed to save library context: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: - Reading state
 
     func markOpened(_ book: Book) {
-        let now = Date()
-        book.lastOpenedAt = now
-        book.lastActivityAt = now
+        book.recordOpen()
         save()
         publishWidgetSnapshot()
     }
@@ -201,7 +259,6 @@ final class LibraryStore {
         progressFlushTask = nil
         guard let pending = pendingProgress else { return }
         pendingProgress = nil
-        // The book may have been deleted, or merged into its duplicate.
         guard pending.book.modelContext != nil, !pending.book.isDeleted else { return }
         applyProgress(for: pending.book, progress: pending.progress, location: pending.location)
         #if os(iOS)
@@ -222,8 +279,7 @@ final class LibraryStore {
         book.progress = clamped
         if locationChanged { book.lastLocation = location }
         if refreshOpened {
-            book.lastOpenedAt = now
-            book.lastActivityAt = now
+            book.recordOpen(at: now)
         }
         if nowFinished && !wasFinished {
             book.finishedAt = now
@@ -231,18 +287,22 @@ final class LibraryStore {
             book.finishedAt = nil
         }
         recordPosition(for: book, progress: clamped, location: location)
+        if context.hasChanges {
+            do {
+                try context.save()
+            } catch {
+                ChickenLog.library.error("Failed to persist reading progress: \(error.localizedDescription, privacy: .public)")
+            }
+        }
         publishWidgetSnapshot()
     }
 
     /// "Mark as Finished" / "Mark as Unread" from the library.
     func setFinished(_ finished: Bool, for book: Book) {
         if finished {
-            book.progress = 1
-            book.finishedAt = book.finishedAt ?? Date()
+            book.markFinished()
         } else {
-            book.progress = 0
-            book.finishedAt = nil
-            book.lastLocation = nil
+            book.markUnread()
         }
         save()
         publishWidgetSnapshot()
@@ -251,6 +311,7 @@ final class LibraryStore {
     func setPreferences(_ preferences: ReaderPreferences, for book: Book) {
         guard book.preferences != preferences else { return }
         book.preferences = preferences
+        save()
     }
 
     // MARK: - Highlights and bookmarks
@@ -305,12 +366,13 @@ final class LibraryStore {
 
     func delete(_ book: Book) {
         let files = storedFiles(of: book)
+        let storedFileName = book.storedFileName
         preferences.keptBookIDs.remove(book.id)
+        bookDownloads.removeValue(forKey: storedFileName)
+        requestedDownloads.remove(storedFileName)
         context.delete(book)
         save()
-        Task.detached(priority: .utility) {
-            files.forEach(CloudFolders.remove)
-        }
+        Task { await CloudFolders.removeAll(files) }
         publishWidgetSnapshot()
     }
 
@@ -328,6 +390,33 @@ final class LibraryStore {
 }
 
 // MARK: - State types
+
+enum ICloudConnection: Equatable {
+    case off
+    case checking
+    case unavailable
+    case connected(CloudFolders)
+
+    var status: ICloudStatus {
+        switch self {
+        case .off: .off
+        case .checking: .checking
+        case .unavailable: .unavailable
+        case .connected: .on
+        }
+    }
+
+    var folders: CloudFolders? {
+        if case .connected(let folders) = self { return folders }
+        return nil
+    }
+}
+
+enum SyncIssue: Hashable {
+    case databaseFull
+    case filesFull
+    case signedOut
+}
 
 enum ImportState: Equatable {
     case idle
@@ -354,11 +443,14 @@ enum CoverRefreshState: Equatable {
 enum ScanState: Equatable {
     case idle
     case scanning(checked: Int, found: Int, folder: String)
+    case enriching(found: Int)
     case finished(found: Int)
 
     var isScanning: Bool {
-        if case .scanning = self { return true }
-        return false
+        switch self {
+        case .scanning, .enriching: true
+        case .idle, .finished: false
+        }
     }
 }
 

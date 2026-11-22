@@ -74,4 +74,3 @@ Debug builds keep a separate library (`Chicken Development`) and sync with Cloud
 ## More
 
 - [RELEASE.md](RELEASE.md): versioning, App Store, and GitHub releases.
-- [DESIGN.md](DESIGN.md): the visual system.

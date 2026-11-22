@@ -28,63 +28,78 @@ extension LibraryStore {
         let paths = paths
         let existing = Set(allBooks().map { DuplicateKey(name: $0.originalFileName, size: $0.fileSize) })
 
-        Task.detached(priority: .userInitiated) { [weak self] in
-            // Discovered files live inside shared folders, whose security
-            // scope has to be open while they're copied.
-            let scopes = folderAccess.compactMap { $0.startAccessing() }
-            defer { scopes.forEach { $0.stopAccessingSecurityScopedResource() } }
-
-            var batch: [(ImportedBook, String?)] = []
-            var errors: [String] = []
-            var imported = 0
-            var seen = existing
-
-            for (index, candidate) in candidates.enumerated() {
-                do {
-                    let book = try BookImporter.importFile(at: candidate.url, knownMetadata: candidate.metadata, paths: paths)
-                    let key = DuplicateKey(name: book.originalFileName, size: book.fileSize)
-                    if seen.contains(key) {
-                        try? FileManager.default.removeItem(at: paths.bookFile(named: book.storedFileName))
-                        if let cover = book.coverImageName {
-                            try? FileManager.default.removeItem(at: paths.coverFile(named: cover))
-                        }
-                        errors.append("\(book.originalFileName) is already in your library.")
-                    } else {
-                        seen.insert(key)
-                        batch.append((book, candidate.discoveredID))
-                        imported += 1
-                    }
-                } catch {
-                    errors.append(error.localizedDescription)
-                }
-
-                let isLast = index == candidates.count - 1
-                if batch.count >= 6 || isLast {
-                    let finished = batch
-                    batch.removeAll()
-                    let completed = index + 1
-                    await MainActor.run {
-                        self?.applyImported(finished)
-                        self?.importState = .importing(completed: completed, total: candidates.count)
-                    }
-                }
-            }
-
-            let failed = candidates.count - imported
-            let summaryErrors = errors
-            await MainActor.run {
+        let onBatch: @Sendable ([(ImportedBook, String?)], Int) -> Void = { [weak self] batch, completed in
+            Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.importErrors = summaryErrors
-                self.importState = .finished(imported: imported, failed: failed)
-                self.save()
-                self.moveFilesToICloud()
-                self.publishWidgetSnapshot()
-            }
-            try? await Task.sleep(for: .seconds(2.5))
-            await MainActor.run {
-                if case .finished = self?.importState { self?.importState = .idle }
+                self.applyImported(batch)
+                self.importState = .importing(completed: completed, total: candidates.count)
             }
         }
+        importTask?.cancel()
+        importTask = Task { [weak self] in
+            let outcome = await Self.performImport(
+                candidates: candidates,
+                folderAccess: folderAccess,
+                paths: paths,
+                existing: existing,
+                onBatch: onBatch
+            )
+            guard let self, !Task.isCancelled else { return }
+            self.importErrors = outcome.errors
+            self.importState = .finished(imported: outcome.imported, failed: candidates.count - outcome.imported)
+            self.save()
+            self.moveFilesToICloud()
+            self.publishWidgetSnapshot()
+            try? await Task.sleep(for: .seconds(2.5))
+            guard !Task.isCancelled else { return }
+            if case .finished = self.importState { self.importState = .idle }
+        }
+    }
+
+    @concurrent
+    private static func performImport(
+        candidates: [ImportCandidate],
+        folderAccess: [WatchedFolder],
+        paths: LibraryPaths,
+        existing: Set<DuplicateKey>,
+        onBatch: @escaping @Sendable ([(ImportedBook, String?)], Int) -> Void
+    ) async -> (imported: Int, errors: [String]) {
+        let scopes = folderAccess.compactMap { $0.startAccessing() }
+        defer { scopes.forEach { $0.stopAccessingSecurityScopedResource() } }
+
+        var batch: [(ImportedBook, String?)] = []
+        var errors: [String] = []
+        var imported = 0
+        var seen = existing
+
+        for (index, candidate) in candidates.enumerated() {
+            if Task.isCancelled { break }
+            do {
+                let book = try BookImporter.importFile(at: candidate.url, knownMetadata: candidate.metadata, paths: paths)
+                let key = DuplicateKey(name: book.originalFileName, size: book.fileSize)
+                if seen.contains(key) {
+                    try? FileManager.default.removeItem(at: paths.bookFile(named: book.storedFileName))
+                    if let cover = book.coverImageName {
+                        try? FileManager.default.removeItem(at: paths.coverFile(named: cover))
+                    }
+                    errors.append("\(book.originalFileName) is already in your library.")
+                } else {
+                    seen.insert(key)
+                    batch.append((book, candidate.discoveredID))
+                    imported += 1
+                }
+            } catch {
+                errors.append(error.localizedDescription)
+            }
+
+            let isLast = index == candidates.count - 1
+            if batch.count >= 6 || isLast {
+                let finished = batch
+                batch.removeAll()
+                onBatch(finished, index + 1)
+            }
+        }
+        return (imported, errors)
     }
 
     private func applyImported(_ results: [(ImportedBook, String?)]) {

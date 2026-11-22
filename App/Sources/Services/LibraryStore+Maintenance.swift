@@ -2,17 +2,10 @@ import ChickenKit
 import Foundation
 import SwiftData
 
-extension Notification.Name {
-    /// Cover files were regenerated; views should drop cached images.
-    nonisolated static let chickenCoversInvalidated = Notification.Name("ChickenCoversInvalidated")
-}
-
 /// Background upkeep: covers and metadata for books imported before they
 /// could be extracted, and the manual "refresh covers" action.
 extension LibraryStore {
     func scheduleDerivedDataRefresh() {
-        // A book added on another device is checked there; skip any whose
-        // file is still in iCloud rather than download it for this.
         let pending = allBooks()
             .filter { !$0.derivedDataChecked && ($0.format == .pdf || $0.format == .epub) }
             .map { DerivedWork(id: $0.id, fileURL: fileURL(for: $0), format: $0.format, needsCover: $0.coverImageName == nil) }
@@ -21,14 +14,20 @@ extension LibraryStore {
 
         let covers = paths.covers
         derivedDataTask?.cancel()
-        derivedDataTask = Task.detached(priority: .background) { [weak self] in
+        derivedDataTask = Task { [weak self] in
             for chunk in pending.chunked(into: 8) {
                 guard !Task.isCancelled else { return }
-                let results = chunk.map { $0.run(coversDirectory: covers) }
-                await MainActor.run { self?.applyDerived(results) }
+                let results = await Self.extractDerived(chunk: chunk, covers: covers)
+                guard !Task.isCancelled, let self else { return }
+                self.applyDerived(results)
             }
-            await MainActor.run { self?.moveFilesToICloud() }
+            self?.moveFilesToICloud()
         }
+    }
+
+    @concurrent
+    private static func extractDerived(chunk: [DerivedWork], covers: URL) async -> [DerivedResult] {
+        chunk.map { $0.run(coversDirectory: covers) }
     }
 
     private func applyDerived(_ results: [DerivedResult]) {
@@ -61,46 +60,49 @@ extension LibraryStore {
             book.coverImageName = nil
         }
         save()
-        NotificationCenter.default.post(name: .chickenCoversInvalidated, object: nil)
+        CoverImageCache.shared.invalidate()
+        coversGeneration += 1
 
         let work = books.map { DerivedWork(id: $0.id, fileURL: fileURL(for: $0), format: $0.format, needsCover: true) }
         let covers = paths.covers
         coverRefreshState = .refreshing(completed: 0, total: work.count)
 
-        Task.detached(priority: .utility) { [weak self] in
-            staleCovers.forEach(CloudFolders.remove)
+        coverRefreshTask?.cancel()
+        coverRefreshTask = Task { [weak self] in
+            await CloudFolders.removeAll(staleCovers)
             var completed = 0
             var refreshed = 0
             for chunk in work.chunked(into: 6) {
-                let names = chunk.map { ($0.id, CoverRenderer.generateCover(for: $0.fileURL, format: $0.format, id: $0.id, in: covers)) }
+                guard !Task.isCancelled else { return }
+                let names = await Self.generateCovers(chunk: chunk, covers: covers)
+                guard !Task.isCancelled, let self else { return }
                 completed += chunk.count
                 refreshed += names.filter { $0.1 != nil }.count
-                let done = completed
-                await MainActor.run {
-                    guard let self else { return }
-                    for (id, name) in names {
-                        self.book(id: id)?.coverImageName = name
-                    }
-                    self.coverRefreshState = .refreshing(completed: done, total: work.count)
+                for (id, name) in names {
+                    self.book(id: id)?.coverImageName = name
                 }
+                self.coverRefreshState = .refreshing(completed: completed, total: work.count)
             }
-            let total = refreshed
-            await MainActor.run {
-                self?.save()
-                self?.coverRefreshState = .finished(refreshed: total)
-                self?.moveFilesToICloud()
-                self?.publishWidgetSnapshot()
-            }
+            guard !Task.isCancelled, let self else { return }
+            self.save()
+            self.coverRefreshState = .finished(refreshed: refreshed)
+            self.moveFilesToICloud()
+            self.publishWidgetSnapshot()
             try? await Task.sleep(for: .seconds(3))
-            await MainActor.run {
-                if case .finished = self?.coverRefreshState { self?.coverRefreshState = .idle }
-            }
+            guard !Task.isCancelled else { return }
+            if case .finished = self.coverRefreshState { self.coverRefreshState = .idle }
         }
     }
 
+    @concurrent
+    private static func generateCovers(chunk: [DerivedWork], covers: URL) async -> [(UUID, String?)] {
+        chunk.map { ($0.id, CoverRenderer.generateCover(for: $0.fileURL, format: $0.format, id: $0.id, in: covers)) }
+    }
+
     /// Total size of the managed library on disk.
-    func librarySizeDescription() -> String {
-        let bytes = allBooks().reduce(Int64(0)) { $0 + $1.fileSize }
+    func librarySizeDescription(for books: [Book]? = nil) -> String {
+        let source = books ?? allBooks()
+        let bytes = source.reduce(Int64(0)) { $0 + $1.fileSize }
         return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 }
@@ -128,6 +130,7 @@ nonisolated private struct DerivedResult: Sendable {
 
 extension Array {
     nonisolated func chunked(into size: Int) -> [[Element]] {
-        stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
+        guard size > 0 else { return [] }
+        return stride(from: 0, to: count, by: size).map { Array(self[$0..<Swift.min($0 + size, count)]) }
     }
 }

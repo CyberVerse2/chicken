@@ -1,25 +1,14 @@
 import Foundation
 
-/// Minimal XML tree built on Foundation's `XMLParser`, which exists on every
-/// Apple platform (unlike `XMLDocument`, which is macOS-only). Element and
-/// attribute lookups match on local names, so `dc:title` and `title` are the
-/// same to callers.
-final class MarkupNode: @unchecked Sendable {
-    enum Content {
+struct MarkupNode: Sendable {
+    enum Content: Sendable {
         case text(String)
         case element(MarkupNode)
     }
 
     let name: String
     let attributes: [String: String]
-    private(set) var contents: [Content] = []
-    private(set) weak var parent: MarkupNode?
-
-    init(name: String, attributes: [String: String], parent: MarkupNode?) {
-        self.name = name
-        self.attributes = attributes
-        self.parent = parent
-    }
+    let contents: [Content]
 
     var localName: String { Self.localName(of: name) }
 
@@ -32,12 +21,18 @@ final class MarkupNode: @unchecked Sendable {
 
     /// Concatenated text of this node and all descendants, in document order.
     var textContent: String {
-        contents.map {
-            switch $0 {
-            case .text(let text): return text
-            case .element(let node): return node.textContent
+        var output = ""
+        collectText(into: &output)
+        return output
+    }
+
+    private func collectText(into output: inout String) {
+        for item in contents {
+            switch item {
+            case .text(let text): output += text
+            case .element(let node): node.collectText(into: &output)
             }
-        }.joined()
+        }
     }
 
     func attribute(_ name: String) -> String? {
@@ -57,23 +52,27 @@ final class MarkupNode: @unchecked Sendable {
     /// Depth-first search over all descendants.
     func descendants(_ name: String) -> [MarkupNode] {
         var result: [MarkupNode] = []
-        for child in children {
-            if child.localName.caseInsensitiveCompare(name) == .orderedSame { result.append(child) }
-            result.append(contentsOf: child.descendants(name))
-        }
+        collectDescendants(named: name, into: &result)
         return result
     }
 
+    private func collectDescendants(named name: String, into result: inout [MarkupNode]) {
+        for item in contents {
+            guard case .element(let child) = item else { continue }
+            if child.localName.caseInsensitiveCompare(name) == .orderedSame {
+                result.append(child)
+            }
+            child.collectDescendants(named: name, into: &result)
+        }
+    }
+
     func firstDescendant(_ name: String) -> MarkupNode? {
-        for child in children {
+        for item in contents {
+            guard case .element(let child) = item else { continue }
             if child.localName.caseInsensitiveCompare(name) == .orderedSame { return child }
             if let found = child.firstDescendant(name) { return found }
         }
         return nil
-    }
-
-    fileprivate func append(_ content: Content) {
-        contents.append(content)
     }
 
     static func localName(of qualifiedName: String) -> String {
@@ -81,27 +80,25 @@ final class MarkupNode: @unchecked Sendable {
         return String(qualifiedName[qualifiedName.index(after: colon)...])
     }
 
-    // MARK: Parsing
-
     static func parse(_ data: Data) -> MarkupNode? {
-        let builder = Builder()
-        if let root = builder.parse(data) { return root }
+        if let root = Builder().parse(data) { return root }
         // XHTML from EPUBs often uses HTML named entities (&nbsp;, &mdash;)
         // that XML doesn't declare. Rewrite them numerically and try again.
         guard let text = String(data: data, encoding: .utf8) else { return nil }
-        let repaired = HTMLText.numericEntities(in: text)
+        let repaired = HTMLText.numericEntities(in: text, dropUnknown: true)
         guard repaired != text, let repairedData = repaired.data(using: .utf8) else { return nil }
         return Builder().parse(repairedData)
     }
 
-    static func parse(_ string: String) -> MarkupNode? {
-        guard let data = string.data(using: .utf8) else { return nil }
-        return parse(data)
-    }
-
     private final class Builder: NSObject, XMLParserDelegate {
+        private struct Frame {
+            let name: String
+            let attributes: [String: String]
+            var contents: [MarkupNode.Content] = []
+        }
+
         private var root: MarkupNode?
-        private var stack: [MarkupNode] = []
+        private var stack: [Frame] = []
         private var failed = false
 
         func parse(_ data: Data) -> MarkupNode? {
@@ -120,13 +117,7 @@ final class MarkupNode: @unchecked Sendable {
             qualifiedName qName: String?,
             attributes attributeDict: [String: String] = [:]
         ) {
-            let node = MarkupNode(name: elementName, attributes: attributeDict, parent: stack.last)
-            if let parent = stack.last {
-                parent.append(.element(node))
-            } else if root == nil {
-                root = node
-            }
-            stack.append(node)
+            stack.append(Frame(name: elementName, attributes: attributeDict))
         }
 
         func parser(
@@ -135,17 +126,23 @@ final class MarkupNode: @unchecked Sendable {
             namespaceURI: String?,
             qualifiedName qName: String?
         ) {
-            _ = stack.popLast()
+            guard let frame = stack.popLast() else { return }
+            let node = MarkupNode(name: frame.name, attributes: frame.attributes, contents: frame.contents)
+            if stack.isEmpty {
+                root = node
+            } else {
+                stack[stack.count - 1].contents.append(.element(node))
+            }
         }
 
         func parser(_ parser: XMLParser, foundCharacters string: String) {
-            stack.last?.append(.text(string))
+            guard !stack.isEmpty else { return }
+            stack[stack.count - 1].contents.append(.text(string))
         }
 
         func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
-            if let text = String(data: CDATABlock, encoding: .utf8) {
-                stack.last?.append(.text(text))
-            }
+            guard !stack.isEmpty, let text = String(data: CDATABlock, encoding: .utf8) else { return }
+            stack[stack.count - 1].contents.append(.text(text))
         }
 
         func parser(_ parser: XMLParser, parseErrorOccurred parseError: any Error) {
@@ -163,60 +160,61 @@ public enum HTMLText {
         "eacute": "&#233;", "egrave": "&#232;", "agrave": "&#224;", "aacute": "&#225;",
         "ouml": "&#246;", "uuml": "&#252;", "auml": "&#228;", "ccedil": "&#231;",
         "iacute": "&#237;", "oacute": "&#243;", "uacute": "&#250;", "ntilde": "&#241;",
+        "Eacute": "&#201;", "Egrave": "&#200;", "Agrave": "&#192;", "Ouml": "&#214;",
+        "Uuml": "&#220;", "Auml": "&#196;", "Ccedil": "&#199;", "Ntilde": "&#209;",
+        "ecirc": "&#234;", "acirc": "&#226;", "icirc": "&#238;", "ocirc": "&#244;", "ucirc": "&#251;",
+        "oelig": "&#339;", "OElig": "&#338;", "aelig": "&#230;", "AElig": "&#198;", "szlig": "&#223;",
         "laquo": "&#171;", "raquo": "&#187;", "middot": "&#183;", "bull": "&#8226;",
         "thinsp": "&#8201;", "ensp": "&#8194;", "emsp": "&#8195;", "times": "&#215;",
+        "euro": "&#8364;", "pound": "&#163;", "yen": "&#165;", "cent": "&#162;",
+        "deg": "&#176;", "sect": "&#167;", "para": "&#182;", "dagger": "&#8224;", "Dagger": "&#8225;",
+        "frac12": "&#189;", "frac14": "&#188;", "frac34": "&#190;", "plusmn": "&#177;",
+        "minus": "&#8722;", "divide": "&#247;", "prime": "&#8242;", "Prime": "&#8243;",
+        "larr": "&#8592;", "rarr": "&#8594;", "uarr": "&#8593;", "darr": "&#8595;",
     ]
 
     private static let builtIn: Set<String> = ["amp", "lt", "gt", "quot", "apos"]
 
-    /// Replaces HTML named entities that XML parsers reject with numeric
-    /// references. Unknown names are dropped rather than failing the parse.
-    static func numericEntities(in text: String) -> String {
+    static func numericEntities(in text: String, dropUnknown: Bool = false) -> String {
         guard text.contains("&") else { return text }
-        guard let regex = try? NSRegularExpression(pattern: "&([A-Za-z][A-Za-z0-9]*);") else { return text }
-        let ns = text as NSString
-        let result = NSMutableString(string: text)
-        for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let name = ns.substring(with: match.range(at: 1))
-            if builtIn.contains(name) { continue }
-            result.replaceCharacters(in: match.range, with: namedEntities[name] ?? "")
+        return text.replacing(/&([A-Za-z][A-Za-z0-9]*);/) { match in
+            let name = String(match.output.1)
+            if builtIn.contains(name) { return String(match.output.0) }
+            if let numeric = namedEntities[name] { return numeric }
+            return dropUnknown ? "" : String(match.output.0)
         }
-        return result as String
     }
 
     /// Strips tags, decodes common entities, and collapses whitespace.
     public static func plainText(from html: String) -> String {
         var text = html
-            .replacingOccurrences(of: #"<!\[CDATA\[([\s\S]*?)\]\]>"#, with: "$1", options: .regularExpression)
-            .replacingOccurrences(of: #"<br\s*/?>|</p>"#, with: "\n", options: [.regularExpression, .caseInsensitive])
-            .replacingOccurrences(of: #"<[^>]+>"#, with: "", options: .regularExpression)
+            .replacing(/<!\[CDATA\[([\s\S]*?)\]\]>/) { String($0.output.1) }
+            .replacing(/(?i)<br\s*\/?>|<\/p>/, with: "\n")
+            .replacing(/<[^>]+>/, with: "")
         text = decodeEntities(text)
         return text
             .components(separatedBy: "\n")
-            .map { $0.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespaces) }
+            .map { $0.replacing(/\s+/, with: " ").trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
             .joined(separator: "\n")
     }
 
     public static func decodeEntities(_ text: String) -> String {
         guard text.contains("&") else { return text }
-        var result = numericEntities(in: text)
+        var result = numericEntities(in: text, dropUnknown: false)
         result = result
             .replacingOccurrences(of: "&lt;", with: "<")
             .replacingOccurrences(of: "&gt;", with: ">")
             .replacingOccurrences(of: "&quot;", with: "\"")
             .replacingOccurrences(of: "&apos;", with: "'")
-        guard let regex = try? NSRegularExpression(pattern: "&#(x?)([0-9A-Fa-f]+);") else {
-            return result.replacingOccurrences(of: "&amp;", with: "&")
+        result = result.replacing(/&#([xX]?)([0-9A-Fa-f]+);/) { match in
+            let isHex = !match.output.1.isEmpty
+            let digits = String(match.output.2)
+            guard let value = UInt32(digits, radix: isHex ? 16 : 10),
+                  let scalar = Unicode.Scalar(value)
+            else { return String(match.output.0) }
+            return String(Character(scalar))
         }
-        let ns = result as NSString
-        let mutable = NSMutableString(string: result)
-        for match in regex.matches(in: result, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let isHex = ns.substring(with: match.range(at: 1)) == "x"
-            let digits = ns.substring(with: match.range(at: 2))
-            guard let value = UInt32(digits, radix: isHex ? 16 : 10), let scalar = Unicode.Scalar(value) else { continue }
-            mutable.replaceCharacters(in: match.range, with: String(Character(scalar)))
-        }
-        return (mutable as String).replacingOccurrences(of: "&amp;", with: "&")
+        return result.replacingOccurrences(of: "&amp;", with: "&")
     }
 }

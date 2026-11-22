@@ -5,40 +5,35 @@ import SwiftData
 /// Active reading time: counted while at least one reader is open and the
 /// app is in the foreground, committed to `ReadingDay` rows every 30 seconds.
 extension LibraryStore {
-    func readerDidAppear() {
-        openReaderCount += 1
-        resumeReadingSession()
-    }
-
-    func readerDidDisappear() {
-        openReaderCount = max(0, openReaderCount - 1)
-        if openReaderCount == 0 { pauseReadingSession() }
-    }
-
     func appDidBecomeActive() {
-        if openReaderCount > 0 { resumeReadingSession() }
+        isAppActive = true
+        if !openBookIDs.isEmpty { resumeReadingSession() }
         recomputeReadingStats()
     }
 
     func appDidResignActive() {
+        isAppActive = false
         pauseReadingSession()
         save()
     }
 
-    private func resumeReadingSession() {
+    func resumeReadingSession() {
+        guard isAppActive, !openBookIDs.isEmpty else { return }
         if sessionStart == nil { sessionStart = Date() }
-        guard sessionTimer == nil else { return }
-        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.commitReadingSession(continuing: true) }
+        guard sessionTask == nil else { return }
+        sessionTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard !Task.isCancelled, let self else { break }
+                self.commitReadingSession(continuing: true)
+            }
         }
-        RunLoop.main.add(timer, forMode: .common)
-        sessionTimer = timer
         recomputeReadingStats()
     }
 
-    private func pauseReadingSession() {
-        sessionTimer?.invalidate()
-        sessionTimer = nil
+    func pauseReadingSession() {
+        sessionTask?.cancel()
+        sessionTask = nil
         commitReadingSession(continuing: false)
     }
 
@@ -52,6 +47,9 @@ extension LibraryStore {
         save()
         recomputeReadingStats()
         publishWidgetSnapshot()
+        #if os(iOS)
+        ReadingActivityController.shared.refresh()
+        #endif
     }
 
     func addReadingSeconds(_ seconds: Int, toDay day: String) {
@@ -75,7 +73,6 @@ extension LibraryStore {
             secondsByDay[row.day, default: 0] += row.seconds
         }
 
-        // Show the in-flight session too, clipped to today.
         let today = Calendar.current.startOfDay(for: Date())
         let live = sessionStart.map { max(0, Int(Date().timeIntervalSince(max($0, today)))) } ?? 0
         let todayKey = ReadingLog.dayKey(for: today)
@@ -89,6 +86,7 @@ extension LibraryStore {
     /// This year's reading on every device, including a session still
     /// running, which isn't in the stored rows yet.
     func readingYear(of date: Date = Date()) -> ReadingLog.Year {
+        recomputeReadingStats()
         let rows = ((try? context.fetch(FetchDescriptor<ReadingDay>())) ?? []).map { (dayKey: $0.day, seconds: $0.seconds) }
         let calendar = Calendar.current
         var year = ReadingLog.year(calendar.component(.year, from: date), from: rows)
@@ -110,5 +108,13 @@ extension LibraryStore {
         return ((try? context.fetch(descriptor)) ?? [])
             .filter { $0.finishedAt.map(interval.contains) ?? false }
             .sorted { ($0.finishedAt ?? .distantPast) > ($1.finishedAt ?? .distantPast) }
+    }
+
+    func recordReadingPace(pagesRead: Double, elapsedSeconds: Double) {
+        preferences.minutesPerPage = ReadingEstimate.calibratedMinutesPerPage(
+            previous: preferences.minutesPerPage,
+            observedPages: pagesRead,
+            elapsedSeconds: elapsedSeconds
+        )
     }
 }

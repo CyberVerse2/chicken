@@ -1,8 +1,17 @@
 import SwiftData
 import SwiftUI
 
-/// Adds books to collections: each collection with a check when all the
-/// books are in it, and a field for a new one.
+struct CollectBooksAction {
+    let handler: ([UUID]) -> Void
+    func callAsFunction(_ ids: [UUID]) {
+        handler(ids)
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var collectBooks: CollectBooksAction?
+}
+
 struct CollectionPicker: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
@@ -34,7 +43,7 @@ struct CollectionPicker: View {
                                 .foregroundStyle(palette.muted)
                                 .frame(width: 24)
                             TextField("New collection", text: $newName)
-                                .font(.chickenSerif(16))
+                                .font(.chickenUI(15))
                                 .textFieldStyle(.plain)
                                 .focused($naming)
                                 .onSubmit(create)
@@ -60,6 +69,7 @@ struct CollectionPicker: View {
     private func row(_ collection: BookCollection) -> some View {
         let containsAll = !books.isEmpty && books.allSatisfy { library.contains($0, in: collection) }
         return Button {
+            Haptics.selection()
             if containsAll { library.remove(books, from: collection) } else { library.add(books, to: collection) }
         } label: {
             HStack(spacing: 12) {
@@ -68,7 +78,7 @@ struct CollectionPicker: View {
                     .foregroundStyle(containsAll ? palette.ribbon : palette.faint)
                     .frame(width: 24)
                 Text(collection.name)
-                    .font(.chickenSerif(16, weight: .semibold))
+                    .font(.chickenUI(15, weight: .medium))
                     .foregroundStyle(palette.text)
                 Spacer(minLength: 8)
                 Text("\(collection.books?.count ?? 0)")
@@ -77,7 +87,7 @@ struct CollectionPicker: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressStyle(scale: 0.99))
         .accessibilityAddTraits(containsAll ? .isSelected : [])
     }
 
@@ -87,37 +97,18 @@ struct CollectionPicker: View {
     }
 }
 
-/// "Add to Collection…" for a book's menus.
 struct CollectionMenuItem: View {
     @Environment(AppRouter.self) private var router
+    @Environment(\.collectBooks) private var collectBooks
     let book: Book
 
     var body: some View {
         Button("Add to Collection…", systemImage: "rectangle.stack.badge.plus") {
-            router.collectingBooks = CollectingBooks(bookIDs: [book.id])
-        }
-    }
-}
-
-extension View {
-    /// Presents the collection picker when something asks for it. Applied
-    /// wherever a presentation may sit on top, since a sheet can't present
-    /// over another one from underneath.
-    func collectionPicker() -> some View {
-        modifier(CollectionPickerPresenter())
-    }
-}
-
-private struct CollectionPickerPresenter: ViewModifier {
-    @Environment(AppRouter.self) private var router
-    @Environment(LibraryStore.self) private var library
-
-    func body(content: Content) -> some View {
-        @Bindable var router = router
-        content.sheet(item: $router.collectingBooks) { request in
-            CollectionPicker(bookIDs: request.bookIDs)
-                .environment(library)
-                .readingTheme(library.preferences.theme)
+            if let collectBooks {
+                collectBooks([book.id])
+            } else {
+                router.presentSheet(.collectionPicker(CollectingBooks(bookIDs: [book.id])))
+            }
         }
     }
 }

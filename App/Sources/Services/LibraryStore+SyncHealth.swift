@@ -27,24 +27,26 @@ extension LibraryStore {
     }
 
     func iCloudFilesOverQuota(_ overQuota: Bool) {
-        guard overQuota != syncFilesFull else { return }
-        syncFilesFull = overQuota
         if overQuota {
-            syncLastHealthy = false
+            let inserted = syncIssues.insert(.filesFull).inserted
+            guard inserted else { return }
+            hasCompletedHealthyExport = false
             ChickenNotifications.shared.syncProblem(.iCloudFull)
-        } else if !syncDatabaseFull && !syncSignedOut {
-            declareSyncHealthy()
+        } else {
+            syncIssues.remove(.filesFull)
         }
     }
 
     private func cloudKitExportEnded(succeeded: Bool, full: Bool) {
         if full {
-            syncDatabaseFull = true
-            syncLastHealthy = false
+            syncIssues.insert(.databaseFull)
+            hasCompletedHealthyExport = false
             ChickenNotifications.shared.syncProblem(.iCloudFull)
         } else if succeeded {
-            syncDatabaseFull = false
-            if !syncFilesFull && !syncSignedOut { declareSyncHealthy() }
+            syncIssues.remove(.databaseFull)
+            if syncIssues.isEmpty && downloadedCloudCovers != nil {
+                declareSyncHealthy()
+            }
         }
     }
 
@@ -52,26 +54,19 @@ extension LibraryStore {
         let signedIn = FileManager.default.ubiquityIdentityToken != nil
         if !signedIn {
             guard iCloudStatus == .on else { return }
-            iCloudStatus = .unavailable
-            syncSignedOut = true
-            syncLastHealthy = false
+            disconnectICloud()
+            syncIssues.insert(.signedOut)
+            hasCompletedHealthyExport = false
             ChickenNotifications.shared.syncProblem(.signedOut)
         } else if iCloudStatus == .unavailable {
-            // Recovery is declared once the database uploads again.
-            syncSignedOut = false
-            if cloud == nil {
-                connectToICloud()
-            } else {
-                iCloudStatus = .on
-            }
+            syncIssues.remove(.signedOut)
+            connectToICloud()
         }
     }
 
-    /// Once per stretch of good health: clears the told problems so a
-    /// future one is told again.
     private func declareSyncHealthy() {
-        guard !syncLastHealthy else { return }
-        syncLastHealthy = true
+        guard !hasCompletedHealthyExport else { return }
+        hasCompletedHealthyExport = true
         ChickenNotifications.shared.syncRecovered()
     }
 

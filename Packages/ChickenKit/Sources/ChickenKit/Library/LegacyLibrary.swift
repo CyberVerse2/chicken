@@ -76,10 +76,15 @@ public struct LegacyLibrary: Sendable {
     /// Decodes books one at a time so a single malformed record doesn't
     /// discard the rest of the catalog.
     static func decodeBooks(_ data: Data, decoder: JSONDecoder) throws -> [Book] {
-        guard let raw = try JSONSerialization.jsonObject(with: data) as? [Any] else { return [] }
-        return raw.compactMap { element in
-            guard let itemData = try? JSONSerialization.data(withJSONObject: element) else { return nil }
-            return try? decoder.decode(Book.self, from: itemData)
+        try decoder.decode([LossyDecodable<Book>].self, from: data).compactMap(\.value)
+    }
+
+    private struct LossyDecodable<Element: Decodable>: Decodable {
+        let value: Element?
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            value = try? container.decode(Element.self)
         }
     }
 }

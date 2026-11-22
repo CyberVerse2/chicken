@@ -66,15 +66,51 @@ final class Book {
         set { preferencesData = newValue.flatMap { try? JSONEncoder().encode($0) } }
     }
 
-    /// The title as shown: all-caps titles become title case.
-    var displayTitle: String { title.readableTitle }
+    var displayTitle: String {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let extensions = [".epub", ".pdf", ".markdown", ".md", ".txt", ".rtf"]
+        let lower = trimmed.lowercased()
+        let cleaned = extensions.first(where: { lower.hasSuffix($0) && trimmed.count > $0.count })
+            .map { String(trimmed.dropLast($0.count)) } ?? trimmed
+        return cleaned.readableTitle
+    }
 
     var displayAuthor: String {
         guard let author, !author.isEmpty else { return "Unknown author" }
         return author
     }
 
+    enum ReadingStatus: Equatable {
+        case unread
+        case reading(progress: Double)
+        case finished(Date?)
+    }
+
+    var readingStatus: ReadingStatus {
+        if progress >= 1 { return .finished(finishedAt) }
+        if progress > 0 || lastOpenedAt != nil { return .reading(progress: max(0, progress)) }
+        return .unread
+    }
+
     var isFinished: Bool { progress >= 1 }
+
+    func markFinished(at date: Date = Date()) {
+        progress = 1
+        finishedAt = finishedAt ?? date
+    }
+
+    func markUnread() {
+        progress = 0
+        finishedAt = nil
+        lastLocation = nil
+        lastChapterTitle = nil
+        lastOpenedAt = nil
+    }
+
+    func recordOpen(at date: Date = Date()) {
+        lastOpenedAt = date
+        lastActivityAt = date
+    }
 
     /// Stable index into the stylized cover palette, so a book keeps its
     /// color until it gets a real cover.

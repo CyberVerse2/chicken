@@ -12,7 +12,7 @@ public struct EPUBPublication: Sendable {
     public var spine: [EPUBPackage.SpineItem] { package.spine }
 
     /// Bump when the generated HTML changes shape so stale caches rebuild.
-    static let documentName = "__chicken-reader-v2.html"
+    static let documentName = "__chicken-reader-v3.html"
 
     public static func prepare(bookAt archiveURL: URL, cacheDirectory: URL) throws -> EPUBPublication {
         let fileManager = FileManager.default
@@ -110,7 +110,14 @@ public struct EPUBPublication: Sendable {
             """
         }.joined(separator: "\n")
 
-        let language = package.metadata.language.map { " lang=\"\($0)\"" } ?? ""
+        let language = package.metadata.language.map { value in
+            let escaped = value
+                .replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+            return " lang=\"\(escaped)\""
+        } ?? ""
         return """
         <!doctype html>
         <html\(language)>
@@ -129,19 +136,12 @@ public struct EPUBPublication: Sendable {
     }
 
     static func bodyHTML(from html: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"<body\b[^>]*>([\s\S]*?)</body>"#, options: [.caseInsensitive]) else {
-            return html
-        }
-        let ns = html as NSString
-        guard let match = regex.firstMatch(in: html, range: NSRange(location: 0, length: ns.length)) else { return html }
-        return ns.substring(with: match.range(at: 1))
+        guard let match = html.firstMatch(of: /(?i)<body\b[^>]*>([\s\S]*?)<\/body>/) else { return html }
+        return String(match.output.1)
     }
 
     static func stylesheetLinks(in html: String) -> [String] {
-        let pattern = #"<link\b[^>]*rel\s*=\s*["'][^"']*stylesheet[^"']*["'][^>]*>|<style\b[^>]*>[\s\S]*?</style>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return [] }
-        let ns = html as NSString
-        return regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range) }
+        html.matches(of: /(?i)<link\b[^>]*rel\s*=\s*["'][^"']*stylesheet[^"']*["'][^>]*>|<style\b[^>]*>[\s\S]*?<\/style>/).map { String($0.output) }
     }
 
     /// Points `src`/`href` attributes at the unpacked files. Links into other
@@ -152,30 +152,31 @@ public struct EPUBPublication: Sendable {
         root: URL,
         spineIndexByPath: [String: Int]
     ) -> String {
-        guard let regex = try? NSRegularExpression(pattern: #"\b(src|href|xlink:href)\s*=\s*["']([^"']+)["']"#, options: [.caseInsensitive]) else {
-            return html
-        }
-        let ns = html as NSString
-        let result = NSMutableString(string: html)
-        for match in regex.matches(in: html, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let attribute = ns.substring(with: match.range(at: 1))
-            let value = HTMLText.decodeEntities(ns.substring(with: match.range(at: 2)))
+        html.replacing(/(?i)\b(src|href|xlink:href)\s*=\s*["']([^"']+)["']/) { match in
+            let attribute = String(match.output.1)
+            let value = HTMLText.decodeEntities(String(match.output.2))
             let lower = value.lowercased()
             if value.hasPrefix("#") || ["http:", "https:", "data:", "mailto:", "file:", "tel:"].contains(where: lower.hasPrefix) {
-                continue
+                return String(match.output.0)
             }
             let (path, fragment) = EPUBPath.split(value, relativeTo: directory)
-            guard !path.isEmpty else { continue }
+            guard !path.isEmpty else { return String(match.output.0) }
 
-            let rewritten: String
             if attribute.lowercased() != "src", let spineIndex = spineIndexByPath[path] {
-                rewritten = fragment.map { "#\($0)" } ?? "#chapter-\(spineIndex)"
-            } else {
-                rewritten = root.appendingPathComponent(path).absoluteString + (fragment.map { "#\($0)" } ?? "")
+                if let fragment {
+                    return "\(attribute)=\"#\(fragment)\" data-chicken-target-chapter=\"\(spineIndex)\""
+                }
+                return "\(attribute)=\"#chapter-\(spineIndex)\""
             }
-            result.replaceCharacters(in: match.range, with: "\(attribute)=\"\(rewritten)\"")
+            let encodedPath = path
+                .split(separator: "/", omittingEmptySubsequences: false)
+                .map { segment in
+                    String(segment).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String(segment)
+                }
+                .joined(separator: "/")
+            let rewritten = encodedPath + (fragment.map { "#\($0)" } ?? "")
+            return "\(attribute)=\"\(rewritten)\""
         }
-        return result as String
     }
 }
 

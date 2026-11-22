@@ -2,14 +2,50 @@ import ChickenKit
 import PDFKit
 import SwiftUI
 
-/// PDFKit reader for macOS, iPadOS, and iOS. Chapters come from the PDF
-/// outline (or one entry per page when there is none). Highlights are drawn
-/// as non-persistent annotations; the library is the source of truth.
-struct PDFReader: PlatformViewRepresentable {
+struct PDFReader: View {
     let model: ReaderModel
     let fileURL: URL
     let palette: ReaderPalette
     let readingMode: ReadingMode
+    let darkPages: Bool
+    let onTapCenter: () -> Void
+
+    private var shouldInvertPages: Bool { palette.isDark && darkPages }
+
+    var body: some View {
+        PDFSurface(
+            model: model,
+            fileURL: fileURL,
+            palette: palette,
+            readingMode: readingMode,
+            inverted: shouldInvertPages,
+            onTapCenter: onTapCenter
+        )
+        .modifier(PDFDarkPagesModifier(active: shouldInvertPages))
+    }
+}
+
+private struct PDFDarkPagesModifier: ViewModifier {
+    let active: Bool
+
+    func body(content: Content) -> some View {
+        if active {
+            content
+                .colorInvert()
+                .hueRotation(.degrees(180))
+                .brightness(-0.04)
+        } else {
+            content
+        }
+    }
+}
+
+private struct PDFSurface: PlatformViewRepresentable {
+    let model: ReaderModel
+    let fileURL: URL
+    let palette: ReaderPalette
+    let readingMode: ReadingMode
+    let inverted: Bool
     let onTapCenter: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
@@ -27,18 +63,14 @@ struct PDFReader: PlatformViewRepresentable {
     func updateView(_ view: ChickenPDFView, context: Context) {
         context.coordinator.onTapCenter = onTapCenter
         apply(to: view, coordinator: context.coordinator)
-        let index = model.chapterIndex
-        if !model.consumeEngineChapterChange(index) {
-            context.coordinator.goToChapter(index)
-        }
     }
 
     static func dismantleView(_ view: ChickenPDFView, coordinator: Coordinator) {
-        coordinator.captureLocation()
+        coordinator.teardown()
     }
 
     private func apply(to view: ChickenPDFView, coordinator: Coordinator) {
-        view.backgroundColor = PlatformColor.hex(palette.surfaceAltHex)
+        view.backgroundColor = PlatformColor.hex(inverted ? 0xEBEBEA : palette.surfaceAltHex)
         guard coordinator.appliedMode != readingMode else { return }
         coordinator.appliedMode = readingMode
         let page = view.currentPage
@@ -61,23 +93,33 @@ struct PDFReader: PlatformViewRepresentable {
         if let page { view.go(to: page) }
     }
 
-    @MainActor
     final class Coordinator: NSObject, ReaderEngine {
+        private enum RestoreState {
+            case idle
+            case pending(Int)
+            case settling(Task<Void, Never>)
+            case ready
+        }
+
+        private struct OutlineEntry {
+            let page: Int
+            let title: String
+            let level: Int
+        }
+
         let model: ReaderModel
         weak var view: ChickenPDFView?
         var onTapCenter: () -> Void = {}
         var appliedMode: ReadingMode?
-        /// Outline entries: (first page index, title).
-        private var outline: [(page: Int, title: String)] = []
+
+        private var outline: [OutlineEntry] = []
         private var searchQuery = ""
         private var searchMatches: [PDFSelection] = []
         private var searchIndex = -1
         private var observers: [NSObjectProtocol] = []
-        /// Page to show once the view has a real size. Until the saved
-        /// position is restored, page changes aren't reported as progress,
-        /// so opening a book can never overwrite where the reader left off.
-        private var pendingRestorePage: Int?
-        private var isRestoring = true
+        private var restoreState: RestoreState = .idle
+        private var loadTask: Task<Void, Never>?
+        private var annotatedPages: Set<Int> = []
 
         init(model: ReaderModel) {
             self.model = model
@@ -99,34 +141,59 @@ struct PDFReader: PlatformViewRepresentable {
             })
         }
 
+        func teardown() {
+            captureLocation()
+            loadTask?.cancel()
+            loadTask = nil
+            if case .settling(let task) = restoreState { task.cancel() }
+            restoreState = .idle
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers.removeAll()
+        }
+
         isolated deinit {
+            loadTask?.cancel()
+            if case .settling(let task) = restoreState { task.cancel() }
             observers.forEach(NotificationCenter.default.removeObserver)
         }
 
         func load(_ url: URL) {
-            guard let document = PDFDocument(url: url) else {
-                model.chapters = []
-                model.resetPosition()
-                model.error = FileManager.default.fileExists(atPath: url.path)
-                    ? "Chicken could not open this file as a PDF. It may be damaged, encrypted, or mislabeled."
-                    : "This book's file is missing from Chicken's library folder."
-                return
+            loadTask?.cancel()
+            loadTask = Task { [weak self] in
+                let data = await Self.readDocumentData(url)
+                guard let self, !Task.isCancelled else { return }
+                guard let data, let document = PDFDocument(data: data) else {
+                    self.model.engineDidFail(
+                        fileURL: url,
+                        detail: "Chicken could not open this file as a PDF. It may be damaged, encrypted, or mislabeled."
+                    )
+                    return
+                }
+                self.view?.document = document
+                self.model.engineDidBecomeReady()
+                self.buildOutline(document)
+                self.model.totalPages = document.pageCount
+                self.refreshHighlights()
+                self.restoreInitialLocation(document)
             }
-            view?.document = document
-            model.error = nil
-            buildOutline(document)
-            model.totalPages = document.pageCount
-            refreshHighlights()
-            restoreInitialLocation(document)
+        }
+
+        @concurrent
+        private static func readDocumentData(_ url: URL) async -> Data? {
+            try? Data(contentsOf: url, options: .mappedIfSafe)
         }
 
         private func buildOutline(_ document: PDFDocument) {
-            var entries: [(Int, String)] = []
+            var entries: [OutlineEntry] = []
             func walk(_ node: PDFOutline, level: Int) {
                 for index in 0..<node.numberOfChildren {
                     guard let child = node.child(at: index) else { continue }
                     if let page = child.destination?.page {
-                        entries.append((document.index(for: page), child.label ?? "Untitled"))
+                        entries.append(OutlineEntry(
+                            page: document.index(for: page),
+                            title: child.label?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Untitled",
+                            level: level
+                        ))
                     }
                     walk(child, level: level + 1)
                 }
@@ -134,38 +201,52 @@ struct PDFReader: PlatformViewRepresentable {
             if let root = document.outlineRoot { walk(root, level: 0) }
             let hasOutline = !entries.isEmpty
             if !hasOutline {
-                entries = (0..<min(document.pageCount, 500)).map { ($0, "Page \($0 + 1)") }
+                entries = (0..<document.pageCount).map {
+                    OutlineEntry(page: $0, title: "Page \($0 + 1)", level: 0)
+                }
             }
-            outline = entries.map { (page: $0.0, title: $0.1) }
-            model.chapters = Self.chapters(from: outline, hasOutline: hasOutline)
+            outline = entries
+            model.chapters = entries.enumerated().map { index, entry in
+                ReaderChapter(
+                    id: index,
+                    title: entry.title,
+                    subtitle: hasOutline ? "Page \(entry.page + 1)" : nil,
+                    level: entry.level
+                )
+            }
         }
 
         private func restoreInitialLocation(_ document: PDFDocument) {
-            if let location = PDFLocation.decode(model.book.lastLocation), document.page(at: location.pageIndex) != nil {
-                pendingRestorePage = location.pageIndex
-            } else if model.book.progress > 0 {
-                pendingRestorePage = max(0, min(document.pageCount - 1, Int((model.book.progress * Double(document.pageCount)).rounded(.up)) - 1))
+            let targetPage: Int
+            if let location = PDFLocation.decode(model.preferredStartLocation),
+               document.page(at: location.pageIndex) != nil {
+                targetPage = location.pageIndex
+            } else if let jump = model.initialJumpTarget, outline.indices.contains(jump.chapterIndex) {
+                targetPage = outline[jump.chapterIndex].page
+            } else if model.book.progress > 0, document.pageCount > 0 {
+                targetPage = max(0, min(document.pageCount - 1, Int((model.book.progress * Double(document.pageCount)).rounded(.up)) - 1))
             } else {
-                pendingRestorePage = 0
+                targetPage = 0
             }
+            restoreState = .pending(targetPage)
             performPendingRestore()
         }
 
         private func performPendingRestore() {
-            guard let pageIndex = pendingRestorePage, let view, let document = view.document,
+            guard case .pending(let pageIndex) = restoreState,
+                  let view, let document = view.document,
                   view.bounds.width > 0, view.bounds.height > 0,
                   let page = document.page(at: pageIndex) else { return }
-            pendingRestorePage = nil
             view.go(to: page)
             updatePageState(pageIndex: pageIndex, document: document)
-            // PDFKit can settle on a neighbouring page while it finishes
-            // laying out; re-assert once, then start reporting.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                guard let self, let view = self.view else { return }
+            let task = Task { [weak self] in
+                try? await Task.sleep(for: .milliseconds(220))
+                guard let self, !Task.isCancelled, let view = self.view else { return }
                 if view.currentPage != page { view.go(to: page) }
-                self.isRestoring = false
+                self.restoreState = .ready
                 self.updatePageState(pageIndex: pageIndex, document: document)
             }
+            restoreState = .settling(task)
         }
 
         private func chapter(forPage pageIndex: Int) -> Int {
@@ -179,7 +260,8 @@ struct PDFReader: PlatformViewRepresentable {
         }
 
         private func pageChanged() {
-            guard !isRestoring, let view, let document = view.document, let page = view.currentPage else { return }
+            guard case .ready = restoreState,
+                  let view, let document = view.document, let page = view.currentPage else { return }
             let pageIndex = document.index(for: page)
             updatePageState(pageIndex: pageIndex, document: document)
             let chapter = chapter(forPage: pageIndex)
@@ -219,8 +301,6 @@ struct PDFReader: PlatformViewRepresentable {
             )
         }
 
-        // MARK: ReaderEngine
-
         func goToChapter(_ index: Int) {
             guard let view, let document = view.document, outline.indices.contains(index) else { return }
             if let current = view.currentPage, pageRange(forChapter: index, document: document).contains(document.index(for: current)) {
@@ -244,12 +324,6 @@ struct PDFReader: PlatformViewRepresentable {
             }
         }
 
-        func turnPage(_ direction: Int) {
-            direction > 0 ? view?.goToNextPage(nil) : view?.goToPreviousPage(nil)
-        }
-
-        /// A page at a time, from the page on screen. Lines are rejoined
-        /// and end-of-line hyphens mended so the voice reads sentences.
         func readAloudPassages(after: String?) async -> [SpokenPassage] {
             guard let view, let document = view.document, document.pageCount > 0 else { return [] }
             let start: Int
@@ -264,7 +338,7 @@ struct PDFReader: PlatformViewRepresentable {
                 if let raw = document.page(at: index)?.string {
                     let text = raw
                         .replacingOccurrences(of: "-\n", with: "")
-                        .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+                        .replacing(/\s+/, with: " ")
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                     if !text.isEmpty { passages.append(SpokenPassage(id: String(index), text: text)) }
                 }
@@ -287,8 +361,16 @@ struct PDFReader: PlatformViewRepresentable {
                 searchMatches = document.findString(query, withOptions: [.caseInsensitive])
                 searchIndex = backwards ? searchMatches.count : -1
             }
-            guard !searchMatches.isEmpty else { return }
-            searchIndex = backwards ? max(0, searchIndex - 1) : min(searchMatches.count - 1, searchIndex + 1)
+            guard !searchMatches.isEmpty else {
+                model.searchMatchSummary = "No matches"
+                return
+            }
+            if backwards {
+                searchIndex = searchIndex <= 0 ? searchMatches.count - 1 : searchIndex - 1
+            } else {
+                searchIndex = (searchIndex + 1) % searchMatches.count
+            }
+            model.searchMatchSummary = "\(searchIndex + 1) of \(searchMatches.count)"
             let match = searchMatches[searchIndex]
             view.setCurrentSelection(match, animate: true)
             view.go(to: match)
@@ -300,16 +382,17 @@ struct PDFReader: PlatformViewRepresentable {
 
         func refreshHighlights() {
             guard let document = view?.document else { return }
-            for index in 0..<document.pageCount {
+            for index in annotatedPages {
                 guard let page = document.page(at: index) else { continue }
                 for annotation in page.annotations where annotation.userName == Self.annotationTag {
                     page.removeAnnotation(annotation)
                 }
             }
+            annotatedPages.removeAll()
             for highlight in model.book.highlights ?? [] {
                 guard let location = PDFLocation.decode(highlight.location),
-                      let page = document.page(at: location.pageIndex) else { continue }
-                guard let pageText = page.string else { continue }
+                      let page = document.page(at: location.pageIndex),
+                      let pageText = page.string else { continue }
                 let range = (pageText as NSString).range(of: highlight.text, options: [.caseInsensitive])
                 guard range.location != NSNotFound, let match = page.selection(for: range) else { continue }
                 for line in match.selectionsByLine() {
@@ -318,6 +401,7 @@ struct PDFReader: PlatformViewRepresentable {
                     annotation.userName = Self.annotationTag
                     page.addAnnotation(annotation)
                 }
+                annotatedPages.insert(location.pageIndex)
             }
         }
 
@@ -325,21 +409,14 @@ struct PDFReader: PlatformViewRepresentable {
             pageChanged()
         }
 
-        /// Chapter entries for the contents list.
-        private static func chapters(from outline: [(page: Int, title: String)], hasOutline: Bool) -> [ReaderChapter] {
-            outline.enumerated().map { index, entry in
-                hasOutline
-                    ? ReaderChapter(id: index, title: entry.title, subtitle: "Page \(entry.page + 1)")
-                    : ReaderChapter(id: index, title: entry.title)
-            }
-        }
-
         static let annotationTag = "chicken-highlight"
     }
 }
 
-/// PDFView with book-like page turning: spreads advance two pages at a
-/// time, and on the Mac arrow keys and trackpad swipes turn whole pages.
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
+}
+
 final class ChickenPDFView: PDFView {
     var usesDiscreteTurns = false
     var onTapCenter: () -> Void = {}
@@ -347,8 +424,6 @@ final class ChickenPDFView: PDFView {
 
     private var isPaired: Bool { displayMode == .twoUp || displayMode == .twoUpContinuous }
 
-    /// Spread "groups": the first page sits alone (like a book's recto), then
-    /// pairs [1,2], [3,4], and so on.
     private func currentGroup() -> Int {
         guard let document, let page = currentPage else { return 0 }
         let index = document.index(for: page)
@@ -402,19 +477,22 @@ final class ChickenPDFView: PDFView {
     override func keyDown(with event: NSEvent) {
         guard event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return super.keyDown(with: event) }
         switch event.keyCode {
-        case 123, 116: goToPreviousPage(nil)                   // ←, page up
-        case 124, 121: goToNextPage(nil)                       // →, page down
-        case 126 where usesDiscreteTurns: goToPreviousPage(nil) // ↑
-        case 125 where usesDiscreteTurns: goToNextPage(nil)     // ↓
-        case 49 where usesDiscreteTurns:                       // space
+        case 123, 116: goToPreviousPage(nil)
+        case 124, 121: goToNextPage(nil)
+        case 126 where usesDiscreteTurns: goToPreviousPage(nil)
+        case 125 where usesDiscreteTurns: goToNextPage(nil)
+        case 49 where usesDiscreteTurns:
             event.modifierFlags.contains(.shift) ? goToPreviousPage(nil) : goToNextPage(nil)
         default: super.keyDown(with: event)
         }
     }
     #else
+    private let tapDelegate = PDFTapDelegate()
+
     private lazy var tapRecognizer: UITapGestureRecognizer = {
         let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
         recognizer.cancelsTouchesInView = false
+        recognizer.delegate = tapDelegate
         return recognizer
     }()
 
@@ -432,7 +510,13 @@ final class ChickenPDFView: PDFView {
 
     @objc private func handleTap(_ recognizer: UITapGestureRecognizer) {
         guard currentSelection == nil else { return }
-        let x = recognizer.location(in: self).x / max(bounds.width, 1)
+        let location = recognizer.location(in: self)
+        if let page = page(for: location, nearest: false),
+           let annotation = page.annotation(at: convert(location, to: page)),
+           annotation.type == "Link" {
+            return
+        }
+        let x = location.x / max(bounds.width, 1)
         if usesDiscreteTurns && x < 0.25 {
             goToPreviousPage(nil)
         } else if usesDiscreteTurns && x > 0.75 {
@@ -443,3 +527,18 @@ final class ChickenPDFView: PDFView {
     }
     #endif
 }
+
+#if os(iOS)
+private final class PDFTapDelegate: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+        true
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRequireFailureOf other: UIGestureRecognizer) -> Bool {
+        if let tap = other as? UITapGestureRecognizer, tap.numberOfTapsRequired > 1 {
+            return true
+        }
+        return false
+    }
+}
+#endif

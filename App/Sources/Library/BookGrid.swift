@@ -5,23 +5,21 @@ struct BookGrid: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var typeSize
     let books: [Book]
-    /// Set while picking books: a tap selects instead of opening.
     var selection: Binding<Set<UUID>>?
 
-    private var spacing: CGFloat { sizeClass == .compact ? 18 : 32 }
+    private var spacing: CGFloat { sizeClass == .compact ? 16 : 28 }
 
-    /// Wider tiles at accessibility text sizes, so titles wrap between words.
     private var columns: [GridItem] {
         let large = typeSize.isAccessibilitySize
         return sizeClass == .compact
-            ? [GridItem(.adaptive(minimum: large ? 150 : 100, maximum: large ? 220 : 150), spacing: spacing, alignment: .top)]
-            : [GridItem(.adaptive(minimum: large ? 200 : 140, maximum: large ? 260 : 180), spacing: spacing, alignment: .top)]
+            ? [GridItem(.adaptive(minimum: large ? 150 : 104, maximum: large ? 220 : 156), spacing: spacing, alignment: .top)]
+            : [GridItem(.adaptive(minimum: large ? 200 : 142, maximum: large ? 260 : 184), spacing: spacing, alignment: .top)]
     }
 
     var body: some View {
-        LazyVGrid(columns: columns, alignment: .leading, spacing: sizeClass == .compact ? 34 : 46) {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: sizeClass == .compact ? 26 : 36) {
             ForEach(books) { book in
-                BookTile(book: book, ledgeOverhang: spacing / 2, selection: selection)
+                BookTile(book: book, selection: selection)
                     .id(book.id)
             }
         }
@@ -31,15 +29,12 @@ struct BookGrid: View {
 
 private struct BookTile: View {
     @Environment(\.palette) private var palette
-    @Environment(\.openBook) private var openBook
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.coverContext) private var coverContext
     @Environment(\.bookSequence) private var bookSequence
     @Environment(\.selectBook) private var selectBook
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let book: Book
-    /// Each tile's ledge reaches halfway into the gap on either side, so a
-    /// row of tiles reads as one continuous shelf.
-    let ledgeOverhang: CGFloat
     var selection: Binding<Set<UUID>>?
     @State private var hovering = false
 
@@ -57,7 +52,7 @@ private struct BookTile: View {
 
     var body: some View {
         Button(action: tapped) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 10) {
                 BookCover(book: book, style: .tile)
                     .aspectRatio(2.0 / 3.0, contentMode: .fit)
                     .coverTransitionSource(book.id)
@@ -72,24 +67,21 @@ private struct BookTile: View {
                                 .transition(.opacity)
                         }
                     }
-                    .shadow(color: palette.shadow, radius: hovering ? 10 : 3, x: 1, y: hovering ? 6 : 2)
-                    .offset(y: hovering ? -6 : 0)
-                    .background(alignment: .bottom) {
-                        ShelfLedge()
-                            .padding(.horizontal, -ledgeOverhang)
-                            .alignmentGuide(.bottom) { $0[.top] }
-                    }
+                    .shadow(color: palette.shadow, radius: hovering ? 14 : 6, x: 0, y: hovering ? 8 : 4)
+                    #if os(macOS)
+                    .offset(y: hovering && !reduceMotion ? -4 : 0)
+                    #endif
                     .coverRibbon(inProgress)
 
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(book.displayTitle)
-                        .font(.chickenSerif(sizeClass == .compact ? 13.5 : 15, weight: .semibold))
+                        .font(.chickenUI(sizeClass == .compact ? 13.5 : 14.5, weight: .semibold))
                         .foregroundStyle(palette.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     if let author = book.author, !author.isEmpty {
                         Text(author)
-                            .font(.chickenSerif(sizeClass == .compact ? 12.5 : 13.5, italic: true))
+                            .font(.chickenUI(sizeClass == .compact ? 12 : 13))
                             .foregroundStyle(palette.muted)
                             .lineLimit(1)
                     }
@@ -99,9 +91,11 @@ private struct BookTile: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressStyle())
+        #if os(macOS)
         .onHover { hovering = $0 }
-        .animation(.smooth(duration: 0.25), value: hovering)
+        .animation(reduceMotion ? nil : ChickenMotion.micro, value: hovering)
+        #endif
         .bookContextMenu(book)
         .accessibilityLabel("\(book.displayTitle) by \(book.displayAuthor)")
         .accessibilityAddTraits(isSelected ? .isSelected : [])
@@ -114,7 +108,6 @@ private struct BookTile: View {
         return "Unread"
     }
 
-    /// "Read" or how far in; unread books carry no label.
     @ViewBuilder
     private var status: some View {
         if book.isFinished {
@@ -122,20 +115,21 @@ private struct BookTile: View {
                 .labelStyle(.titleAndIcon)
                 .font(.chickenMono(10.5, weight: .medium))
                 .foregroundStyle(palette.muted)
-                .padding(.top, 3)
+                .padding(.top, 2)
         } else if book.progress > 0 {
-            Text("\(Int((book.progress * 100).rounded()))%")
-                .font(.chickenMono(10.5, weight: .semibold))
-                .foregroundStyle(palette.ribbon)
-                .padding(.top, 3)
+            HStack(spacing: 6) {
+                ProgressLine(progress: book.progress, height: 2.5)
+                Text("\(Int((book.progress * 100).rounded()))%")
+                    .font(.chickenMono(10.5, weight: .semibold))
+                    .foregroundStyle(palette.ribbon)
+                    .fixedSize()
+            }
+            .padding(.top, 3)
         }
     }
 }
 
-// MARK: - Context menu
-
 extension View {
-    /// Open, details, and remove: the same actions wherever a book appears.
     func bookContextMenu(_ book: Book) -> some View {
         modifier(BookContextMenu(book: book))
     }
@@ -172,12 +166,10 @@ private struct BookContextMenu: ViewModifier {
                 Divider()
                 Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
             } preview: {
-                // The preview is rendered outside this view's hierarchy, so
-                // it needs the library handed to it explicitly.
                 BookCover(book: book, style: .hero)
                     .frame(width: 220, height: 330)
                     .environment(library)
-                    .readingTheme(.paper)
+                    .readingTheme(library.preferences.theme)
             }
             .confirmationDialog("Remove \u{201C}\(book.displayTitle)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
                 Button("Remove", role: .destructive) { library.delete(book) }

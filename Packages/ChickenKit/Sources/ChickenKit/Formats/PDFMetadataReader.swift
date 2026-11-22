@@ -4,6 +4,10 @@ import PDFKit
 public enum PDFMetadataReader {
     public static func metadata(for url: URL) -> DocumentMetadata {
         guard let document = PDFDocument(url: url) else { return .empty }
+        return metadata(for: document)
+    }
+
+    static func metadata(for document: PDFDocument) -> DocumentMetadata {
         let attributes = document.documentAttributes
         return DocumentMetadata(
             title: DocumentMetadata.clean(attributes?[PDFDocumentAttribute.titleAttribute] as? String),

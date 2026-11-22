@@ -39,7 +39,7 @@ nonisolated enum FocusTheme: String, AppEnum {
         .ink: "Ink",
     ]
 
-    nonisolated var label: String {
+    var label: String {
         switch self {
         case .paper: "Paper"
         case .sepia: "Sepia"
@@ -47,7 +47,7 @@ nonisolated enum FocusTheme: String, AppEnum {
         }
     }
 
-    @MainActor var readingTheme: ReadingTheme {
+    var readingTheme: ReadingTheme {
         switch self {
         case .paper: .paper
         case .sepia: .sepia
@@ -57,20 +57,16 @@ nonisolated enum FocusTheme: String, AppEnum {
 }
 
 /// What the active Focus asks of Chicken, and the theme to go back to.
-@MainActor
 enum ReadingFocus {
     private static let defaults = UserDefaults.standard
     private static let themeKey = "Chicken.focus.previousTheme"
     private static let controlsKey = "Chicken.focus.hidesControls"
 
-    /// Books open with the controls hidden while the Focus is on.
     static var hidesControls: Bool { defaults.bool(forKey: controlsKey) }
 
     static func apply(theme: ReadingTheme?, hidesControls: Bool) {
         let preferences = LibraryStore.shared.preferences
         if let theme {
-            // Remember the reader's own theme once, so a second filter
-            // change doesn't overwrite it with the Focus theme.
             if defaults.string(forKey: themeKey) == nil {
                 defaults.set(preferences.theme.rawValue, forKey: themeKey)
             }

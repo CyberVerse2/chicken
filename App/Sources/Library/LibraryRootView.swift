@@ -8,15 +8,10 @@ enum AppTab: Hashable {
     case library
     case notebook
     case search
-    /// Time read, the year's finished books, and goals.
     case yourReading
-    /// A book you're reading, picked from the sidebar's Reading section.
     case book(UUID)
 }
 
-/// The app's main window: Home, Library, Notebook, and Search. With the
-/// sidebar-adaptable style this is a glass tab bar on iPhone, a tab bar
-/// that expands into a sidebar on iPad, and a sidebar on the Mac.
 struct LibraryRootView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(AppRouter.self) private var router
@@ -29,15 +24,14 @@ struct LibraryRootView: View {
     @Query private var highlights: [Highlight]
 
     @State private var tab: AppTab = LibraryRootView.initialTab
-    // The Library's own choices, set here when a notification opens it.
+    #if os(iOS)
+    @State private var pendingReaderFromDossier: ReaderPresentation?
+    #endif
     @AppStorage("Chicken.libraryFilter") private var libraryFilter: LibraryFilter = .all
     @AppStorage("Chicken.librarySort") private var librarySort: LibrarySort = .recent
     @AppStorage("Chicken.libraryCollection") private var libraryCollection = ""
-    /// Covers, the reader, and the details sheet share this so books zoom
-    /// open from wherever they were tapped (iPhone and iPad).
     @Namespace private var coverNamespace
 
-    /// Books in progress, most recent first: the sidebar's Reading section.
     private var reading: [Book] {
         Array(books.lazy.filter { $0.progress > 0 && !$0.isFinished }.prefix(8))
     }
@@ -60,85 +54,87 @@ struct LibraryRootView: View {
         @Bindable var router = router
 
         navigation
-            // Scale with the reader's text size, up to the point where
-            // shelves and covers still lay out.
             .dynamicTypeSize(...DynamicTypeSize.accessibility2)
-        .onChange(of: reading.map(\.id)) { _, ids in
-            // A finished or removed book drops out of the sidebar.
-            if case .book(let id) = tab, !ids.contains(id) { tab = .home }
-        }
-        .tint(palette.text)
-        .environment(\.openBook, OpenBookAction(handler: open))
-        .environment(\.selectBook, SelectBookAction(handler: select))
-        .environment(\.coverNamespace, coverNamespace)
-        .sheet(isPresented: $router.showingDiscovery) {
-            DiscoveryView()
-                .readingTheme(library.preferences.theme)
-        }
-        // iPhone (and the Mac): a sheet. iPad: full screen, where the card
-        // sits in the middle with its neighbors peeking, as in Apple Books.
-        .sheet(item: detailBook(presentedFullScreen: false)) { item in
-            detailPager(start: item.id)
-        }
-        #if os(iOS)
-        .fullScreenCover(item: detailBook(presentedFullScreen: true)) { item in
-            detailPager(start: item.id)
-        }
-        #endif
-        #if !os(macOS)
-        .sheet(isPresented: $router.showingSettings) {
-            NavigationStack { SettingsView() }
-                .readingTheme(library.preferences.theme)
-        }
-        .fullScreenCover(item: presentedBook) { item in
-            ReaderLoader(bookID: item.id)
-                .zoomTransition(from: router.presentedSource, in: coverNamespace)
-        }
-        #endif
-        .fileImporter(
-            isPresented: $router.showingImporter,
-            allowedContentTypes: importerContentTypes,
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result { receive(urls) }
-        }
-        .dropDestination(for: URL.self) { urls, _ in
-            let files = urls.filter(\.isFileURL)
-            guard !files.isEmpty else { return false }
-            receive(files)
-            return true
-        }
-        .overlay(alignment: .bottom) { ActivityToast() }
-        .collectionPicker()
-        .onReceive(NotificationCenter.default.publisher(for: .chickenShowLibrary)) { notification in
-            showLibrary(notification.userInfo?["place"] as? String)
-        }
-        .onOpenURL(perform: handle)
-        .spotlightIndexing(library: library, bookCount: books.count, highlightCount: highlights.count) { target in
-            switch target {
-            case .book(let id):
-                route(to: .book(id))
-            case .highlight(let id):
-                // Open the book at the highlighted passage.
-                guard let highlight = highlights.first(where: { $0.id == id }), let book = highlight.book else { return }
-                if let location = highlight.location { book.lastLocation = location }
-                library.save()
-                route(to: .book(book.id))
+            .onChange(of: reading.map(\.id)) { _, ids in
+                if case .book(let id) = tab, !ids.contains(id) { tab = .home }
             }
-        }
-        .onChange(of: router.pendingDestination, initial: true) {
-            // Read the router, not the value handed in: at launch several
-            // copies of this view can see the same destination before the
-            // first one clears it, and each would open its own window.
-            guard let destination = router.pendingDestination else { return }
-            router.pendingDestination = nil
-            route(to: destination)
-        }
-        .animation(.easeInOut(duration: 0.4), value: library.preferences.theme)
+            .tint(palette.text)
+            .environment(\.openBook, OpenBookAction(handler: open))
+            .environment(\.selectBook, SelectBookAction(handler: select))
+            .environment(\.coverNamespace, coverNamespace)
+            .environment(\.collectBooks, CollectBooksAction { ids in
+                router.presentSheet(.collectionPicker(CollectingBooks(bookIDs: ids)))
+            })
+            .sheet(item: $router.activeSheet, onDismiss: router.flushQueuedSheet) { sheet in
+                sheetContent(for: sheet)
+            }
+            .sheet(item: $router.presentedDetails, onDismiss: flushPendingReader) { presentation in
+                BookDossierView(bookID: presentation.id)
+                    .environment(\.openBook, OpenBookAction(handler: openFromDossier))
+                    .readingTheme(library.preferences.theme)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
+            #if os(iOS)
+            .fullScreenCover(item: $router.presentedReader) { presentation in
+                ReaderLoader(bookID: presentation.id)
+                    .zoomTransition(from: presentation.source, in: coverNamespace)
+            }
+            #endif
+            .fileImporter(
+                isPresented: $router.showingImporter,
+                allowedContentTypes: importerContentTypes,
+                allowsMultipleSelection: true
+            ) { result in
+                if case .success(let urls) = result { receive(urls) }
+            }
+            .dropDestination(for: URL.self) { urls, _ in
+                let files = urls.filter(\.isFileURL)
+                guard !files.isEmpty else { return false }
+                receive(files)
+                return true
+            }
+            .overlay(alignment: .bottom) { ActivityToast() }
+            .onChange(of: router.pendingLibraryPlace, initial: true) {
+                guard let place = router.pendingLibraryPlace else { return }
+                router.pendingLibraryPlace = nil
+                showLibrary(place)
+            }
+            .onOpenURL(perform: handle)
+            .spotlightIndexing(library: library, bookCount: books.count, highlightCount: highlights.count) { target in
+                switch target {
+                case .book(let id):
+                    route(to: .book(id))
+                case .highlight(let id):
+                    route(to: .highlight(id))
+                }
+            }
+            .onChange(of: router.pendingDestination, initial: true) {
+                guard let destination = router.pendingDestination else { return }
+                router.pendingDestination = nil
+                route(to: destination)
+            }
     }
 
-    /// A sidebar of places and the books you're reading on the Mac; on
-    /// iPhone and iPad, a tab view that becomes a sidebar on wide screens.
+    @ViewBuilder
+    private func sheetContent(for sheet: ActiveSheet) -> some View {
+        switch sheet {
+        case .discovery:
+            DiscoveryView()
+                .readingTheme(library.preferences.theme)
+        case .settings:
+            NavigationStack { SettingsView() }
+                .readingTheme(library.preferences.theme)
+        case .collectionPicker(let request):
+            CollectionPicker(bookIDs: request.bookIDs)
+                .environment(library)
+                .readingTheme(library.preferences.theme)
+        case .quoteCard(let request):
+            QuoteCardSheet(request: request)
+                .readingTheme(library.preferences.theme)
+        }
+    }
+
     @ViewBuilder
     private var navigation: some View {
         #if os(macOS)
@@ -153,19 +149,9 @@ struct LibraryRootView: View {
                 case .notebook: NavigationStack { NotebookView() }
                 case .search: NavigationStack { SearchView() }
                 case .yourReading: NavigationStack { YourReadingView() }
-                case .book(let id): NavigationStack { BookDetailView(bookID: id, isPage: true) }.id(id)
+                case .book(let id): NavigationStack { BookDossierView(bookID: id, isPage: true) }.id(id)
                 }
             }
-            .overlay { MacBookCard() }
-            #if DEBUG
-            .task {
-                // `CHICKEN_DEBUG_PANEL=detail:<id>` opens a card with no shelf
-                // behind it; give it the whole library to step through.
-                if router.detailBookID != nil, router.detailSequence.isEmpty {
-                    router.detailSequence = books.map(\.id)
-                }
-            }
-            #endif
         }
         #else
         TabView(selection: $tab) {
@@ -181,20 +167,17 @@ struct LibraryRootView: View {
             Tab(value: AppTab.search, role: .search) {
                 NavigationStack { SearchView() }
             }
-            // In the sidebar only; on iPhone it opens from Home's goal cards.
             if sizeClass == .regular {
                 Tab("Your Reading", systemImage: "chart.bar", value: AppTab.yourReading) {
                     NavigationStack { YourReadingView() }
                 }
                 .defaultVisibility(.hidden, for: .tabBar)
             }
-            // Only where there's a sidebar: on iPhone these tabs would
-            // crowd the tab bar into a "More" tab.
             if sizeClass == .regular && !reading.isEmpty {
                 TabSection("Reading") {
                     ForEach(reading) { book in
                         Tab(value: AppTab.book(book.id)) {
-                            NavigationStack { BookDetailView(bookID: book.id, isPage: true) }
+                            NavigationStack { BookDossierView(bookID: book.id, isPage: true) }
                         } label: {
                             Label(book.displayTitle, systemImage: "bookmark.fill")
                         }
@@ -205,86 +188,71 @@ struct LibraryRootView: View {
             }
         }
         .tabViewStyle(.sidebarAdaptable)
+        .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewSidebarHeader { SidebarHeader() }
         .tabViewSidebarBottomBar { SidebarTodayMeter { tab = .yourReading } }
+        .modifier(NowReadingAccessoryModifier(
+            book: reading.first,
+            isEnabled: sizeClass == .compact && (tab == .library || tab == .notebook || tab == .search) && router.presentedReader == nil && reading.first != nil,
+            onOpen: { book in
+                Haptics.impact(.light)
+                open(book.id)
+            }
+        ))
         #endif
     }
 
-    /// A notification was tapped: the books just downloaded, or the books
-    /// just added.
-    private func showLibrary(_ place: String?) {
+    private func showLibrary(_ place: ChickenNotifications.Place) {
         switch place {
-        case "downloadedBooks":
+        case .downloadedBooks:
             libraryFilter = .onDevice
-        case "recentlyAdded":
-            libraryFilter = .all
-            librarySort = .added
-        default:
-            return
+            libraryCollection = ""
+            router.presentedReader = nil
+            router.dismissDetails()
+            tab = .library
+        case .settings:
+            router.presentSheet(.settings)
         }
-        libraryCollection = ""
-        router.presentedBookID = nil
-        router.detailBookID = nil
-        tab = .library
     }
-
-    // MARK: Opening books
 
     private func select(_ id: UUID, in sequence: [UUID], from source: CoverSource?) {
         router.showDetails(id, in: sequence, from: source)
     }
 
-    private func open(_ id: UUID, from source: CoverSource? = nil) {
+    private func open(_ id: UUID, from source: CoverSource? = nil, jumpTo target: JumpTarget? = nil) {
+        if let target {
+            router.pendingJumps[id] = target
+        }
         #if os(macOS)
         openWindow(id: SceneID.reader, value: id)
         #else
-        // From the details sheet the cover is going away with the sheet, so
-        // the reader uses the standard presentation instead of a zoom.
-        router.presentedSource = router.detailBookID == nil ? source : nil
-        router.detailBookID = nil
-        router.presentedBookID = id
+        let resolvedSource = router.presentedDetails == nil ? source : nil
+        router.dismissDetails()
+        router.presentedReader = ReaderPresentation(id: id, source: resolvedSource)
         #endif
     }
 
-    /// On iPhone and iPad the detail cards present full screen over the
-    /// dimmed library. (The Mac draws its own card in the window instead.)
-    private var showsDetailsFullScreen: Bool { true }
-
-    private func detailBook(presentedFullScreen: Bool) -> Binding<IdentifiedBook?> {
-        Binding(
-            get: {
-                guard !Platform.isMac, presentedFullScreen == showsDetailsFullScreen else { return nil }
-                return router.detailBookID.map(IdentifiedBook.init)
-            },
-            set: { if presentedFullScreen == showsDetailsFullScreen { router.detailBookID = $0?.id } }
-        )
+    private func openFromDossier(_ id: UUID, from source: CoverSource? = nil, jumpTo target: JumpTarget? = nil) {
+        if let target {
+            router.pendingJumps[id] = target
+        }
+        #if os(macOS)
+        router.dismissDetails()
+        openWindow(id: SceneID.reader, value: id)
+        #else
+        pendingReaderFromDossier = ReaderPresentation(id: id, source: nil)
+        router.dismissDetails()
+        #endif
     }
 
-    private func detailPager(start: UUID) -> some View {
-        // Cards on iPhone and iPad: the books either side peek in, so it's
-        // clear there's more to swipe to. The Mac's sheet keeps pages.
-        BookDetailPager(ids: router.detailSequence, start: start, style: Platform.isMac ? .pages : .cards)
-            .environment(\.openBook, OpenBookAction(handler: open))
-            // Presentations don't inherit environment set on the presenter.
-            .environment(\.coverNamespace, coverNamespace)
-            .readingTheme(library.preferences.theme)
-            .collectionPicker()
-            .zoomTransition(from: router.detailSource, in: coverNamespace)
+    private func flushPendingReader() {
+        #if os(iOS)
+        guard let next = pendingReaderFromDossier else { return }
+        pendingReaderFromDossier = nil
+        router.presentedReader = next
+        #endif
     }
 
-    #if !os(macOS)
-    private var presentedBook: Binding<IdentifiedBook?> {
-        Binding(
-            get: { router.presentedBookID.map(IdentifiedBook.init) },
-            set: { router.presentedBookID = $0?.id }
-        )
-    }
-    #endif
-
-    // MARK: Importing
-
-    /// Folders can be picked on the Mac too, so the Downloads folder isn't
-    /// greyed out; they go to Find Books rather than being imported whole.
     private var importerContentTypes: [UTType] {
         #if os(macOS)
         BookFormat.importableContentTypes + [.folder]
@@ -293,14 +261,12 @@ struct LibraryRootView: View {
         #endif
     }
 
-    /// Imports files straight away. Folders (from the picker or a drop) are
-    /// shared with Find Books instead, so their contents are reviewed first.
     private func receive(_ urls: [URL]) {
         let folders = urls.filter(\.isFolder)
         library.importFiles(urls.filter { !$0.isFolder })
         guard !folders.isEmpty else { return }
         library.addFolders(folders)
-        router.showingDiscovery = true
+        router.presentSheet(.discovery)
     }
 
     private func handle(_ url: URL) {
@@ -317,12 +283,14 @@ struct LibraryRootView: View {
             if library.book(id: id) != nil { open(id) }
         case .continueReading:
             if let book = library.continueReadingBook() { open(book.id) }
+        case .highlight(let id):
+            guard let highlight = library.highlight(id: id), let book = highlight.book else { return }
+            open(book.id, jumpTo: JumpTarget(location: highlight.location, chapterIndex: highlight.chapterIndex))
         }
     }
 }
 
 private extension URL {
-    /// A plain folder, not a package such as an .rtfd bundle.
     var isFolder: Bool {
         let accessing = startAccessingSecurityScopedResource()
         defer { if accessing { stopAccessingSecurityScopedResource() } }
@@ -331,11 +299,6 @@ private extension URL {
     }
 }
 
-struct IdentifiedBook: Identifiable {
-    let id: UUID
-}
-
-/// Add books, theme, and settings: the same controls on every library page.
 struct LibraryToolbar: ToolbarContent {
     @Environment(LibraryStore.self) private var library
     @Environment(AppRouter.self) private var router
@@ -347,7 +310,7 @@ struct LibraryToolbar: ToolbarContent {
         ToolbarItemGroup(placement: Self.placement) {
             Menu {
                 Button("Import Files…", systemImage: "doc.badge.plus") { router.showingImporter = true }
-                Button("Find Books in Folders…", systemImage: "folder.badge.gearshape") { router.showingDiscovery = true }
+                Button("Find Books in Folders…", systemImage: "folder.badge.gearshape") { router.presentSheet(.discovery) }
             } label: {
                 Label("Add Books", systemImage: "plus")
             }
@@ -368,7 +331,7 @@ struct LibraryToolbar: ToolbarContent {
                 Label("Settings", systemImage: "gearshape")
             }
             #else
-            Button("Settings", systemImage: "gearshape") { router.showingSettings = true }
+            Button("Settings", systemImage: "gearshape") { router.presentSheet(.settings) }
             #endif
         }
     }
@@ -377,7 +340,6 @@ struct LibraryToolbar: ToolbarContent {
         Binding(get: { library.preferences.theme }, set: { library.preferences.theme = $0 })
     }
 
-    /// Trailing on every platform (`.primaryAction` is leading on macOS).
     static var placement: ToolbarItemPlacement {
         #if os(macOS)
         .automatic
@@ -387,7 +349,6 @@ struct LibraryToolbar: ToolbarContent {
     }
 }
 
-/// The house lockup above the sidebar.
 private struct SidebarHeader: View {
     var body: some View {
         BrandLockup(size: 17)
@@ -397,12 +358,9 @@ private struct SidebarHeader: View {
     }
 }
 
-/// Today's reading against the daily goal, as a ribbon meter at the foot
-/// of the sidebar.
 struct SidebarTodayMeter: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
-    /// Opens Your Reading.
     var open: () -> Void = {}
 
     private var goalSeconds: Int { library.preferences.dailyGoalMinutes * 60 }
@@ -424,7 +382,7 @@ struct SidebarTodayMeter: View {
                     .font(.chickenDisplay(15))
                     .foregroundStyle(palette.text)
                 Text("of \(library.preferences.dailyGoalMinutes) min")
-                    .font(.chickenSerif(12, italic: true))
+                    .font(.chickenUI(12))
                     .foregroundStyle(palette.muted)
             }
             .lineLimit(1)
@@ -440,3 +398,93 @@ struct SidebarTodayMeter: View {
         .accessibilityValue("\(library.readingSecondsToday / 60) of \(library.preferences.dailyGoalMinutes) minutes")
     }
 }
+
+#if !os(macOS)
+private struct NowReadingAccessoryModifier: ViewModifier {
+    let book: Book?
+    let isEnabled: Bool
+    let onOpen: (Book) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 26.1, *) {
+            content.tabViewBottomAccessory(isEnabled: isEnabled) {
+                accessory
+            }
+        } else if isEnabled {
+            content.tabViewBottomAccessory {
+                accessory
+            }
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var accessory: some View {
+        if let book {
+            NowReadingTabBarAccessory(book: book) {
+                onOpen(book)
+            }
+        }
+    }
+}
+
+private struct NowReadingTabBarAccessory: View {
+    @Environment(\.palette) private var palette
+    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    let book: Book
+    let onOpen: () -> Void
+
+    private var isInline: Bool { placement == .inline }
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: isInline ? 8 : 11) {
+                BookCover(book: book, style: .mini)
+                    .frame(width: isInline ? 18 : 23, height: isInline ? 27 : 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .shadow(color: palette.shadow, radius: 1.5, x: 0, y: 1)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(book.displayTitle)
+                        .font(.chickenUI(isInline ? 13 : 14, weight: .semibold))
+                        .foregroundStyle(palette.text)
+                        .lineLimit(1)
+                    if !isInline {
+                        HStack(spacing: 5) {
+                            Text("\(Int((book.progress * 100).rounded()))%")
+                                .font(.chickenMono(11.5, weight: .semibold))
+                                .foregroundStyle(palette.ribbon)
+                            if let chapter = book.lastChapterTitle, !chapter.isEmpty, chapter != book.title {
+                                Text("·")
+                                    .foregroundStyle(palette.faint)
+                                Text(chapter)
+                                    .font(.chickenUI(11.5))
+                                    .foregroundStyle(palette.muted)
+                                    .lineLimit(1)
+                            } else if let author = book.author, !author.isEmpty {
+                                Text("·")
+                                    .foregroundStyle(palette.faint)
+                                Text(author)
+                                    .font(.chickenSerif(12, italic: true))
+                                    .foregroundStyle(palette.muted)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "arrow.right")
+                    .font(.system(size: isInline ? 12 : 13, weight: .semibold))
+                    .foregroundStyle(palette.muted)
+            }
+            .padding(.horizontal, isInline ? 12 : 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Continue reading \(book.displayTitle), \(Int((book.progress * 100).rounded())) percent")
+    }
+}
+#endif

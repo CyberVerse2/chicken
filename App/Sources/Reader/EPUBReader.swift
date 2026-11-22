@@ -1,4 +1,5 @@
 import ChickenKit
+import os
 import SwiftUI
 import WebKit
 
@@ -51,10 +52,6 @@ struct EPUBReader: PlatformViewRepresentable {
             coordinator.style = style
             coordinator.applyStyle(preservePosition: true)
         }
-        let index = model.chapterIndex
-        if !model.consumeEngineChapterChange(index) {
-            coordinator.goToChapter(index)
-        }
     }
 
     static func dismantleView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -67,17 +64,30 @@ struct EPUBReader: PlatformViewRepresentable {
         return try? String(contentsOf: url, encoding: .utf8)
     }()
 
-    @MainActor
     final class Coordinator: NSObject, ReaderEngine, WKNavigationDelegate, WKScriptMessageHandler {
+        private enum Lifecycle {
+            case idle
+            case loading(Task<Void, Never>)
+            case loaded(EPUBPublication, isReady: Bool)
+            case tornDown
+        }
+
         let model: ReaderModel
         weak var webView: WKWebView?
         var style: EPUBStyle?
         var onTapCenter: () -> Void = {}
-        private var publication: EPUBPublication?
-        private var isReady = false
-        private var displayedChapter: Int?
-        private var loadTask: Task<Void, Never>?
-        private var tornDown = false
+        private var lifecycle: Lifecycle = .idle
+        private var restoreTask: Task<Void, Never>?
+
+        private var publication: EPUBPublication? {
+            if case .loaded(let publication, _) = lifecycle { return publication }
+            return nil
+        }
+
+        private var isReady: Bool {
+            if case .loaded(_, let ready) = lifecycle { return ready }
+            return false
+        }
 
         init(model: ReaderModel) {
             self.model = model
@@ -86,32 +96,38 @@ struct EPUBReader: PlatformViewRepresentable {
         }
 
         func load(_ url: URL, cacheDirectory: URL) {
-            loadTask = Task { [weak self] in
-                let result = await Task.detached(priority: .userInitiated) {
-                    Result { try EPUBPublication.prepare(bookAt: url, cacheDirectory: cacheDirectory) }
-                }.value
-                guard let self, !self.tornDown else { return }
+            let task = Task { [weak self] in
+                let result = await Self.preparePublication(url: url, cacheDirectory: cacheDirectory)
+                guard let self, !Task.isCancelled else { return }
+                if case .tornDown = self.lifecycle { return }
                 switch result {
                 case .success(let publication):
-                    self.publication = publication
-                    self.model.error = nil
+                    self.lifecycle = .loaded(publication, isReady: false)
                     self.model.chapters = publication.spine.enumerated().map { index, item in
                         ReaderChapter(id: index, title: item.title, level: item.tocLevel)
                     }
                     self.webView?.loadFileURL(publication.documentURL, allowingReadAccessTo: publication.rootURL)
-                case .failure:
-                    self.model.chapters = []
-                    self.model.resetPosition()
-                    self.model.error = FileManager.default.fileExists(atPath: url.path)
-                        ? "Chicken could not open this file as an EPUB. It may be damaged, incomplete, DRM-protected, or not actually an EPUB."
-                        : "This book's file is missing from Chicken's library folder."
+                case .failure(let error):
+                    ChickenLog.epub.error("Failed to open EPUB: \(error.localizedDescription, privacy: .public)")
+                    self.model.engineDidFail(
+                        fileURL: url,
+                        detail: "Chicken could not open this file as an EPUB. It may be damaged, incomplete, DRM-protected, or not actually an EPUB."
+                    )
                 }
             }
+            lifecycle = .loading(task)
+        }
+
+        @concurrent
+        private static func preparePublication(url: URL, cacheDirectory: URL) async -> Result<EPUBPublication, any Error> {
+            Result { try EPUBPublication.prepare(bookAt: url, cacheDirectory: cacheDirectory) }
         }
 
         func tearDown() {
-            tornDown = true
-            loadTask?.cancel()
+            if case .loading(let task) = lifecycle { task.cancel() }
+            lifecycle = .tornDown
+            restoreTask?.cancel()
+            restoreTask = nil
             webView?.stopLoading()
             webView?.navigationDelegate = nil
             webView?.configuration.userContentController.removeScriptMessageHandler(forName: "chicken")
@@ -122,6 +138,7 @@ struct EPUBReader: PlatformViewRepresentable {
         func applyStyle(preservePosition: Bool) {
             guard isReady, let style else { return }
             let config: [String: Any] = [
+                "mode": style.mode.rawValue,
                 "horizontal": style.mode.isHorizontal,
                 "spread": style.mode == .spread,
                 "background": ReaderPalette.css(style.palette.backgroundHex),
@@ -131,12 +148,11 @@ struct EPUBReader: PlatformViewRepresentable {
             ]
             call("chicken.configure", config)
             #if os(iOS)
-            // Pages slide under your finger a screen at a time, as in Books;
-            // the columns are exactly one screen (or one spread) wide.
             if let scrollView = webView?.scrollView {
                 scrollView.isScrollEnabled = true
                 scrollView.isPagingEnabled = style.mode.isHorizontal
-                scrollView.bounces = !style.mode.isHorizontal
+                scrollView.bounces = true
+                scrollView.alwaysBounceHorizontal = style.mode.isHorizontal
                 scrollView.showsHorizontalScrollIndicator = false
             }
             #endif
@@ -162,7 +178,10 @@ struct EPUBReader: PlatformViewRepresentable {
         private func handle(_ message: MessagePayload) {
             switch message.type {
             case "ready":
-                isReady = true
+                if case .loaded(let pub, _) = lifecycle {
+                    lifecycle = .loaded(pub, isReady: true)
+                }
+                model.engineDidBecomeReady()
                 applyStyle(preservePosition: false)
                 refreshHighlights()
                 restoreInitialLocation()
@@ -177,6 +196,20 @@ struct EPUBReader: PlatformViewRepresentable {
                 }
             case "tap":
                 onTapCenter()
+            case "footnote":
+                if let text = message.text, !text.isEmpty {
+                    model.activeFootnote = ReaderFootnote(
+                        label: message.label ?? "Note",
+                        text: text,
+                        chapterIndex: message.chapter,
+                        fragment: message.fragment
+                    )
+                    Haptics.impact(.light)
+                }
+            case "image":
+                if let src = message.src, let url = URL(string: src) {
+                    model.activeImage = ReaderImagePreview(url: url, alt: message.alt ?? "")
+                }
             default:
                 break
             }
@@ -184,7 +217,6 @@ struct EPUBReader: PlatformViewRepresentable {
 
         private func handleProgress(_ message: MessagePayload) {
             guard let publication, let index = message.index, publication.spine.indices.contains(index) else { return }
-            displayedChapter = index
             model.engineDidChangeChapter(index)
 
             let displayPage = message.page.map { $0 + 1 }
@@ -207,34 +239,37 @@ struct EPUBReader: PlatformViewRepresentable {
 
         private func restoreInitialLocation() {
             guard let publication else { return }
-            if let location = EPUBLocation.decode(model.book.lastLocation),
+            if let location = EPUBLocation.decode(model.preferredStartLocation),
                publication.spine.indices.contains(location.spineIndex),
                publication.spine[location.spineIndex].locationHref == location.href {
-                restore(location)
+                scheduleRestore(location, settlePasses: 2)
             } else {
                 let start = EPUBLocation(href: "", spineIndex: model.chapterIndex, progression: 0, globalProgression: 0)
-                restore(start, attempts: 1)
+                scheduleRestore(start, settlePasses: 0)
             }
         }
 
-        /// Fonts and images can still be settling right after load, which
-        /// shifts pagination; repeat the restore a few times as layout firms up.
-        private func restore(_ location: EPUBLocation, attempts: Int = 4) {
+        private func scheduleRestore(_ location: EPUBLocation, settlePasses: Int, force: Bool = false) {
+            restoreTask?.cancel()
             let payload: [String: Any] = [
                 "spineIndex": location.spineIndex,
                 "progression": location.progression,
                 "pageNumber": location.pageNumber as Any? ?? NSNull(),
             ]
-            call("chicken.restore", payload)
-            guard attempts > 1 else { return }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
-                self?.restore(location, attempts: attempts - 1)
+            call("chicken.restore", payload, force)
+            guard settlePasses > 0 else { return }
+            restoreTask = Task { [weak self] in
+                for _ in 0..<settlePasses {
+                    try? await Task.sleep(for: .milliseconds(180))
+                    guard !Task.isCancelled, let self, self.isReady else { return }
+                    self.call("chicken.restore", payload, false)
+                }
             }
         }
 
         private func focusWebView() {
             #if os(macOS)
-            DispatchQueue.main.async { [weak self] in
+            Task { @MainActor [weak self] in
                 guard let webView = self?.webView, let window = webView.window, window.firstResponder !== webView else { return }
                 window.makeFirstResponder(webView)
             }
@@ -244,26 +279,23 @@ struct EPUBReader: PlatformViewRepresentable {
         // MARK: ReaderEngine
 
         func goToChapter(_ index: Int) {
-            guard isReady, displayedChapter != index else { return }
-            displayedChapter = index
+            guard isReady else { return }
+            restoreTask?.cancel()
             call("chicken.scrollToSection", index, 0)
         }
 
         func seek(to progress: Double) {
+            restoreTask?.cancel()
             call("chicken.scrollToProgress", progress)
         }
 
         func jump(to location: String?, chapterIndex: Int) {
+            restoreTask?.cancel()
             if let location = EPUBLocation.decode(location) {
-                restore(location, attempts: 1)
+                scheduleRestore(location, settlePasses: 0, force: true)
             } else {
-                displayedChapter = nil
                 goToChapter(chapterIndex)
             }
-        }
-
-        func turnPage(_ direction: Int) {
-            call("chicken.turnPage", direction)
         }
 
         func search(_ query: String, backwards: Bool) {
@@ -318,7 +350,6 @@ struct EPUBReader: PlatformViewRepresentable {
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
             guard let url = navigationAction.request.url else { return .cancel }
             if url.isFileURL { return .allow }
-            // External links open in the browser, never inside the reader.
             if navigationAction.navigationType == .linkActivated {
                 #if os(macOS)
                 NSWorkspace.shared.open(url)
@@ -331,11 +362,15 @@ struct EPUBReader: PlatformViewRepresentable {
     }
 }
 
-/// Values from a script message, parsed once so they can cross to the main actor.
 nonisolated private struct MessagePayload: Sendable {
     let type: String
     let index: Int?
     let text: String?
+    let label: String?
+    let fragment: String?
+    let chapter: Int?
+    let src: String?
+    let alt: String?
     let progression: Double?
     let sectionProgression: Double?
     let page: Int?
@@ -349,6 +384,11 @@ nonisolated private struct MessagePayload: Sendable {
         type = body["type"] as? String ?? ""
         index = int("index")
         text = body["text"] as? String
+        label = body["label"] as? String
+        fragment = body["fragment"] as? String
+        chapter = int("chapter")
+        src = body["src"] as? String
+        alt = body["alt"] as? String
         progression = double("progression")
         sectionProgression = double("sectionProgression")
         page = int("page")
@@ -358,8 +398,6 @@ nonisolated private struct MessagePayload: Sendable {
     }
 }
 
-/// WKUserContentController retains its handlers; this breaks the cycle
-/// between the web view and the coordinator.
 private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
     weak var target: (any WKScriptMessageHandler)?
 

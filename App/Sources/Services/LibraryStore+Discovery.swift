@@ -25,9 +25,13 @@ extension LibraryStore {
     }
 
     func removeFolder(_ folder: WatchedFolder) {
+        scanTask?.cancel()
+        scanTask = nil
+        if scanState.isScanning { scanState = .idle }
         folders.removeAll { $0.id == folder.id }
         WatchedFolder.save(folders, to: paths)
-        discoveredBooks.removeAll { $0.url.path.hasPrefix(folder.path) }
+        let prefix = folder.path.hasSuffix("/") ? folder.path : folder.path + "/"
+        discoveredBooks.removeAll { $0.url.path == folder.path || $0.url.path.hasPrefix(prefix) }
     }
 
     func scanFolders() {
@@ -39,45 +43,62 @@ extension LibraryStore {
         let folders = folders
         let imported = Set(allBooks().map(\.originalFileName))
 
-        scanTask = Task.detached(priority: .utility) { [weak self] in
-            let roots = folders.compactMap { $0.startAccessing() }
-            defer { roots.forEach { $0.stopAccessingSecurityScopedResource() } }
-
-            let found = BookDiscovery.scan(roots: roots, excludingFileNames: imported) { progress in
-                Task { @MainActor in
-                    guard let self, self.scanState.isScanning else { return }
-                    self.scanState = .scanning(checked: progress.checked, found: progress.found, folder: progress.currentFolder)
-                }
+        let reportProgress: @Sendable (BookDiscovery.Progress) -> Void = { [weak self] progress in
+            Task { @MainActor [weak self] in
+                guard let self, case .scanning(let currentChecked, _, _) = self.scanState,
+                      progress.checked >= currentChecked
+                else { return }
+                self.scanState = .scanning(checked: progress.checked, found: progress.found, folder: progress.currentFolder)
             }
-            guard !Task.isCancelled else { return }
-            await MainActor.run {
-                self?.discoveredBooks = found
-                self?.scanState = .finished(found: found.count)
-            }
+        }
+        scanTask = Task { [weak self] in
+            let found = await Self.scanInBackground(folders: folders, imported: imported, onProgress: reportProgress)
+            guard let self, !Task.isCancelled else { return }
+            self.discoveredBooks = found
 
-            // Reading PDF/EPUB metadata sharpens the "is this a book?" score.
-            // Do it after listing so results appear immediately.
             let enrichable = found.filter { $0.format == .pdf || $0.format == .epub }
-            let enriched = await withTaskGroup(of: DiscoveredBook.self) { group in
-                var results: [DiscoveredBook] = []
-                var iterator = enrichable.makeIterator()
-                for _ in 0..<4 {
-                    guard let next = iterator.next() else { break }
-                    group.addTask { next.enriched() }
-                }
-                for await result in group {
-                    if Task.isCancelled { break }
-                    results.append(result)
-                    if let next = iterator.next() { group.addTask { next.enriched() } }
-                }
-                return results
+            if enrichable.isEmpty {
+                self.scanState = .finished(found: found.count)
+                return
             }
+
+            self.scanState = .enriching(found: found.count)
+            let enriched = await Self.enrichInBackground(enrichable, folders: folders)
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                guard let self else { return }
-                let byID = Dictionary(enriched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-                self.discoveredBooks = BookDiscovery.sort(self.discoveredBooks.map { byID[$0.id] ?? $0 })
+            let byID = Dictionary(enriched.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            self.discoveredBooks = BookDiscovery.sort(self.discoveredBooks.map { byID[$0.id] ?? $0 })
+            self.scanState = .finished(found: self.discoveredBooks.count)
+        }
+    }
+
+    @concurrent
+    private static func scanInBackground(
+        folders: [WatchedFolder],
+        imported: Set<String>,
+        onProgress: @escaping @Sendable (BookDiscovery.Progress) -> Void
+    ) async -> [DiscoveredBook] {
+        let roots = folders.compactMap { $0.startAccessing() }
+        defer { roots.forEach { $0.stopAccessingSecurityScopedResource() } }
+        return BookDiscovery.scan(roots: roots, excludingFileNames: imported, progress: onProgress)
+    }
+
+    @concurrent
+    private static func enrichInBackground(_ books: [DiscoveredBook], folders: [WatchedFolder]) async -> [DiscoveredBook] {
+        let roots = folders.compactMap { $0.startAccessing() }
+        defer { roots.forEach { $0.stopAccessingSecurityScopedResource() } }
+        return await withTaskGroup(of: DiscoveredBook.self) { group in
+            var results: [DiscoveredBook] = []
+            var iterator = books.makeIterator()
+            for _ in 0..<4 {
+                guard let next = iterator.next() else { break }
+                group.addTask { next.enriched() }
             }
+            for await result in group {
+                if Task.isCancelled { break }
+                results.append(result)
+                if let next = iterator.next() { group.addTask { next.enriched() } }
+            }
+            return results
         }
     }
 }

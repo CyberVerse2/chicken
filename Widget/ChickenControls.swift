@@ -20,6 +20,7 @@ struct ContinueReadingControl: ControlWidget {
 }
 
 /// Chicken's egg, for small places in the extension.
+#if os(iOS)
 struct WidgetEgg: Shape {
     nonisolated func path(in rect: CGRect) -> Path {
         var path = Path()
@@ -35,3 +36,4 @@ struct WidgetEgg: Shape {
         return path
     }
 }
+#endif

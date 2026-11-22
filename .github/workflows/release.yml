@@ -43,7 +43,7 @@ jobs:
           PROJECT_VERSION="$(awk -F '= ' '/MARKETING_VERSION = / { gsub(/;/, "", $2); print $2; exit }' Chicken.xcodeproj/project.pbxproj)"
           NORMALIZED_PROJECT_VERSION="$PROJECT_VERSION"
 
-          if [[ "$NORMALIZED_PROJECT_VERSION" =~ ^[0-9]+\\.[0-9]+$ ]]; then
+          if [[ "$NORMALIZED_PROJECT_VERSION" =~ ^[0-9]+\.[0-9]+$ ]]; then
             NORMALIZED_PROJECT_VERSION="${NORMALIZED_PROJECT_VERSION}.0"
           fi
 

@@ -114,12 +114,24 @@ public enum BookDiscovery {
         }
     }
 
+    private static let positiveSignals: Set<String> = [
+        "book", "books", "ebook", "ebooks", "library", "novel", "novels", "edition", "press", "volume",
+    ]
+
+    private static let negativeSignals: Set<String> = [
+        "invoice", "receipt", "ticket", "boarding", "statement", "contract",
+        "form", "slides", "deck", "pitch", "overview", "resume", "cv",
+        "certificate", "assignment", "lecture", "report", "bank", "travel",
+    ]
+
     /// Heuristic 0–100 "is this a book?" score. EPUBs are almost always books;
     /// PDFs need supporting signals (page count, metadata, size, path).
     public static func score(url: URL, format: BookFormat, fileSize: Int64, metadata: DocumentMetadata) -> Int {
         var score = 0
         let name = url.deletingPathExtension().lastPathComponent.lowercased()
-        let path = url.path.lowercased()
+        let pathComponents = url.pathComponents.map { $0.lowercased() }
+        let nameTokens = tokens(in: name)
+        let pathTokens = Set(pathComponents.flatMap(tokens(in:)))
 
         switch format {
         case .epub: score += 95
@@ -144,18 +156,16 @@ public enum BookDiscovery {
         else if fileSize > 800_000 { score += 8 }
         if fileSize < 120_000 { score -= 20 }
 
-        let positiveSignals = ["book", "ebook", "library", "novel", "edition", "press", "volume"]
-        if positiveSignals.contains(where: path.contains) { score += 18 }
+        if !positiveSignals.isDisjoint(with: pathTokens) { score += 18 }
 
-        let negativeSignals = [
-            "invoice", "receipt", "ticket", "boarding", "statement", "contract",
-            "form", "slides", "deck", "pitch", "overview", "resume", "cv",
-            "certificate", "assignment", "lecture", "report", "bank", "travel",
-        ]
-        if negativeSignals.contains(where: { name.contains($0) || path.contains("/\($0)") }) {
+        if !negativeSignals.isDisjoint(with: nameTokens) || !negativeSignals.isDisjoint(with: pathTokens) {
             score -= 45
         }
 
         return min(max(score, 0), 100)
+    }
+
+    private static func tokens(in text: String) -> Set<String> {
+        Set(text.split { !$0.isLetter && !$0.isNumber }.map(String.init))
     }
 }

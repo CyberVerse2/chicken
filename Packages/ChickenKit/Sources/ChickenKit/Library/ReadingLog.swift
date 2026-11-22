@@ -7,12 +7,6 @@ public enum ReadingLog {
         return String(format: "%04d-%02d-%02d", components.year ?? 0, components.month ?? 0, components.day ?? 0)
     }
 
-    public static func date(forDayKey key: String, calendar: Calendar = .current) -> Date? {
-        let parts = key.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
-        return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
-    }
-
     /// A year of reading from `(dayKey, seconds)` rows, which may hold several
     /// rows per day (one per device). Rows from other years are ignored.
     public struct Year: Equatable, Sendable {
@@ -68,14 +62,33 @@ public enum ReadingLog {
 /// Reading-time estimate used by the reader and library ("12 min left").
 public enum ReadingEstimate {
     public static let minutesPerPage = 1.25
+    public static let paceRange: ClosedRange<Double> = 0.6...4.5
 
-    public static func duration(forPages pages: Int) -> String {
+    public static func duration(forPages pages: Int, minutesPerPage: Double = Self.minutesPerPage) -> String {
         if pages <= 0 { return "under 1 min" }
-        let minutes = max(1, Int((Double(pages) * minutesPerPage).rounded(.up)))
+        let clampedPace = min(max(minutesPerPage, paceRange.lowerBound), paceRange.upperBound)
+        let minutes = max(1, Int((Double(pages) * clampedPace).rounded(.up)))
         if minutes < 60 { return minutes == 1 ? "1 min" : "\(minutes) min" }
         let hours = minutes / 60
         let remainder = minutes % 60
         if remainder == 0 { return hours == 1 ? "1 hr" : "\(hours) hr" }
         return "\(hours)h \(remainder)m"
+    }
+
+    public static func calibratedMinutesPerPage(
+        previous: Double,
+        observedPages: Double,
+        elapsedSeconds: Double
+    ) -> Double {
+        guard observedPages >= 1.5, elapsedSeconds >= 30, elapsedSeconds <= 1800 else {
+            return min(max(previous, paceRange.lowerBound), paceRange.upperBound)
+        }
+        let sample = (elapsedSeconds / 60.0) / observedPages
+        guard sample >= 0.35, sample <= 8.0 else {
+            return min(max(previous, paceRange.lowerBound), paceRange.upperBound)
+        }
+        let clampedSample = min(max(sample, paceRange.lowerBound), paceRange.upperBound)
+        let blended = previous * 0.78 + clampedSample * 0.22
+        return min(max(blended, paceRange.lowerBound), paceRange.upperBound)
     }
 }

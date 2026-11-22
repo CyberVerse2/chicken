@@ -2,6 +2,7 @@ import SwiftUI
 
 #if os(macOS)
 import AppKit
+import ObjectiveC
 
 typealias PlatformView = NSView
 typealias PlatformColor = NSColor
@@ -73,4 +74,69 @@ enum Platform {
         false
         #endif
     }
+
+    static var deviceName: String {
+        #if os(macOS)
+        "Mac"
+        #else
+        UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        #endif
+    }
 }
+
+enum Haptics {
+    enum Weight {
+        case light
+        case medium
+        case rigid
+    }
+
+    static func selection() {
+        #if os(macOS)
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+        #else
+        let generator = UISelectionFeedbackGenerator()
+        generator.selectionChanged()
+        #endif
+    }
+
+    static func impact(_ weight: Weight = .light) {
+        #if os(macOS)
+        let pattern: NSHapticFeedbackManager.FeedbackPattern = weight == .light ? .alignment : .levelChange
+        NSHapticFeedbackManager.defaultPerformer.perform(pattern, performanceTime: .now)
+        #else
+        let style: UIImpactFeedbackGenerator.FeedbackStyle = switch weight {
+        case .light: .light
+        case .medium: .medium
+        case .rigid: .rigid
+        }
+        let generator = UIImpactFeedbackGenerator(style: style)
+        generator.impactOccurred()
+        #endif
+    }
+
+    static func success() {
+        #if os(macOS)
+        NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
+        #else
+        let generator = UINotificationFeedbackGenerator()
+        generator.notificationOccurred(.success)
+        #endif
+    }
+}
+
+#if os(macOS)
+enum OverlayScrollbars {
+    static func install() {
+        guard
+            let original = class_getClassMethod(NSScroller.self, #selector(getter: NSScroller.preferredScrollerStyle)),
+            let replacement = class_getClassMethod(NSScroller.self, #selector(NSScroller.chicken_preferredScrollerStyle))
+        else { return }
+        method_exchangeImplementations(original, replacement)
+    }
+}
+
+extension NSScroller {
+    @objc dynamic class func chicken_preferredScrollerStyle() -> NSScroller.Style { .overlay }
+}
+#endif

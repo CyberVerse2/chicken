@@ -1,322 +1,132 @@
 import ChickenKit
+import SwiftData
 import SwiftUI
 #if os(macOS)
 import AppKit
 #endif
 
-/// Details for a run of books, one per page: swipe sideways to the next
-/// book on the shelf, as in a printed catalogue.
-struct BookDetailPager: View {
-    /// `.pages`: one book per screen (the Mac's sheet). `.cards`: a centered
-    /// card with the books on either side peeking in (iPhone and iPad).
-    enum Style { case pages, cards }
-
-    @Environment(\.palette) private var palette
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.coverNamespace) private var coverNamespace
-    @Environment(\.horizontalSizeClass) private var sizeClass
-    let ids: [UUID]
-    var style: Style = .pages
-    @State private var current: UUID?
-    /// The book being read from this card, and the cover it zoomed from.
-    @State private var reading: ReaderRequest?
-
-    private struct ReaderRequest: Identifiable {
-        let id: UUID
-        let source: CoverSource?
-    }
-
-    init(ids: [UUID], start: UUID, style: Style = .pages) {
-        self.ids = ids.contains(start) ? ids : [start]
-        self.style = style
-        _current = State(initialValue: start)
-    }
-
-    var body: some View {
-        Group {
-            switch style {
-            case .pages:
-                NavigationStack {
-                    pages
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Close", systemImage: "xmark") { dismiss() }
-                            }
-                        }
-                }
-            case .cards:
-                // No bar of its own: each card is the surface, with its
-                // close button in the corner.
-                cards
-            }
-        }
-        .coverCollection("detail", books: ids)
-        #if os(macOS)
-        .frame(minWidth: 560, idealWidth: 640, minHeight: 600, idealHeight: 720)
-        #else
-        .presentationDetents([.large])
-        .presentationBackground(style == .cards ? Color.clear : palette.background)
-        .environment(\.openBook, OpenBookAction { id, source in
-            reading = ReaderRequest(id: id, source: source)
-        })
-        .fullScreenCover(item: $reading) { request in
-            if let coverNamespace {
-                ReaderLoader(bookID: request.id)
-                    .zoomTransition(from: request.source, in: coverNamespace)
-            } else {
-                ReaderLoader(bookID: request.id)
-            }
-        }
-        #endif
-    }
-}
-
-extension BookDetailPager {
-    private var pages: some View {
-        ScrollView(.horizontal) {
-            LazyHStack(spacing: 0) {
-                ForEach(ids, id: \.self) { id in
-                    BookDetailView(bookID: id)
-                        .containerRelativeFrame(.horizontal)
-                        // Neighbors sit slightly back, so a swipe reads as
-                        // sliding one book off the pile and the next on.
-                        .scrollTransition(.interactive, axis: .horizontal) { page, phase in
-                            page
-                                .scaleEffect(1 - abs(phase.value) * 0.07)
-                                .opacity(1 - abs(phase.value) * 0.35)
-                        }
-                }
-            }
-            .scrollTargetLayout()
-        }
-        .scrollTargetBehavior(.paging)
-        .scrollPosition(id: $current)
-        .scrollIndicators(.hidden)
-        .background(palette.background.ignoresSafeArea())
-    }
-
-    /// Full-height cards, each filled with its book's colour, the current
-    /// one centred and its neighbours showing as strips at the edges.
-    private var cards: some View {
-        GeometryReader { geometry in
-            let compact = sizeClass == .compact
-            let gap: CGFloat = compact ? 8 : 16
-            let peek: CGFloat = compact ? 16 : 0
-            let cardWidth = compact ? geometry.size.width - 2 * (gap + peek) : min(geometry.size.width * 0.66, 620)
-            let radius: CGFloat = 34
-            ScrollView(.horizontal) {
-                LazyHStack(spacing: gap) {
-                    ForEach(ids, id: \.self) { id in
-                        BookDetailView(bookID: id, inCard: true)
-                            .overlay(alignment: .topLeading) {
-                                Button("Close", systemImage: "xmark") { dismiss() }
-                                    .labelStyle(.iconOnly)
-                                    .font(.system(size: 16, weight: .semibold))
-                                    .foregroundStyle(palette.text)
-                                    .buttonStyle(.glass)
-                                    .buttonBorderShape(.circle)
-                                    .controlSize(.large)
-                                    .padding(16)
-                            }
-                            // Rounded at the top only: cards run off the bottom.
-                            .clipShape(UnevenRoundedRectangle(
-                                topLeadingRadius: radius, bottomLeadingRadius: 0,
-                                bottomTrailingRadius: 0, topTrailingRadius: radius,
-                                style: .continuous
-                            ))
-                            .shadow(color: .black.opacity(0.25), radius: 20, y: 6)
-                            .frame(width: cardWidth)
-                            .padding(.top, 8)
-                    }
-                }
-                .scrollTargetLayout()
-            }
-            // A card centres when there are books on both sides; the first
-            // and last stay against the edges instead of leaving a gap.
-            .contentMargins(.horizontal, compact ? 12 : 24, for: .scrollContent)
-            .scrollTargetBehavior(CardSnapping(cardWidth: cardWidth, gap: gap, count: ids.count))
-            .scrollPosition(id: $current, anchor: .center)
-            .scrollIndicators(.hidden)
-            .scrollClipDisabled()
-            // Tapping a peeking neighbour slides it into the middle.
-            .simultaneousGesture(SpatialTapGesture().onEnded { tap in
-                tapNeighbour(at: tap.location.x, width: geometry.size.width, cardWidth: cardWidth, gap: gap, margin: compact ? 12 : 24)
-            })
-            // The cards run past the bottom of the screen.
-            .ignoresSafeArea(edges: .bottom)
-        }
-        // The library shows through behind the cards, dimmed.
-        .background(Color.black.opacity(0.4).ignoresSafeArea())
-    }
-}
-
-extension BookDetailPager {
-    /// Brings the previous or next book to the middle when the tap lands on
-    /// its card at the edge rather than on the card in the middle.
-    fileprivate func tapNeighbour(at x: CGFloat, width: CGFloat, cardWidth: CGFloat, gap: CGFloat, margin: CGFloat) {
-        guard let current, let index = ids.firstIndex(of: current) else { return }
-        let left: CGFloat
-        if index == 0 {
-            left = margin
-        } else if index == ids.count - 1 {
-            left = width - margin - cardWidth
-        } else {
-            left = (width - cardWidth) / 2
-        }
-        let target: Int
-        if x < left - gap / 2 {
-            target = index - 1
-        } else if x > left + cardWidth + gap / 2 {
-            target = index + 1
-        } else {
-            return
-        }
-        guard ids.indices.contains(target) else { return }
-        withAnimation(.smooth(duration: 0.4)) { self.current = ids[target] }
-    }
-}
-
-/// Snaps one card at a time: each card is centred in the view, clamped so
-/// the first and last sit at the edges, and a flick moves at most one card.
-private struct CardSnapping: ScrollTargetBehavior {
-    let cardWidth: CGFloat
-    let gap: CGFloat
-    let count: Int
-
-    // Offsets and sizes here exclude the content margins: offset 0 puts the
-    // first card at the leading margin, and `containerSize` is the width
-    // between the margins.
-    func updateTarget(_ target: inout ScrollTarget, context: TargetContext) {
-        let viewport = context.containerSize.width
-        let unit = cardWidth + gap
-        guard count > 0, unit > 0 else { return }
-
-        func index(atOffset offset: CGFloat) -> Int {
-            Int(((offset + viewport / 2 - cardWidth / 2) / unit).rounded())
-        }
-        let current = index(atOffset: context.originalTarget.rect.minX)
-        var next = index(atOffset: target.rect.minX)
-        next = min(max(next, current - 1), current + 1)
-        next = min(max(next, 0), count - 1)
-
-        let centered = CGFloat(next) * unit + cardWidth / 2 - viewport / 2
-        let maxOffset = max(0, context.contentSize.width - viewport)
-        target.rect.origin.x = min(max(0, centered), maxOffset)
-    }
-}
-
-/// Buttons on the Mac card's colour band: a white capsule for the main
-/// action, a translucent one beside it.
-private struct BandButtonStyle: ButtonStyle {
-    let prominent: Bool
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(prominent ? Color.black.opacity(0.85) : Color.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Capsule().fill(prominent ? Color.white.opacity(hovering ? 0.9 : 1) : Color.white.opacity(hovering ? 0.24 : 0.16)))
-            .opacity(configuration.isPressed ? 0.75 : 1)
-            .contentShape(Capsule())
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.15), value: hovering)
-    }
-}
-
-/// About a book: cover, description, where you are, and what's in it.
-/// One page of `BookDetailPager`, or a page of its own when a book is
-/// picked in the Mac sidebar.
-struct BookDetailView: View {
+struct BookDossierView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(AppRouter.self) private var router
     @Environment(\.palette) private var palette
+    @Environment(\.readingTheme) private var theme
     @Environment(\.openBook) private var openBook
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @Environment(\.coverContext) private var coverContext
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Query private var collections: [BookCollection]
+
     let bookID: UUID
     var isPage = false
-    /// On an iPhone or iPad card: room above the cover, inside the card's edge.
-    var inCard = false
-    /// The Mac's card: cover on the left, title and actions beside it.
-    var wide = false
+
+    @State private var coverHue: CoverHue?
     @State private var summaryExpanded = false
     @State private var confirmingRemoval = false
-    /// The Mac card's header colour, from the book's cover.
-    @State private var coverHue: CoverHue?
+    @State private var quoteCardRequest: QuoteCardRequest?
+    @State private var addingCollection = false
+    @State private var newCollectionName = ""
+    @State private var companionNote: String?
+    @State private var generatingCompanion = false
+    @State private var companionError: String?
 
-    var body: some View {
-        if isPage {
-            page
-                .pageTitle(library.book(id: bookID)?.title ?? "Book")
-                .toolbar { LibraryToolbar() }
-        } else {
-            page
-        }
+    private var book: Book? { library.book(id: bookID) }
+    private var isCompact: Bool { sizeClass == .compact }
+
+    private var sortedCollections: [BookCollection] {
+        collections.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    private var page: some View {
+    var body: some View {
         Group {
-            if let book = library.book(id: bookID) {
-                if isPage {
-                    content(book)
-                        .background(palette.background.ignoresSafeArea())
-                } else if wide {
-                    // The Mac card: colour band on top, plain surface below,
-                    // and the book's actions pinned in the top-right corner.
-                    content(book)
-                        .background(palette.surface)
-                        .overlay(alignment: .topTrailing) { moreMenu(book) }
-                } else {
-                    // A card takes its colour from the book's cover.
-                    content(book)
-                        .modifier(CoverTintModifier(book: book))
-                }
+            if let book {
+                dossier(for: book)
             } else {
                 ContentUnavailableView("Book Unavailable", systemImage: "book.closed")
                     .background(palette.background.ignoresSafeArea())
             }
         }
+        .sheet(item: $quoteCardRequest) { request in
+            QuoteCardSheet(request: request)
+                .readingTheme(library.preferences.theme)
+        }
+        #if os(macOS)
+        .frame(minWidth: isPage ? nil : 540, idealWidth: isPage ? nil : 620, minHeight: isPage ? nil : 600, idealHeight: isPage ? nil : 720)
+        #endif
     }
 
-    private func content(_ book: Book) -> some View {
+    private func dossier(for book: Book) -> some View {
         ScrollView {
-            if wide {
-                // The Mac card: a band of the cover's colour holding the
-                // cover and actions, then the rest on a plain surface.
-                VStack(spacing: 0) {
-                    wideHero(book)
-                        .padding(.horizontal, 64)
-                        .padding(.top, 72)
-                        .padding(.bottom, 40)
-                        .frame(maxWidth: .infinity)
-                        .background(coverHue?.band ?? palette.surfaceAlt)
-                        .animation(.easeInOut(duration: 0.3), value: coverHue)
-                    sections(book)
-                        .padding(.horizontal, 64)
-                        .padding(.top, 32)
-                        .padding(.bottom, 44)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(spacing: 0) {
+                atmosphericHero(for: book)
+                VStack(alignment: .leading, spacing: 26) {
+                    statStrip(for: book)
+                        .padding(.horizontal, gutter)
+                    collectionsStrip(for: book)
+                    if let summary = book.summary, !summary.isEmpty {
+                        summarySection(summary)
+                            .padding(.horizontal, isCompact ? 20 : 32)
+                    }
+                    if ReadingCompanion.isAvailable && (book.progress > 0.05 || (book.summary ?? "").isEmpty) {
+                        companionSection(for: book)
+                            .padding(.horizontal, isCompact ? 20 : 32)
+                    }
+                    if book.highlightCount > 0 {
+                        highlightsSection(for: book)
+                            .padding(.horizontal, isCompact ? 20 : 32)
+                    }
+                    detailsSection(for: book)
+                        .padding(.horizontal, isCompact ? 20 : 32)
                 }
-            } else {
-                VStack(spacing: 28) {
-                    hero(book)
-                    actions(book)
-                    sections(book)
-                }
-                .padding(.horizontal, sizeClass == .compact ? 20 : 36)
-                .padding(.bottom, 40)
-                .frame(maxWidth: 640)
+                .padding(.top, 24)
+                .padding(.bottom, 48)
+                .frame(maxWidth: 680, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
         }
-        .task(id: wide ? book.id : nil) {
-            guard wide else { return }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
+        .ignoresSafeArea(edges: isPage ? [] : .top)
+        .task(id: "\(book.id)-\(book.coverImageName ?? "")") {
             coverHue = await CoverTintModifier.hue(for: book, library: library)
+        }
+        .overlay(alignment: .top) {
+            if !isPage {
+                GlassEffectContainer(spacing: 12) {
+                    HStack {
+                        CircularGlassButton(
+                            title: "Close",
+                            systemImage: "xmark",
+                            diameter: 44,
+                            iconSize: 17,
+                            action: { dismiss() }
+                        )
+
+                        Spacer()
+
+                        moreMenu(for: book)
+                    }
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, isCompact ? 18 : 20)
+            }
+        }
+        .pageTitle(isPage ? book.displayTitle : "")
+        .toolbar {
+            if isPage { LibraryToolbar() }
+        }
+        .alert("New Collection", isPresented: $addingCollection) {
+            TextField("Collection name", text: $newCollectionName)
+            Button("Create") {
+                if library.createCollection(named: newCollectionName, with: [book]) != nil {
+                    Haptics.impact(.light)
+                }
+                newCollectionName = ""
+            }
+            Button("Cancel", role: .cancel) { newCollectionName = "" }
         }
         .confirmationDialog("Remove \u{201C}\(book.displayTitle)\u{201D}?", isPresented: $confirmingRemoval, titleVisibility: .visible) {
             Button("Remove", role: .destructive) {
-                if !wide { dismiss() }
+                if !isPage { dismiss() }
                 library.delete(book)
             }
         } message: {
@@ -324,173 +134,381 @@ struct BookDetailView: View {
         }
     }
 
-    /// Opens the book from this page. On iPhone and iPad the reader zooms
-    /// out of the cover above and the card waits underneath; on the Mac the
-    /// book gets its own window and the card stays put.
-    private func read(_ book: Book) {
-        openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id))
-    }
+    private func atmosphericHero(for book: Book) -> some View {
+        ZStack(alignment: .bottom) {
+            LinearGradient(
+                colors: [
+                    (coverHue?.wash(for: theme) ?? palette.surfaceAlt).opacity(palette.isDark ? 0.65 : 0.72),
+                    palette.background,
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .animation(reduceMotion ? nil : ChickenMotion.theme, value: coverHue)
 
-    private func hero(_ book: Book) -> some View {
-        VStack(spacing: 18) {
-            Button { read(book) } label: {
-                BookCover(book: book, style: .hero)
-                    .frame(width: 168, height: 252)
-                    .coverTransitionSource(book.id)
-                    .downloadBadge(book, size: 28)
-                    .shadow(color: palette.shadow, radius: 2, x: 1, y: 1)
-                    .shadow(color: palette.shadow, radius: 22, x: 4, y: 16)
-                    .coverRibbon(book.progress > 0 && !book.isFinished, length: 26, width: 12)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Read \(book.displayTitle)")
-            .padding(.top, isPage ? 36 : (inCard ? 76 : 12))
-            .padding(.bottom, 10)
-            VStack(spacing: 8) {
-                Text(book.displayTitle)
-                    .font(.chickenDisplay(sizeClass == .compact ? 25 : 32))
-                    .tracking(-0.5)
-                    .foregroundStyle(palette.text)
-                    .multilineTextAlignment(.center)
-                Text(book.displayAuthor)
-                    .font(.chickenSerif(18, italic: true))
-                    .foregroundStyle(palette.muted)
-            }
-            VStack(spacing: 9) {
-                if book.progress > 0 && !book.isFinished {
-                    ProgressLine(progress: book.progress, height: 3)
-                        .frame(maxWidth: 260)
+            VStack(spacing: 18) {
+                Button { read(book) } label: {
+                    BookCover(book: book, style: .hero)
+                        .frame(width: isCompact ? 156 : 176, height: isCompact ? 234 : 264)
+                        .downloadBadge(book, size: 28)
+                        .shadow(color: palette.shadow.opacity(0.95), radius: 2, x: 0, y: 1)
+                        .shadow(color: palette.shadow, radius: 24, x: 0, y: 16)
+                        .coverRibbon(book.progress > 0 && !book.isFinished, length: 26, width: 12)
                 }
-                Text(progressText(book))
-                    .font(.chickenMono(12, weight: .medium))
-                    .foregroundStyle(book.progress > 0 && !book.isFinished ? palette.ribbon : palette.muted)
-            }
-        }
-    }
+                .buttonStyle(TactilePressStyle())
+                .accessibilityLabel("Read \(book.displayTitle)")
 
-    @ViewBuilder
-    private func sections(_ book: Book) -> some View {
-        VStack(spacing: 28) {
-            if let summary = book.summary, !summary.isEmpty {
-                summarySection(summary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            details(book)
-            if book.highlightCount > 0 {
-                highlights(book)
-            }
-        }
-    }
-
-    /// The Mac card's header, on the cover-coloured band: the cover on the
-    /// left; title and author at its top, and an inset panel with where you
-    /// are and how to read at its foot, as in Books on the Mac.
-    private func wideHero(_ book: Book) -> some View {
-        HStack(alignment: .top, spacing: 40) {
-            Button { read(book) } label: {
-                BookCover(book: book, style: .hero)
-                    .frame(width: 200, height: 300)
-                    .downloadBadge(book, size: 28)
-                    .shadow(color: .black.opacity(0.3), radius: 2, x: 1, y: 1)
-                    .shadow(color: .black.opacity(0.35), radius: 22, x: 4, y: 16)
-                    .coverRibbon(book.progress > 0 && !book.isFinished, length: 30, width: 13)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Read \(book.displayTitle)")
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text(book.displayTitle)
-                    .font(.chickenDisplay(32))
-                    .tracking(-0.5)
-                    .foregroundStyle(Self.bandText)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(book.displayAuthor)
-                    .font(.chickenSerif(18, italic: true))
-                    .foregroundStyle(Self.bandText.opacity(0.75))
-                Spacer(minLength: 24)
-                readingPanel(book)
-            }
-            .frame(maxWidth: .infinity, minHeight: 300, alignment: .topLeading)
-        }
-    }
-
-    /// Light text on the Mac card's colour band, in every theme.
-    private static let bandText = Color.hex(0xF7F1E6)
-
-    /// The inset panel on the band answers "where was I?": the chapter
-    /// you're in and what's left, then one way back in. Marking a book
-    /// finished happens by reaching the end, or from the ••• menu.
-    private func readingPanel(_ book: Book) -> some View {
-        HStack(alignment: .center, spacing: 20) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text(panelHeadline(book))
-                    .font(.chickenSerif(17, weight: .medium))
-                    .foregroundStyle(Self.bandText)
-                    .lineLimit(1)
-                if let detail = panelDetail(book) {
-                    Text(detail)
-                        .font(.chickenUI(13))
-                        .foregroundStyle(Self.bandText.opacity(0.7))
-                        .monospacedDigit()
+                VStack(spacing: 6) {
+                    Text(book.displayTitle)
+                        .font(.chickenDisplay(isCompact ? 25 : 30))
+                        .tracking(-0.6)
+                        .foregroundStyle(palette.text)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                    if let author = book.author, !author.isEmpty {
+                        Text(author)
+                            .font(.chickenSerif(16.5, italic: true))
+                            .foregroundStyle(palette.muted)
+                    }
                 }
+                .padding(.horizontal, 24)
+
                 if book.progress > 0 && !book.isFinished {
-                    // Light on the band whatever the cover's colour; the
-                    // app's ProgressLine track is a dark theme colour here.
-                    GeometryReader { geometry in
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Self.bandText.opacity(0.2))
-                            Capsule().fill(Self.bandText)
-                                .frame(width: max(3, geometry.size.width * min(book.progress, 1)))
+                    VStack(spacing: 8) {
+                        ProgressLine(progress: book.progress, height: 3.5)
+                            .frame(maxWidth: 260)
+                        HStack(spacing: 6) {
+                            Text("\(Int((book.progress * 100).rounded()))%")
+                                .font(.chickenMono(12, weight: .semibold))
+                                .foregroundStyle(palette.ribbon)
+                            if let chapter = book.lastChapterTitle, !chapter.isEmpty, chapter != book.title {
+                                Text("·")
+                                    .foregroundStyle(palette.faint)
+                                Text(chapter)
+                                    .font(.chickenUI(12.5))
+                                    .foregroundStyle(palette.muted)
+                                    .lineLimit(1)
+                            }
                         }
                     }
-                    .frame(maxWidth: 240)
-                    .frame(height: 3)
-                    .padding(.top, 6)
-                    .accessibilityHidden(true)
+                    .padding(.horizontal, 24)
+                }
+
+                GlassEffectContainer(spacing: 10) {
+                    HStack(spacing: 10) {
+                        PrimaryHeroButton(
+                            title: actionTitle(for: book),
+                            systemImage: "arrow.right",
+                            height: 50,
+                            action: { read(book) }
+                        )
+                        .frame(maxWidth: isCompact ? .infinity : 260)
+
+                        CircularGlassButton(
+                            title: book.isFinished ? "Mark as Unread" : "Mark as Finished",
+                            systemImage: "checkmark",
+                            diameter: 50,
+                            iconSize: 19,
+                            foreground: book.isFinished ? palette.ribbon : palette.text,
+                            action: {
+                                Haptics.impact(.light)
+                                library.setFinished(!book.isFinished, for: book)
+                            }
+                        )
+                    }
+                }
+                .frame(maxWidth: isCompact ? 320 : .infinity)
+                .padding(.horizontal, 24)
+                .padding(.top, 4)
+            }
+            .padding(.top, isPage ? 32 : 76)
+            .padding(.bottom, 22)
+            .frame(maxWidth: 680)
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var gutter: CGFloat { isCompact ? 20 : 32 }
+
+    private var horizontalFadeMask: some View {
+        LinearGradient(
+            stops: [
+                .init(color: .clear, location: 0),
+                .init(color: .black, location: 0.03),
+                .init(color: .black, location: 0.94),
+                .init(color: .clear, location: 1),
+            ],
+            startPoint: .leading,
+            endPoint: .trailing
+        )
+    }
+
+    private func statStrip(for book: Book) -> some View {
+        var stats: [ChickenStat] = [
+            ChickenStat(label: "Format", value: book.format.label, isNumeric: false),
+        ]
+        if let pages = book.pageCount, pages > 0 {
+            stats.append(ChickenStat(label: "Pages", value: "\(pages)"))
+        }
+        if book.isFinished {
+            let value = book.finishedAt.map { $0.formatted(.dateTime.month(.abbreviated).day()) } ?? "Done"
+            stats.append(ChickenStat(label: "Finished", value: value, isNumeric: false, isAccent: true))
+        } else if let left = book.estimatedPagesLeft {
+            let duration = ReadingEstimate.duration(forPages: left, minutesPerPage: library.preferences.minutesPerPage)
+            stats.append(ChickenStat(label: "Left", value: duration))
+        } else if let pages = book.pageCount, pages > 0 {
+            let duration = ReadingEstimate.duration(forPages: pages, minutesPerPage: library.preferences.minutesPerPage)
+            stats.append(ChickenStat(label: "Est. read", value: duration))
+        }
+        if book.highlightCount > 0 {
+            stats.append(ChickenStat(label: book.highlightCount == 1 ? "Note" : "Notes", value: "\(book.highlightCount)"))
+        }
+        return ChickenStatStrip(stats: stats)
+    }
+
+    private func collectionsStrip(for book: Book) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(text: "Collections")
+                .padding(.horizontal, gutter)
+            ScrollView(.horizontal) {
+                GlassEffectContainer(spacing: 8) {
+                    HStack(spacing: 8) {
+                        ForEach(sortedCollections) { collection in
+                            let member = library.contains(book, in: collection)
+                            Button {
+                                Haptics.selection()
+                                withAnimation(reduceMotion ? nil : ChickenMotion.snappy) {
+                                    if member {
+                                        library.remove([book], from: collection)
+                                    } else {
+                                        library.add([book], to: collection)
+                                    }
+                                }
+                            } label: {
+                                HStack(spacing: 5) {
+                                    Image(systemName: member ? "checkmark" : "plus")
+                                        .font(.system(size: 10.5, weight: .semibold))
+                                    Text(collection.name)
+                                        .font(.chickenUI(13, weight: member ? .semibold : .medium))
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 8)
+                                .chickenGlassPill(isSelected: member)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        Button {
+                            newCollectionName = ""
+                            addingCollection = true
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "folder.badge.plus")
+                                    .font(.system(size: 11.5, weight: .medium))
+                                Text("New")
+                                    .font(.chickenUI(13, weight: .medium))
+                            }
+                            .foregroundStyle(palette.muted)
+                            .padding(.horizontal, 13)
+                            .padding(.vertical, 8)
+                            .chickenGlass(in: Capsule(), interactive: true)
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.vertical, 4)
                 }
             }
-            Spacer(minLength: 12)
-            Button { read(book) } label: {
-                Text(book.isFinished ? "Read again" : (book.progress > 0 ? "Continue reading" : "Begin reading"))
-                    .font(.chickenUI(14, weight: .semibold))
-                    .frame(minWidth: 160)
+            .scrollIndicators(.never)
+            .contentMargins(.horizontal, gutter, for: .scrollContent)
+            .mask(horizontalFadeMask)
+        }
+    }
+
+    private func summarySection(_ summary: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            SectionLabel(text: "Synopsis")
+            Text(summary)
+                .font(.chickenSerif(16))
+                .foregroundStyle(palette.text)
+                .lineSpacing(6)
+                .lineLimit(summaryExpanded ? nil : 5)
+            if summary.count > 300 {
+                Button(summaryExpanded ? "Show Less" : "Read More") {
+                    withAnimation(reduceMotion ? nil : ChickenMotion.standard) { summaryExpanded.toggle() }
+                }
+                .font(.chickenUI(13, weight: .semibold))
+                .foregroundStyle(palette.ribbon)
+                .buttonStyle(TactilePressStyle(scale: 0.96))
             }
-            .buttonStyle(BandButtonStyle(prominent: true))
         }
-        .padding(20)
-        .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.white.opacity(0.1)))
     }
 
-    /// Where you are: the chapter, or the book's state when there's none.
-    private func panelHeadline(_ book: Book) -> String {
-        if book.isFinished { return "Finished" }
-        if book.progress == 0 { return "Not started" }
-        if let chapter = book.lastChapterTitle?.trimmingCharacters(in: .whitespacesAndNewlines), !chapter.isEmpty {
-            return chapter
+    private func companionSection(for book: Book) -> some View {
+        let isRecap = book.progress > 0.05
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 8) {
+                SectionLabel(text: isRecap ? "Catch me up" : "About this book")
+                Spacer()
+                if companionNote == nil {
+                    Button {
+                        generateCompanion(for: book, isRecap: isRecap)
+                    } label: {
+                        HStack(spacing: 6) {
+                            if generatingCompanion {
+                                ProgressView().controlSize(.mini)
+                            } else {
+                                Image(systemName: "sparkles")
+                                    .font(.system(size: 11.5, weight: .semibold))
+                            }
+                            Text(generatingCompanion ? "Thinking…" : (isRecap ? "Recap" : "Summarize"))
+                                .font(.chickenUI(12.5, weight: .semibold))
+                        }
+                        .foregroundStyle(palette.text)
+                        .padding(.horizontal, 13)
+                        .padding(.vertical, 7)
+                        .chickenGlass(in: Capsule(), interactive: true)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(generatingCompanion)
+                }
+            }
+
+            if let companionNote {
+                Text(companionNote)
+                    .font(.chickenSerif(15.5))
+                    .foregroundStyle(palette.text)
+                    .lineSpacing(6)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            } else if let companionError {
+                Text(companionError)
+                    .font(.chickenUI(12.5))
+                    .foregroundStyle(palette.muted)
+            }
         }
-        return "\(Int((book.progress * 100).rounded()))% read"
+        .animation(reduceMotion ? nil : ChickenMotion.standard, value: companionNote)
     }
 
-    /// How far and how much is left, the book's length before you start,
-    /// or when you finished it. Nothing when there's nothing real to say.
-    private func panelDetail(_ book: Book) -> String? {
-        if book.isFinished {
-            return book.finishedAt.map { $0.formatted(.dateTime.month(.wide).day().year()) }
+    private func generateCompanion(for book: Book, isRecap: Bool) {
+        generatingCompanion = true
+        companionError = nil
+        let title = book.displayTitle
+        let author = book.author
+        let progress = book.progress
+        let chapter = book.lastChapterTitle
+        let highlights = book.sortedHighlights.map(\.text)
+        Task {
+            defer { generatingCompanion = false }
+            do {
+                let result: String
+                if isRecap {
+                    result = try await ReadingCompanion.recap(
+                        title: title,
+                        author: author,
+                        progress: progress,
+                        chapter: chapter,
+                        highlights: highlights
+                    )
+                } else {
+                    result = try await ReadingCompanion.briefOverview(title: title, author: author)
+                }
+                if !result.isEmpty {
+                    companionNote = result
+                }
+            } catch {
+                companionError = "On-device summary couldn't run right now."
+            }
         }
-        if book.progress == 0 {
-            guard let pages = book.pageCount, pages > 0 else { return nil }
-            return "\(pages) pages · about \(ReadingEstimate.duration(forPages: pages))"
-        }
-        var parts: [String] = []
-        if book.lastChapterTitle?.isEmpty == false { parts.append("\(Int((book.progress * 100).rounded()))% read") }
-        if let left = book.estimatedPagesLeft { parts.append("\(ReadingEstimate.duration(forPages: left)) left") }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// The Mac card's top-right menu: the book's other actions.
-    private func moreMenu(_ book: Book) -> some View {
+    private func highlightsSection(for book: Book) -> some View {
+        ChickenSection("Highlights", count: book.highlightCount) {
+            ForEach(Array(book.sortedHighlights.prefix(6).enumerated()), id: \.element.id) { index, highlight in
+                ChickenRow(isLast: index == min(book.highlightCount, 6) - 1) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Button {
+                            read(book, jumpTo: JumpTarget(location: highlight.location, chapterIndex: highlight.chapterIndex))
+                        } label: {
+                            Text({
+                                var text = AttributedString(highlight.text)
+                                text.backgroundColor = highlight.color.fill
+                                return text
+                            }())
+                            .font(.chickenSerif(15.5))
+                            .foregroundStyle(palette.text)
+                            .lineSpacing(5)
+                            .lineLimit(5)
+                            .multilineTextAlignment(.leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(TactilePressStyle(scale: 0.99))
+
+                        HStack {
+                            if !highlight.note.isEmpty {
+                                Text(highlight.note)
+                                    .font(.chickenSerif(13, italic: true))
+                                    .foregroundStyle(palette.muted)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Button {
+                                quoteCardRequest = QuoteCardRequest(
+                                    quote: highlight.text,
+                                    note: highlight.note,
+                                    bookTitle: book.displayTitle,
+                                    author: book.displayAuthor,
+                                    highlightColor: highlight.color,
+                                    coverTintIndex: book.coverTintIndex
+                                )
+                            } label: {
+                                Label("Quote Card", systemImage: "square.and.arrow.up")
+                                    .font(.chickenUI(11.5, weight: .medium))
+                                    .foregroundStyle(palette.muted)
+                            }
+                            .buttonStyle(TactilePressStyle(scale: 0.95))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func detailsSection(for book: Book) -> some View {
+        let rows: [(String, String)] = [
+            ("Publisher", book.publisher ?? ""),
+            ("Language", book.language.flatMap { Locale.current.localizedString(forLanguageCode: $0) } ?? book.language ?? ""),
+            ("File Size", book.fileSize > 0 ? ByteCountFormatter.string(fromByteCount: book.fileSize, countStyle: .file) : ""),
+            ("Added", book.importedAt.formatted(date: .long, time: .omitted)),
+            ("Finished", book.finishedAt?.formatted(date: .long, time: .omitted) ?? ""),
+        ].filter { !$0.1.isEmpty }
+
+        return Group {
+            if !rows.isEmpty {
+                ChickenSection("Edition") {
+                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                        ChickenRow(isLast: index == rows.count - 1) {
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(row.0)
+                                    .font(.chickenUI(13.5))
+                                    .foregroundStyle(palette.muted)
+                                Spacer(minLength: 16)
+                                Text(row.1)
+                                    .font(.chickenUI(13.5, weight: .medium))
+                                    .foregroundStyle(palette.text)
+                                    .multilineTextAlignment(.trailing)
+                                    .lineLimit(2)
+                                    .truncationMode(.middle)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func moreMenu(for book: Book) -> some View {
         Menu {
-            Button("Read", systemImage: "book") { read(book) }
             Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {
                 library.setFinished(!book.isFinished, for: book)
             }
@@ -499,125 +517,31 @@ struct BookDetailView: View {
                 NSWorkspace.shared.activateFileViewerSelecting([library.fileURL(for: book)])
             }
             #endif
-            CollectionMenuItem(book: book)
             DownloadMenuItems(book: book)
             Divider()
-            Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
+            Button("Remove from Library…", systemImage: "trash", role: .destructive) {
+                confirmingRemoval = true
+            }
         } label: {
-            Label("More", systemImage: "ellipsis")
-                .labelStyle(.iconOnly)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(Self.bandText)
-                .frame(width: 22, height: 22)
+            Image(systemName: "ellipsis")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(palette.text)
+                .frame(width: 44, height: 44)
+                .contentShape(Circle())
         }
         .menuIndicator(.hidden)
-        .buttonStyle(.glass)
-        .buttonBorderShape(.circle)
-        .controlSize(.extraLarge)
-        .padding(18)
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: .circle)
+        .accessibilityLabel("More")
     }
 
-    private func actions(_ book: Book) -> some View {
-        GlassEffectContainer(spacing: 10) {
-            HStack(spacing: 10) {
-                PrimaryActionButton(title: book.isFinished ? "Read again" : (book.progress > 0 ? "Continue reading" : "Begin reading"), systemImage: "arrow.right") {
-                    read(book)
-                }
-                Menu {
-                    Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {
-                        library.setFinished(!book.isFinished, for: book)
-                    }
-                    CollectionMenuItem(book: book)
-                    DownloadMenuItems(book: book)
-                    Divider()
-                    Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
-                } label: {
-                    Label("More", systemImage: "ellipsis")
-                        .labelStyle(.iconOnly)
-                        .frame(width: 22, height: 22)
-                }
-                .menuIndicator(.hidden)
-                .buttonStyle(.glass)
-                .buttonBorderShape(.circle)
-            }
-        }
+    private func actionTitle(for book: Book) -> String {
+        if book.isFinished { return "Read Again" }
+        return book.progress > 0 ? "Continue Reading" : "Begin Reading"
     }
 
-    private func summarySection(_ summary: String) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionLabel(text: "About this book")
-            Text(summary)
-                .font(.chickenSerif(16.5))
-                .foregroundStyle(palette.text)
-                .lineSpacing(6)
-                .lineLimit(summaryExpanded ? nil : 6)
-            if summary.count > 360 {
-                Button(summaryExpanded ? "Less" : "More") {
-                    withAnimation(.smooth) { summaryExpanded.toggle() }
-                }
-                .font(.chickenUI(13, weight: .semibold))
-                .foregroundStyle(palette.muted)
-                .buttonStyle(.plain)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func details(_ book: Book) -> some View {
-        let rows: [(String, String)] = [
-            ("Format", book.format.label),
-            ("Pages", book.pageCount.map { "\($0)" } ?? ""),
-            ("Publisher", book.publisher ?? ""),
-            ("Language", book.language.flatMap { Locale.current.localizedString(forLanguageCode: $0) } ?? book.language ?? ""),
-            ("Added", book.importedAt.formatted(date: .long, time: .omitted)),
-            ("Finished", book.finishedAt?.formatted(date: .long, time: .omitted) ?? ""),
-        ].filter { !$0.1.isEmpty }
-
-        return ChickenSection("Details") {
-            ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                ChickenRow(isLast: index == rows.count - 1) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(row.0)
-                            .font(.chickenUI(13))
-                            .foregroundStyle(palette.muted)
-                        Spacer(minLength: 16)
-                        Text(row.1)
-                            .font(.chickenSerif(14))
-                            .foregroundStyle(palette.text)
-                            .multilineTextAlignment(.trailing)
-                            .lineLimit(2)
-                            .truncationMode(.middle)
-                    }
-                }
-            }
-        }
-    }
-
-    private func highlights(_ book: Book) -> some View {
-        ChickenSection("Highlights", count: book.highlightCount) {
-            ForEach(Array(book.sortedHighlights.prefix(5).enumerated()), id: \.element.id) { index, highlight in
-                ChickenRow(isLast: index == min(book.highlightCount, 5) - 1) {
-                    Text({
-                        var text = AttributedString(highlight.text)
-                        text.backgroundColor = highlight.color.fill
-                        return text
-                    }())
-                    .font(.chickenSerif(15))
-                    .foregroundStyle(palette.text)
-                    .lineSpacing(5)
-                    .lineLimit(5)
-                }
-            }
-        }
-    }
-
-    private func progressText(_ book: Book) -> String {
-        if book.isFinished {
-            return book.finishedAt.map { "Finished \($0.formatted(.dateTime.month(.wide).day().year()))" } ?? "Finished"
-        }
-        if book.progress == 0 { return "Not started" }
-        var text = "\(Int((book.progress * 100).rounded()))% read"
-        if let left = book.estimatedPagesLeft { text += " · \(ReadingEstimate.duration(forPages: left)) left" }
-        return text
+    private func read(_ book: Book, jumpTo target: JumpTarget? = nil) {
+        Haptics.impact(.light)
+        openBook(book.id, from: nil, jumpTo: target)
     }
 }

@@ -1,10 +1,9 @@
 import ChickenKit
 import SwiftUI
 
-// MARK: - Contents
-
 struct ChaptersList: View {
     @Environment(\.palette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: ReaderModel
     var onSelect: () -> Void = {}
 
@@ -33,7 +32,9 @@ struct ChaptersList: View {
             .onAppear { proxy.scrollTo(model.chapterIndex, anchor: .center) }
             .onChange(of: model.chapters.count) { proxy.scrollTo(model.chapterIndex, anchor: .center) }
             .onChange(of: model.chapterIndex) { _, index in
-                withAnimation(.easeInOut(duration: 0.18)) { proxy.scrollTo(index, anchor: .center) }
+                withAnimation(reduceMotion ? nil : ChickenMotion.micro) {
+                    proxy.scrollTo(index, anchor: .center)
+                }
             }
         }
     }
@@ -46,36 +47,37 @@ private struct ChapterRow: View {
     let action: () -> Void
 
     var body: some View {
-        Button(action: action) {
+        Button {
+            Haptics.selection()
+            action()
+        } label: {
             HStack(spacing: 0) {
                 Rectangle()
                     .fill(isActive ? palette.ribbon : .clear)
                     .frame(width: 3)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(chapter.title)
-                        .font(.chickenSerif(14.5, weight: isActive ? .semibold : .regular))
+                        .font(.chickenUI(14, weight: isActive ? .semibold : .regular))
                         .foregroundStyle(isActive ? palette.text : palette.muted)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                     if let subtitle = chapter.subtitle {
                         Text(subtitle)
-                            .font(.chickenUI(10))
+                            .font(.chickenMono(10.5))
                             .foregroundStyle(palette.faint)
                     }
                 }
-                .padding(.leading, 18 + CGFloat(min(chapter.level, 3)) * 14)
+                .padding(.leading, 16 + CGFloat(min(chapter.level, 3)) * 14)
                 .padding(.trailing, 16)
                 .padding(.vertical, 11)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(TactilePressStyle(scale: 0.99))
         .accessibilityAddTraits(isActive ? .isSelected : [])
     }
 }
-
-// MARK: - Highlights and bookmarks
 
 struct AnnotationsList: View {
     enum Tab: String, CaseIterable, Identifiable {
@@ -84,21 +86,68 @@ struct AnnotationsList: View {
         var id: String { rawValue }
     }
 
-    @Environment(\.palette) private var palette
-    let model: ReaderModel
-    @State private var tab: Tab = .highlights
+    enum Scope: String, CaseIterable, Identifiable {
+        case all = "All"
+        case thisChapter = "This Chapter"
+        var id: String { rawValue }
+    }
 
-    private var highlights: [Highlight] { model.book.sortedHighlights }
+    @Environment(\.palette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let model: ReaderModel
+    var onShareQuote: (Highlight) -> Void = { _ in }
+    @State private var tab: Tab = .highlights
+    @State private var scope: Scope = .all
+    @Namespace private var scopeNamespace
+
+    private var allHighlights: [Highlight] { model.book.sortedHighlights }
+    private var highlights: [Highlight] {
+        switch scope {
+        case .all: allHighlights
+        case .thisChapter: allHighlights.filter { $0.chapterIndex == model.chapterIndex }
+        }
+    }
     private var bookmarks: [Bookmark] { model.book.sortedBookmarks }
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Show", selection: $tab) {
-                Text("Highlights · \(highlights.count)").tag(Tab.highlights)
-                Text("Bookmarks · \(bookmarks.count)").tag(Tab.bookmarks)
+            VStack(spacing: 10) {
+                Picker("Show", selection: $tab) {
+                    Text("Highlights · \(allHighlights.count)").tag(Tab.highlights)
+                    Text("Bookmarks · \(bookmarks.count)").tag(Tab.bookmarks)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                if tab == .highlights && model.chapters.count > 1 && !allHighlights.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(Scope.allCases) { option in
+                            let selected = scope == option
+                            Button {
+                                Haptics.selection()
+                                withAnimation(reduceMotion ? nil : ChickenMotion.snappy) { scope = option }
+                            } label: {
+                                Text(option == .thisChapter ? "This chapter" : "Whole book")
+                                    .font(.chickenUI(12, weight: selected ? .semibold : .regular))
+                                    .foregroundStyle(selected ? palette.text : palette.muted)
+                                    .padding(.horizontal, 11)
+                                    .padding(.vertical, 5)
+                                    .background {
+                                        if selected {
+                                            Capsule()
+                                                .fill(palette.surface)
+                                                .stroke(palette.borderStrong, lineWidth: 0.5)
+                                                .matchedGeometryEffect(id: "annotationScope", in: scopeNamespace)
+                                        }
+                                    }
+                                    .contentShape(Capsule())
+                            }
+                            .buttonStyle(TactilePressStyle(scale: 0.95))
+                        }
+                        Spacer()
+                    }
+                }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
             .padding(16)
 
             ScrollView {
@@ -106,15 +155,21 @@ struct AnnotationsList: View {
                     switch tab {
                     case .highlights:
                         if highlights.isEmpty {
-                            hint(icon: "highlighter", title: "No highlights yet", text: "Select a passage to highlight it.")
+                            hint(
+                                icon: "highlighter",
+                                title: scope == .thisChapter ? "No notes in this chapter" : "No highlights yet",
+                                text: scope == .thisChapter
+                                    ? "Margin notes for \(model.chapterTitle) will appear here as you mark passages."
+                                    : "Select a passage to highlight it."
+                            )
                         }
                         ForEach(highlights) { highlight in
-                            HighlightCard(model: model, highlight: highlight)
+                            HighlightCard(model: model, highlight: highlight, onShareQuote: { onShareQuote(highlight) })
                                 .transition(.opacity.combined(with: .move(edge: .top)))
                         }
                     case .bookmarks:
                         if bookmarks.isEmpty {
-                            hint(icon: "bookmark", title: "No bookmarks yet", text: "Bookmark a page to come back to it.")
+                            hint(icon: "bookmark", title: "No bookmarks yet", text: "Pull down from the top-right corner or tap Bookmark to mark your place.")
                         }
                         ForEach(bookmarks) { bookmark in
                             BookmarkCard(model: model, bookmark: bookmark)
@@ -124,8 +179,8 @@ struct AnnotationsList: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 24)
-                .animation(.smooth(duration: 0.25), value: highlights.map(\.id))
-                .animation(.smooth(duration: 0.25), value: bookmarks.map(\.id))
+                .animation(reduceMotion ? nil : ChickenMotion.standard, value: highlights.map(\.id))
+                .animation(reduceMotion ? nil : ChickenMotion.standard, value: bookmarks.map(\.id))
             }
         }
         .background(palette.background)
@@ -134,28 +189,33 @@ struct AnnotationsList: View {
     private func hint(icon: String, title: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Image(systemName: icon)
-                .font(.system(size: 22, weight: .light))
+                .font(.system(size: 20, weight: .light))
                 .foregroundStyle(palette.muted)
             Text(title)
-                .font(.chickenDisplay(17))
+                .font(.chickenDisplay(16))
                 .foregroundStyle(palette.text)
             Text(text)
-                .font(.chickenSerif(14, italic: true))
+                .font(.chickenUI(13.5))
                 .foregroundStyle(palette.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(palette.surface))
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(palette.surface)
+                .stroke(palette.border, lineWidth: 0.5)
+        )
     }
 }
 
 private struct HighlightCard: View {
     @Environment(\.palette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: ReaderModel
     let highlight: Highlight
-    @State private var editingNote = false
-    @State private var draft = ""
+    let onShareQuote: () -> Void
+    @State private var draft: String?
     @FocusState private var noteFocused: Bool
 
     var body: some View {
@@ -169,10 +229,10 @@ private struct HighlightCard: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(TactilePressStyle(scale: 0.99))
 
-            if editingNote {
-                TextField("Add a note", text: $draft, axis: .vertical)
+            if draft != nil {
+                TextField("Add a note", text: draftBinding, axis: .vertical)
                     .font(.chickenSerif(14, italic: true))
                     .textFieldStyle(.plain)
                     .focused($noteFocused)
@@ -181,9 +241,11 @@ private struct HighlightCard: View {
                     .onSubmit(saveNote)
                 HStack {
                     Spacer()
-                    Button("Cancel") { editingNote = false }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(palette.muted)
+                    Button("Cancel") {
+                        withAnimation(reduceMotion ? nil : ChickenMotion.micro) { draft = nil }
+                    }
+                    .buttonStyle(TactilePressStyle(scale: 0.95))
+                    .foregroundStyle(palette.muted)
                     Button("Save", action: saveNote)
                         .buttonStyle(.glass)
                         .foregroundStyle(palette.text)
@@ -204,17 +266,21 @@ private struct HighlightCard: View {
                 Spacer()
                 Menu {
                     Button(highlight.note.isEmpty ? "Add Note" : "Edit Note", systemImage: "square.and.pencil", action: beginEditing)
+                    Button("Share Quote Card…", systemImage: "square.and.arrow.up", action: onShareQuote)
                     Picker("Color", selection: colorBinding) {
                         ForEach(HighlightColor.allCases) { Label($0.label, systemImage: "circle.fill").tint($0.bar).tag($0) }
                     }
                     Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(highlight.text) }
                     Divider()
-                    Button("Remove Highlight", systemImage: "trash", role: .destructive) { model.removeHighlight(highlight) }
+                    Button("Remove Highlight", systemImage: "trash", role: .destructive) {
+                        Haptics.impact(.light)
+                        model.removeHighlight(highlight)
+                    }
                 } label: {
                     Image(systemName: "ellipsis")
                         .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(palette.muted)
-                        .frame(width: 28, height: 22)
+                        .frame(width: 44, height: 32)
                         .contentShape(Rectangle())
                 }
                 .menuIndicator(.hidden)
@@ -232,6 +298,10 @@ private struct HighlightCard: View {
             Button("Copy", systemImage: "doc.on.doc") { Clipboard.copy(highlight.text) }
             Button("Remove Highlight", systemImage: "trash", role: .destructive) { model.removeHighlight(highlight) }
         }
+    }
+
+    private var draftBinding: Binding<String> {
+        Binding(get: { draft ?? "" }, set: { draft = $0 })
     }
 
     private var marked: AttributedString {
@@ -253,14 +323,14 @@ private struct HighlightCard: View {
     }
 
     private func beginEditing() {
-        draft = highlight.note
-        withAnimation(.smooth) { editingNote = true }
+        withAnimation(reduceMotion ? nil : ChickenMotion.micro) { draft = highlight.note }
         noteFocused = true
     }
 
     private func saveNote() {
-        model.library.updateNote(draft.trimmingCharacters(in: .whitespacesAndNewlines), on: highlight)
-        withAnimation(.smooth) { editingNote = false }
+        let value = (draft ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        model.library.updateNote(value, on: highlight)
+        withAnimation(reduceMotion ? nil : ChickenMotion.micro) { draft = nil }
     }
 }
 
@@ -270,15 +340,15 @@ private struct BookmarkCard: View {
     let bookmark: Bookmark
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 12) {
             Button { model.jump(toBookmark: bookmark) } label: {
-                HStack(spacing: 14) {
+                HStack(spacing: 12) {
                     Ribbon()
-                        .frame(width: 12, height: 30)
-                        .padding(.horizontal, 6)
+                        .frame(width: 11, height: 28)
+                        .padding(.horizontal, 4)
                         .accessibilityHidden(true)
                     Text(bookmark.title)
-                        .font(.chickenSerif(15, weight: .semibold))
+                        .font(.chickenUI(14.5, weight: .semibold))
                         .foregroundStyle(palette.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
@@ -286,13 +356,22 @@ private struct BookmarkCard: View {
                 }
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            Button("Remove bookmark", systemImage: "xmark") { model.library.removeBookmark(bookmark) }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .foregroundStyle(palette.faint)
+            .buttonStyle(TactilePressStyle(scale: 0.99))
+            Button {
+                Haptics.impact(.light)
+                model.library.removeBookmark(bookmark)
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(palette.faint)
+                    .frame(width: 36, height: 36)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(TactilePressStyle(scale: 0.92))
+            .accessibilityLabel("Remove bookmark")
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(palette.surface)

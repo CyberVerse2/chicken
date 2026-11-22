@@ -13,17 +13,24 @@ struct ChickenApp: App {
         OverlayScrollbars.install()
         #endif
         #if DEBUG
-        // `CHICKEN_DEBUG_OPEN=continue` or a book UUID opens a reader at launch.
-        if let target = ProcessInfo.processInfo.environment["CHICKEN_DEBUG_OPEN"], !target.isEmpty {
-            AppRouter.shared.pendingDestination = UUID(uuidString: target).map(ChickenLink.Destination.book) ?? .continueReading
+        if let themeName = ProcessInfo.processInfo.environment["CHICKEN_DEBUG_THEME"],
+           let debugTheme = ReadingTheme(rawValue: themeName) {
+            LibraryStore.shared.preferences.theme = debugTheme
         }
-        // `CHICKEN_DEBUG_PANEL=discovery|settings` opens a library sheet;
-        // `annotations|typography|search` opens a reader panel.
+        if let target = ProcessInfo.processInfo.environment["CHICKEN_DEBUG_OPEN"], !target.isEmpty {
+            if target == "markdown", let book = LibraryStore.shared.allBooks().first(where: { $0.format == .text }) {
+                AppRouter.shared.pendingDestination = .book(book.id)
+            } else {
+                AppRouter.shared.pendingDestination = UUID(uuidString: target).map(ChickenLink.Destination.book) ?? .continueReading
+            }
+        }
         switch ProcessInfo.processInfo.environment["CHICKEN_DEBUG_PANEL"] {
-        case "discovery": AppRouter.shared.showingDiscovery = true
-        case "settings": AppRouter.shared.showingSettings = true
+        case "discovery": AppRouter.shared.activeSheet = .discovery
+        case "settings": AppRouter.shared.activeSheet = .settings
         case let value? where value.hasPrefix("detail:"):
-            AppRouter.shared.detailBookID = UUID(uuidString: String(value.dropFirst(7)))
+            if let id = UUID(uuidString: String(value.dropFirst(7))) {
+                AppRouter.shared.showDetails(id)
+            }
         default: break
         }
         #endif
@@ -49,10 +56,8 @@ struct ChickenApp: App {
                 ChickenNotifications.shared.refresh()
             case .background, .inactive:
                 library.appDidResignActive()
-                // Reading today moves the nudge to tomorrow.
                 ChickenNotifications.shared.refresh()
                 #if os(iOS)
-                // Today's minutes were just counted; the island shows them.
                 ReadingActivityController.shared.refresh()
                 #endif
             @unknown default: break
@@ -60,7 +65,6 @@ struct ChickenApp: App {
         }
 
         #if os(macOS)
-        // Each book opens in its own window on the Mac.
         WindowGroup("Reader", id: SceneID.reader, for: UUID.self) { $bookID in
             if let bookID {
                 ReaderLoader(bookID: bookID)
@@ -91,52 +95,99 @@ enum SceneID {
     static let reader = "reader"
 }
 
-/// Navigation state shared by the library window, menus, intents, and deep links.
+struct JumpTarget: Equatable {
+    let location: String?
+    let chapterIndex: Int
+}
+
+struct ReaderPresentation: Identifiable, Equatable {
+    let id: UUID
+    let source: CoverSource?
+}
+
+struct DetailPresentation: Identifiable, Equatable {
+    let id: UUID
+    let sequence: [UUID]
+    let source: CoverSource?
+}
+
+enum ActiveSheet: Identifiable, Equatable {
+    case discovery
+    case settings
+    case collectionPicker(CollectingBooks)
+    case quoteCard(QuoteCardRequest)
+
+    var id: String {
+        switch self {
+        case .discovery: "discovery"
+        case .settings: "settings"
+        case .collectionPicker(let books): "collect-\(books.id.uuidString)"
+        case .quoteCard(let request): "quote-\(request.id.uuidString)"
+        }
+    }
+}
+
 @Observable
 final class AppRouter {
     static let shared = AppRouter()
 
-    /// Book shown in the full-screen reader on iPhone and iPad.
-    var presentedBookID: UUID?
-    /// The cover the reader zoomed out of, and shrinks back into.
-    var presentedSource: CoverSource?
-    /// Book whose details sheet is showing.
-    var detailBookID: UUID?
-    /// Books the details sheet swipes through, and the cover it zoomed from.
-    var detailSequence: [UUID] = []
-    var detailSource: CoverSource?
-
-    /// Shows details for a book, swipeable through the books around it.
-    func showDetails(_ id: UUID, in sequence: [UUID] = [], from source: CoverSource? = nil) {
-        detailSequence = sequence.contains(id) ? sequence : [id]
-        detailSource = source
-        detailBookID = id
-    }
-    /// Books being added to a collection; shows the collection picker.
-    var collectingBooks: CollectingBooks?
+    var presentedReader: ReaderPresentation?
+    var presentedDetails: DetailPresentation?
+    var activeSheet: ActiveSheet?
+    var queuedSheet: ActiveSheet?
     var showingImporter = false
-    var showingDiscovery = false
-    var showingSettings = false
-    /// Set by the "Continue Reading" intent; the library opens the book once it appears.
     var pendingDestination: ChickenLink.Destination?
+    var pendingLibraryPlace: ChickenNotifications.Place?
+    var pendingJumps: [UUID: JumpTarget] = [:]
+
+    func showDetails(_ id: UUID, in sequence: [UUID] = [], from source: CoverSource? = nil) {
+        let resolved = sequence.contains(id) ? sequence : [id]
+        presentedDetails = DetailPresentation(id: id, sequence: resolved, source: source)
+    }
+
+    func updateDetailBook(_ id: UUID) {
+        guard let current = presentedDetails else { return }
+        presentedDetails = DetailPresentation(id: id, sequence: current.sequence, source: current.source)
+    }
+
+    func dismissDetails() {
+        presentedDetails = nil
+    }
+
+    func presentSheet(_ sheet: ActiveSheet) {
+        if activeSheet != nil {
+            queuedSheet = sheet
+            activeSheet = nil
+        } else {
+            activeSheet = sheet
+        }
+    }
+
+    func flushQueuedSheet() {
+        guard let next = queuedSheet else { return }
+        queuedSheet = nil
+        activeSheet = next
+    }
+
+    func consumeJumpTarget(for bookID: UUID) -> JumpTarget? {
+        pendingJumps.removeValue(forKey: bookID)
+    }
 }
 
-/// The books "Add to Collection" is for.
-struct CollectingBooks: Identifiable {
+struct CollectingBooks: Identifiable, Equatable {
     let id = UUID()
     let bookIDs: [UUID]
 }
 
-/// Opens a book in the platform-appropriate way: a new window on the Mac, a
-/// full-screen reader on iPhone and iPad.
 struct OpenBookAction {
-    let handler: (UUID, CoverSource?) -> Void
-    /// `source` is the cover the reader zooms out of on iPhone and iPad.
-    func callAsFunction(_ id: UUID, from source: CoverSource? = nil) { handler(id, source) }
+    let handler: (UUID, CoverSource?, JumpTarget?) -> Void
+    func callAsFunction(_ id: UUID, from source: CoverSource? = nil, jumpTo target: JumpTarget? = nil) {
+        handler(id, source, target)
+    }
 }
 
 extension EnvironmentValues {
-    @Entry var openBook = OpenBookAction { _, _ in }
+    @Entry var openBook = OpenBookAction { _, _, _ in }
 }
 
 #if os(macOS)
@@ -155,7 +206,7 @@ struct ChickenCommands: Commands {
 
             Button("Find Books in Folders…") {
                 openWindow(id: SceneID.library)
-                router.showingDiscovery = true
+                router.presentSheet(.discovery)
             }
             .keyboardShortcut("f", modifiers: [.command, .shift])
         }

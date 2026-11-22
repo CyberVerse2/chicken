@@ -8,22 +8,29 @@
     try { window.webkit.messageHandlers.chicken.postMessage(message); } catch (_) {}
   };
 
+  const motionQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
   const state = {
-    horizontal: false,
-    spread: false,
-    // iPhone and iPad: the web view pages natively, so the page slides
-    // under your finger and taps slide it too.
+    mode: 'scroll',
     nativeSwipe: false,
     scriptScrollUntil: 0,
-    background: '#F5F1E8',
+    background: '#F8F8F7',
     turnIndex: null,
-    turning: false,
     lastWheelTurn: 0,
     lastProgressPost: 0,
     lastGlobalProgress: 0,
     restored: false,
-    reduceMotion: window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    userInteracted: false,
+    reduceMotion: Boolean(motionQuery && motionQuery.matches),
   };
+
+  if (motionQuery && motionQuery.addEventListener) {
+    motionQuery.addEventListener('change', (event) => {
+      state.reduceMotion = event.matches;
+    });
+  }
+
+  const isHorizontal = () => state.mode !== 'scroll';
+  const isSpread = () => state.mode === 'spread';
 
   const sections = () => Array.from(document.querySelectorAll('[data-chicken-spine-index]'));
   const sectionIndex = (section) => Number(section?.dataset.chickenSpineIndex || 0);
@@ -35,12 +42,10 @@
   // Pagination. Horizontal modes lay the book out in CSS columns; each
   // column is a virtual page and spreads advance two at a time.
 
-  // Columns are exactly one viewport wide (half in spread mode), so a page
-  // is the viewport width and a turn is one or two pages.
   const metrics = () => {
     const width = window.innerWidth;
-    const pageUnit = state.spread ? width / 2 : width;
-    const turnUnit = state.spread ? width : pageUnit;
+    const pageUnit = isSpread() ? width / 2 : width;
+    const turnUnit = isSpread() ? width : pageUnit;
     const maxX = Math.max(0, Math.max(doc().scrollWidth || 0, document.body.scrollWidth || 0) - width);
     return {
       pageUnit,
@@ -67,63 +72,36 @@
     const target = Math.max(0, Math.min(m.pageCount - 1, Math.round(page)));
     const turn = Math.max(0, Math.min(m.turnCount - 1, Math.round((target * m.pageUnit) / m.turnUnit)));
     state.turnIndex = turn;
-    // While a scripted slide runs, `turnIndex` is where it's going; a second
-    // tap mid-slide counts from there.
-    if (behavior === 'smooth') state.scriptScrollUntil = Date.now() + 700;
-    const left = state.spread ? turn * m.turnUnit : target * m.pageUnit;
+    if (behavior === 'smooth') state.scriptScrollUntil = Date.now() + 450;
+    const left = isSpread() ? turn * m.turnUnit : target * m.pageUnit;
     window.scrollTo({ left: Math.min(m.maxX, left), top: 0, behavior });
   };
 
   const targetPageForTurn = (direction) => {
     const m = metrics();
-    if (!state.spread && !state.nativeSwipe) return Math.max(0, Math.min(m.pageCount - 1, currentPage() + direction));
+    if (!isSpread() && !state.nativeSwipe) return Math.max(0, Math.min(m.pageCount - 1, currentPage() + direction));
     const spread = Math.max(0, Math.min(m.turnCount - 1, currentTurn() + direction));
     return Math.round((spread * m.turnUnit) / m.pageUnit);
   };
 
-  // A page turn dips a veil in the page color, jumps, then lifts it, so a
-  // turn reads as a page swap rather than a sideways slide.
-  const veil = () => {
-    let element = document.getElementById('chicken-page-veil');
-    if (!element) {
-      element = document.createElement('div');
-      element.id = 'chicken-page-veil';
-      element.setAttribute('aria-hidden', 'true');
-      document.body.appendChild(element);
-    }
-    element.style.cssText = `position: fixed; inset: 0; z-index: 9999; pointer-events: none; opacity: 0; background: ${state.background};`;
-    return element;
-  };
-
-  const turnPage = async (direction) => {
-    if (!state.horizontal) {
-      window.scrollBy({ top: window.innerHeight * 0.88 * direction, behavior: state.reduceMotion ? 'auto' : 'smooth' });
+  const turnPage = (direction, instant = false) => {
+    state.userInteracted = true;
+    if (!isHorizontal()) {
+      window.scrollBy({ top: window.innerHeight * 0.88 * direction, behavior: (instant || state.reduceMotion) ? 'auto' : 'smooth' });
       return;
     }
-    if (state.nativeSwipe) {
-      scrollToPage(targetPageForTurn(direction), state.reduceMotion ? 'auto' : 'smooth');
-      return;
-    }
-    if (state.turning) return;
     const target = targetPageForTurn(direction);
-    if (state.reduceMotion) { scrollToPage(target); return; }
-    state.turning = true;
-    const v = veil();
-    v.style.transition = 'opacity 110ms cubic-bezier(0.25, 1, 0.5, 1)';
-    v.style.opacity = '0.92';
-    await new Promise((resolve) => setTimeout(resolve, 110));
-    scrollToPage(target);
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    v.style.transition = 'opacity 150ms cubic-bezier(0.25, 1, 0.5, 1)';
-    v.style.opacity = '0';
-    setTimeout(() => { state.turning = false; }, 160);
+    if (state.nativeSwipe) {
+      scrollToPage(target, (instant || state.reduceMotion) ? 'auto' : 'smooth');
+      return;
+    }
+    scrollToPage(target, 'auto');
+    reportProgress(true);
   };
 
   // ---------------------------------------------------------------------
   // Position reporting.
 
-  // Page span of a section in horizontal modes. A chapter that flows over
-  // several columns has one client rect per column fragment.
   const sectionPages = (section) => {
     const rects = Array.from(section.getClientRects()).filter((r) => r.width > 0 || r.height > 0);
     const { pageUnit } = metrics();
@@ -140,23 +118,39 @@
 
   const activeSection = () => {
     const all = sections();
-    let active = all[0];
-    if (state.horizontal) {
+    if (!all.length) return { all, active: null };
+    let low = 0;
+    let high = all.length - 1;
+    let best = 0;
+    if (isHorizontal()) {
       const page = currentPage();
-      for (const section of all) {
-        if (sectionPages(section).start <= page) active = section; else break;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (sectionPages(all[mid]).start <= page) {
+          best = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
       }
-      return { all, active };
+      return { all, active: all[best] };
     }
-    for (const section of all) {
-      if (section.getBoundingClientRect().top <= window.innerHeight * 0.34) active = section; else break;
+    const threshold = window.innerHeight * 0.34;
+    while (low <= high) {
+      const mid = (low + high) >> 1;
+      if (all[mid].getBoundingClientRect().top <= threshold) {
+        best = mid;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
     }
-    return { all, active };
+    return { all, active: all[best] };
   };
 
   const globalProgress = () => {
-    const position = state.horizontal ? scrollX() : scrollY();
-    const length = state.horizontal
+    const position = isHorizontal() ? scrollX() : scrollY();
+    const length = isHorizontal()
       ? Math.max(doc().scrollWidth, document.body.scrollWidth) - window.innerWidth
       : Math.max(doc().scrollHeight, document.body.scrollHeight) - window.innerHeight;
     return length <= 0 ? 0 : Math.max(0, Math.min(1, position / length));
@@ -164,7 +158,7 @@
 
   const sectionProgress = (section) => {
     if (!section) return 0;
-    if (state.horizontal) {
+    if (isHorizontal()) {
       const { start, end } = sectionPages(section);
       return end <= start ? 0 : Math.max(0, Math.min(1, (currentPage() - start) / (end - start)));
     }
@@ -173,12 +167,10 @@
   };
 
   const snapshot = () => {
-    const { all, active } = activeSection();
-    const index = all.indexOf(active);
-    const next = index >= 0 ? all[index + 1] : null;
+    const { active } = activeSection();
     const verticalUnit = Math.max(320, window.innerHeight * 0.86);
     let page, pageCount, pageWithinSpine = null, chapterPageCount = null;
-    if (state.horizontal) {
+    if (isHorizontal()) {
       const m = metrics();
       page = currentPage();
       pageCount = m.pageCount;
@@ -211,7 +203,7 @@
 
   const reportProgress = (force = false) => {
     const now = Date.now();
-    if (!force && now - state.lastProgressPost < 220) return;
+    if (!force && now - state.lastProgressPost < 200) return;
     state.lastProgressPost = now;
     post(snapshot());
   };
@@ -223,7 +215,7 @@
     const section = document.getElementById(`chapter-${index}`);
     if (!section) return;
     const p = Math.max(0, Math.min(1, progress || 0));
-    if (state.horizontal) {
+    if (isHorizontal()) {
       const { start, end } = sectionPages(section);
       scrollToPage(start + Math.round((end - start) * p));
     } else {
@@ -235,7 +227,7 @@
 
   const scrollToProgress = (progress) => {
     const p = Math.max(0, Math.min(1, progress || 0));
-    if (state.horizontal) {
+    if (isHorizontal()) {
       scrollToPage(Math.round(p * Math.max(0, metrics().pageCount - 1)));
     } else {
       const length = Math.max(0, Math.max(doc().scrollHeight, document.body.scrollHeight) - window.innerHeight);
@@ -244,13 +236,11 @@
     reportProgress(true);
   };
 
-  // Restores by spine item and progress within it, which survives changes
-  // in font size, window size, or reading mode. A saved page number is used
-  // only when it still falls inside the same spine item.
-  const restore = (location) => {
+  const restore = (location, allowAfterInteraction = false) => {
     if (!location) return;
+    if (!allowAfterInteraction && state.userInteracted) return;
     scrollToSection(location.spineIndex, location.progression);
-    if (state.horizontal && Number.isFinite(location.pageNumber)) {
+    if (isHorizontal() && Number.isFinite(location.pageNumber)) {
       const section = document.getElementById(`chapter-${location.spineIndex}`);
       const target = location.pageNumber - 1;
       if (section) {
@@ -342,7 +332,7 @@
       let node = selection.anchorNode;
       while (node && !(node.dataset && node.dataset.chickenSpineIndex !== undefined)) node = node.parentNode;
       post({ type: 'selection', text, index: node ? sectionIndex(node) : sectionIndex(activeSection().active) });
-    }, 250);
+    }, 220);
   });
 
   window.addEventListener('keydown', (event) => {
@@ -351,34 +341,32 @@
     if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(tag))) return;
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     const key = event.key;
-    const forward = key === 'ArrowRight' || key === 'PageDown' || (key === ' ' && !event.shiftKey) || (state.horizontal && key === 'ArrowDown');
-    const back = key === 'ArrowLeft' || key === 'PageUp' || (key === ' ' && event.shiftKey) || (state.horizontal && key === 'ArrowUp');
+    const forward = key === 'ArrowRight' || key === 'PageDown' || (key === ' ' && !event.shiftKey) || (isHorizontal() && key === 'ArrowDown');
+    const back = key === 'ArrowLeft' || key === 'PageUp' || (key === ' ' && event.shiftKey) || (isHorizontal() && key === 'ArrowUp');
     if (!forward && !back) return;
     event.preventDefault();
-    turnPage(forward ? 1 : -1);
+    turnPage(forward ? 1 : -1, true);
   });
 
-  // Trackpad swipes become single page turns in horizontal modes.
   window.addEventListener('wheel', (event) => {
-    if (!state.horizontal) return;
+    if (!isHorizontal()) return;
     const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
     if (Math.abs(delta) < 8) return;
     event.preventDefault();
     const now = Date.now();
-    if (now - state.lastWheelTurn < 320) return;
+    if (now - state.lastWheelTurn < 260) return;
     state.lastWheelTurn = now;
     turnPage(delta > 0 ? 1 : -1);
   }, { passive: false });
 
-  // Touch swipes (iPhone, iPad).
   let touchStart = null;
   window.addEventListener('touchstart', (event) => {
+    state.userInteracted = true;
     if (event.touches.length !== 1) { touchStart = null; return; }
     const touch = event.touches[0];
     touchStart = { x: touch.clientX, y: touch.clientY, time: Date.now() };
   }, { passive: true });
-  // iOS sends no click for a tap on plain text, so taps are read from the
-  // touch itself; the click that sometimes follows is then ignored.
+
   let lastTouchTap = 0;
   const interactive = 'a, button, input, textarea, select, [contenteditable], [role=button]';
   window.addEventListener('touchend', (event) => {
@@ -392,65 +380,137 @@
     if (selection && !selection.isCollapsed) return;
     if (Math.abs(dx) < 10 && Math.abs(dy) < 10 && elapsed < 350) {
       if (event.target.closest && event.target.closest(interactive)) return;
+      if (event.target && event.target.tagName === 'IMG') {
+        const rect = event.target.getBoundingClientRect();
+        if (rect.width >= 80 && rect.height >= 80) return;
+      }
       lastTouchTap = Date.now();
       handleTap(touch.clientX);
       return;
     }
-    if (!state.horizontal || elapsed > 700) return;
-    // Pages turn with a swipe either way: sideways like a book, or up and
-    // down like scrolling. Sideways is the web view's own paging when it
-    // has it.
+    if (!isHorizontal() || state.nativeSwipe || elapsed > 700) return;
     if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.4) {
-      if (state.nativeSwipe) return;
       turnPage(dx < 0 ? 1 : -1);
-    } else if (Math.abs(dy) > 50 && Math.abs(dy) > Math.abs(dx) * 1.4) {
-      turnPage(dy < 0 ? 1 : -1);
     }
   }, { passive: true });
 
-  // Taps: edges turn pages (like a printed book), the middle toggles chrome.
   const handleTap = (clientX) => {
     const x = clientX / window.innerWidth;
-    if (state.horizontal && x < 0.28) turnPage(-1);
-    else if (state.horizontal && x > 0.72) turnPage(1);
+    if (isHorizontal() && x < 0.25) turnPage(-1);
+    else if (isHorizontal() && x > 0.75) turnPage(1);
     else post({ type: 'tap' });
   };
+
+  const resolveFootnote = (link) => {
+    const href = link.getAttribute('href') || '';
+    if (!href.includes('#')) return null;
+    const fragment = href.slice(href.indexOf('#') + 1);
+    if (!fragment) return null;
+    const epubType = (link.getAttribute('epub:type') || link.getAttribute('role') || '').toLowerCase();
+    const isMarkedNote = epubType.includes('noteref') || link.classList.contains('noteref') || link.classList.contains('footnote-ref') || Boolean(link.closest('sup'));
+    const escaped = CSS && CSS.escape ? CSS.escape(fragment) : fragment.replace(/([#.;?+*~':"!^$[\]()=>|/@])/g, '\\$1');
+    const targetChapter = link.dataset.chickenTargetChapter !== undefined ? Number(link.dataset.chickenTargetChapter) : null;
+    const scope = targetChapter !== null ? document.getElementById(`chapter-${targetChapter}`) : document;
+    const targetEl = (scope && scope.querySelector(`#${escaped}`)) || document.getElementById(fragment);
+    if (!targetEl) return null;
+    const targetType = (targetEl.getAttribute('epub:type') || targetEl.getAttribute('role') || '').toLowerCase();
+    const looksLikeFootnote = isMarkedNote
+      || targetType.includes('footnote')
+      || targetType.includes('endnote')
+      || targetType.includes('rearnote')
+      || targetType.includes('note')
+      || targetEl.tagName === 'ASIDE'
+      || /^(fn|note|endnote|footnote|ftn)/i.test(fragment);
+    if (!looksLikeFootnote) return null;
+    const container = targetEl.closest('aside, li, dd, p, div') || targetEl;
+    const clone = container.cloneNode(true);
+    clone.querySelectorAll('a[epub\\:type~="backlink"], a.footnote-backref, a[role="doc-backlink"]').forEach((el) => el.remove());
+    const text = (clone.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!text || text.length > 2400) return null;
+    const label = (link.textContent || '').replace(/\s+/g, ' ').trim() || 'Note';
+    const chapterEl = targetEl.closest('[data-chicken-spine-index]');
+    return {
+      type: 'footnote',
+      label,
+      text,
+      fragment,
+      chapter: chapterEl ? sectionIndex(chapterEl) : targetChapter,
+    };
+  };
+
   window.addEventListener('click', (event) => {
+    const img = event.target && event.target.tagName === 'IMG' ? event.target : null;
+    if (img && !img.closest('a')) {
+      const rect = img.getBoundingClientRect();
+      if (rect.width >= 80 && rect.height >= 80 && img.currentSrc) {
+        event.preventDefault();
+        post({ type: 'image', src: img.currentSrc, alt: img.getAttribute('alt') || '' });
+        return;
+      }
+    }
+    const anchor = event.target.closest ? event.target.closest('a[href]') : null;
+    if (anchor) {
+      const footnote = resolveFootnote(anchor);
+      if (footnote) {
+        event.preventDefault();
+        post(footnote);
+        return;
+      }
+    }
+    const link = event.target.closest ? event.target.closest('a[data-chicken-target-chapter]') : null;
+    if (link) {
+      const chapter = Number(link.dataset.chickenTargetChapter);
+      const href = link.getAttribute('href') || '';
+      const fragment = href.startsWith('#') ? href.slice(1) : '';
+      const section = document.getElementById(`chapter-${chapter}`);
+      if (section && fragment) {
+        const escaped = CSS && CSS.escape ? CSS.escape(fragment) : fragment.replace(/([#.;?+*~':"!^$[\]()=>|/@])/g, '\\$1');
+        const targetEl = section.querySelector(`#${escaped}`) || section;
+        event.preventDefault();
+        state.userInteracted = true;
+        if (isHorizontal()) {
+          const left = targetEl.getBoundingClientRect().left + scrollX();
+          scrollToPage(Math.floor((left + 1) / metrics().pageUnit));
+        } else {
+          targetEl.scrollIntoView({ block: 'start', behavior: 'auto' });
+        }
+        reportProgress(true);
+        return;
+      }
+    }
     if (event.button !== 0 || event.detail > 1) return;
     if (Date.now() - lastTouchTap < 600) return;
     const selection = window.getSelection();
     if (selection && !selection.isCollapsed) return;
     if (event.target.closest && event.target.closest(interactive)) return;
-    if (state.horizontal) event.preventDefault();
+    if (isHorizontal()) event.preventDefault();
     handleTap(event.clientX);
   });
 
-  // After any free scroll settles (drag, momentum, find), realign to a
-  // page boundary so a column is never left half in view.
   let snapTimer = null;
   let snapping = false;
   const snapToPage = () => {
-    if (!state.horizontal || snapping) return;
+    if (!isHorizontal() || state.nativeSwipe || snapping) return;
     const m = metrics();
-    const target = state.spread ? Math.round(scrollX() / m.turnUnit) * m.turnUnit : Math.round(scrollX() / m.pageUnit) * m.pageUnit;
+    const target = isSpread() ? Math.round(scrollX() / m.turnUnit) * m.turnUnit : Math.round(scrollX() / m.pageUnit) * m.pageUnit;
     state.turnIndex = Math.round(target / m.turnUnit);
     if (Math.abs(scrollX() - target) > 1) {
       snapping = true;
       window.scrollTo({ left: Math.min(m.maxX, target), top: 0, behavior: state.reduceMotion ? 'auto' : 'smooth' });
-      setTimeout(() => { snapping = false; }, 320);
+      setTimeout(() => { snapping = false; }, 260);
     }
   };
 
   window.addEventListener('scroll', () => {
-    // A page sliding under a finger reports once it settles, not on the way,
-    // and the finger, not the script, now says which page this is.
     if (state.nativeSwipe && Date.now() > state.scriptScrollUntil) state.turnIndex = null;
     if (!state.nativeSwipe) reportProgress();
     clearTimeout(snapTimer);
-    snapTimer = setTimeout(() => { snapToPage(); reportProgress(true); }, 180);
+    snapTimer = setTimeout(() => {
+      snapToPage();
+      reportProgress(true);
+    }, 150);
   }, { passive: true });
 
-  // Keep the reader's place when the window or font changes the layout.
   let resizeTimer = null;
   let resizeAnchor = null;
   window.addEventListener('resize', () => {
@@ -472,8 +532,13 @@
   let speakable = null;
   const speakableBlocks = () => {
     if (!speakable) {
-      speakable = Array.from(document.querySelectorAll(`[data-chicken-spine-index] :is(${SPEAKABLE})`))
+      let blocks = Array.from(document.querySelectorAll(`[data-chicken-spine-index] :is(${SPEAKABLE})`))
         .filter((el) => !el.querySelector(SPEAKABLE) && (el.textContent || '').trim().length > 0);
+      if (!blocks.length) {
+        blocks = Array.from(document.querySelectorAll('[data-chicken-spine-index] div'))
+          .filter((el) => !el.querySelector('div') && (el.textContent || '').trim().length > 0);
+      }
+      speakable = blocks;
     }
     return speakable;
   };
@@ -505,12 +570,11 @@
     document.querySelectorAll('.chicken-speaking').forEach((other) => other.classList.remove('chicken-speaking'));
     el.classList.add('chicken-speaking');
     if (!isOnScreen(el) || el.getBoundingClientRect().bottom > window.innerHeight) {
-      if (state.horizontal) {
+      if (isHorizontal()) {
         const left = el.getBoundingClientRect().left + scrollX();
-        scrollToPage(Math.floor((left + 1) / metrics().pageUnit));
+        scrollToPage(Math.floor((left + 1) / metrics().pageUnit), state.reduceMotion ? 'auto' : 'smooth');
       } else {
         el.scrollIntoView({ block: 'start', behavior: state.reduceMotion ? 'auto' : 'smooth' });
-        window.scrollBy({ top: -window.innerHeight * 0.18 });
       }
     }
     reportProgress(true);
@@ -524,9 +588,9 @@
 
   const configure = (config) => {
     const anchor = state.lastGlobalProgress;
-    const modeChanged = state.horizontal !== config.horizontal || state.spread !== config.spread;
-    state.horizontal = config.horizontal;
-    state.spread = config.spread;
+    const nextMode = config.mode || (config.horizontal ? (config.spread ? 'spread' : 'paged') : 'scroll');
+    const modeChanged = state.mode !== nextMode;
+    state.mode = nextMode;
     state.nativeSwipe = Boolean(config.nativeSwipe);
     state.background = config.background;
     state.turnIndex = null;

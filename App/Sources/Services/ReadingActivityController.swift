@@ -1,46 +1,43 @@
 #if os(iOS)
 import ActivityKit
 import ChickenKit
+import os
 import ImageIO
 import SwiftUI
 
-/// Runs the reading session in the Dynamic Island and on the Lock Screen.
-/// It starts when a book opens, follows your chapter, progress, and today's
-/// minutes, and ends when the book closes. The island is only visible while
-/// Chicken itself isn't on screen, so it's how the book you're in stays a
-/// tap away when you step out to another app.
-@MainActor
 final class ReadingActivityController {
     static let shared = ReadingActivityController()
 
-    private var activity: Activity<ReadingActivityAttributes>?
-    private weak var book: Book?
-    private weak var library: LibraryStore?
-    private var isReadingAloud = false
-    private var pendingUpdate: Task<Void, Never>?
-    private var lastState: ReadingActivityAttributes.ContentState?
+    private struct Session {
+        let activity: Activity<ReadingActivityAttributes>
+        weak var book: Book?
+        weak var library: LibraryStore?
+        var isReadingAloud = false
+        var lastState: ReadingActivityAttributes.ContentState
+        var pendingUpdate: Task<Void, Never>?
+        var coverTask: Task<Void, Never>?
+    }
+
+    private var session: Session?
 
     private init() {}
 
-    /// A book opened in the reader.
     func begin(book: Book, library: LibraryStore) {
-        self.book = book
-        self.library = library
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
 
-        // One session at a time; leftovers from a previous launch go too.
         for existing in Activity<ReadingActivityAttributes>.activities where existing.attributes.bookID != book.id {
-            // `Activity` isn't Sendable; ActivityKit allows calling it from any task.
             nonisolated(unsafe) let stale = existing
             Task { await stale.end(nil, dismissalPolicy: .immediate) }
         }
+
+        let initialState = Self.state(book: book, library: library, isReadingAloud: false)
         if let existing = Activity<ReadingActivityAttributes>.activities.first(where: { $0.attributes.bookID == book.id }) {
-            activity = existing
+            session = Session(activity: existing, book: book, library: library, lastState: initialState)
             refresh()
             return
         }
 
-        writeCover(for: book, library: library)
+        let coverTask = startWritingCover(for: book, library: library)
         let attributes = ReadingActivityAttributes(
             bookID: book.id,
             title: book.displayTitle,
@@ -48,53 +45,63 @@ final class ReadingActivityController {
             coverTintIndex: book.coverTintIndex,
             theme: library.preferences.theme.rawValue
         )
-        let state = currentState()
-        lastState = state
-        activity = try? Activity.request(attributes: attributes, content: ActivityContent(state: state, staleDate: nil))
+        do {
+            let activity = try Activity.request(attributes: attributes, content: ActivityContent(state: initialState, staleDate: nil))
+            session = Session(
+                activity: activity,
+                book: book,
+                library: library,
+                lastState: initialState,
+                coverTask: coverTask
+            )
+        } catch {
+            coverTask?.cancel()
+            ChickenLog.widgets.error("Failed to start Live Activity: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
-    /// Reading state changed: chapter, progress, or today's minutes.
-    /// Updates are coalesced so a flurry of page turns sends one.
     func refresh() {
-        guard activity != nil else { return }
-        pendingUpdate?.cancel()
-        pendingUpdate = Task { [weak self] in
+        guard session != nil else { return }
+        session?.pendingUpdate?.cancel()
+        session?.pendingUpdate = Task { [weak self] in
             try? await Task.sleep(for: .seconds(1))
-            guard !Task.isCancelled, let self, let current = self.activity else { return }
-            nonisolated(unsafe) let activity = current
-            let state = self.currentState()
-            guard state != self.lastState else { return }
-            let goalJustMet = (self.lastState?.goalFraction ?? 0) < 1 && state.goalFraction >= 1
-            self.lastState = state
+            guard !Task.isCancelled, let self, let current = self.session else { return }
+            nonisolated(unsafe) let activity = current.activity
+            let nextState = Self.state(book: current.book, library: current.library, isReadingAloud: current.isReadingAloud)
+            guard nextState != current.lastState else { return }
+            let goalJustMet = current.lastState.goalFraction < 1 && nextState.goalFraction >= 1
+            self.session?.lastState = nextState
             let alert = goalJustMet
-                ? AlertConfiguration(title: "Today's reading is done", body: "\(state.goalMinutes) minutes read.", sound: .default)
+                ? AlertConfiguration(title: "Today's reading is done", body: "\(nextState.goalMinutes) minutes read.", sound: .default)
                 : nil
-            await activity.update(ActivityContent(state: state, staleDate: nil), alertConfiguration: alert)
+            await activity.update(ActivityContent(state: nextState, staleDate: nil), alertConfiguration: alert)
         }
     }
 
     func setReadingAloud(_ reading: Bool) {
-        guard isReadingAloud != reading else { return }
-        isReadingAloud = reading
+        guard let current = session, current.isReadingAloud != reading else { return }
+        session?.isReadingAloud = reading
         refresh()
     }
 
-    /// The book closed.
     func end() {
-        pendingUpdate?.cancel()
-        isReadingAloud = false
-        guard let current = activity else { return }
-        self.activity = nil
-        let state = currentState()
-        let bookID = current.attributes.bookID
-        nonisolated(unsafe) let finished = current
-        Task { await finished.end(ActivityContent(state: state, staleDate: nil), dismissalPolicy: .immediate) }
-        if let url = ReadingActivityAttributes.coverURL(for: bookID) {
-            try? FileManager.default.removeItem(at: url)
+        guard let current = session else { return }
+        session = nil
+        current.pendingUpdate?.cancel()
+        current.coverTask?.cancel()
+        let finalState = Self.state(book: current.book, library: current.library, isReadingAloud: false)
+        let bookID = current.activity.attributes.bookID
+        nonisolated(unsafe) let finished = current.activity
+        Task {
+            await current.coverTask?.value
+            await finished.end(ActivityContent(state: finalState, staleDate: nil), dismissalPolicy: .immediate)
+            if let url = ReadingActivityAttributes.coverURL(for: bookID) {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
 
-    private func currentState() -> ReadingActivityAttributes.ContentState {
+    private static func state(book: Book?, library: LibraryStore?, isReadingAloud: Bool) -> ReadingActivityAttributes.ContentState {
         ReadingActivityAttributes.ContentState(
             chapter: book?.lastChapterTitle,
             progress: book?.progress ?? 0,
@@ -104,32 +111,36 @@ final class ReadingActivityController {
         )
     }
 
-    /// Puts a small copy of the cover where the extension can read it. A PDF
-    /// that opens on a page of text gets none, and the island shows its
-    /// cloth colour instead.
-    private func writeCover(for book: Book, library: LibraryStore) {
-        guard let destination = ReadingActivityAttributes.coverURL(for: book.id) else { return }
+    private func startWritingCover(for book: Book, library: LibraryStore) -> Task<Void, Never>? {
+        guard let destination = ReadingActivityAttributes.coverURL(for: book.id) else { return nil }
         guard let source = library.coverURL(for: book) else {
+            try? FileManager.default.removeItem(at: destination)
+            return nil
+        }
+        let isPDF = book.format == .pdf
+        return Task {
+            await Self.writeCoverFile(source: source, destination: destination, isPDF: isPDF)
+        }
+    }
+
+    @concurrent
+    private static func writeCoverFile(source: URL, destination: URL, isPDF: Bool) async {
+        guard !Task.isCancelled else { return }
+        if isPDF,
+           let image = CGImageSourceCreateWithURL(source as CFURL, nil).flatMap({ CGImageSourceCreateImageAtIndex($0, 0, nil) }),
+           CoverRenderer.looksLikeTextPage(image) {
             try? FileManager.default.removeItem(at: destination)
             return
         }
-        let isPDF = book.format == .pdf
-        Task.detached(priority: .utility) {
-            if isPDF,
-               let image = CGImageSourceCreateWithURL(source as CFURL, nil).flatMap({ CGImageSourceCreateImageAtIndex($0, 0, nil) }),
-               CoverRenderer.looksLikeTextPage(image) {
-                try? FileManager.default.removeItem(at: destination)
-                return
-            }
-            if let data = CoverRenderer.thumbnailJPEG(from: source, maxPixelSize: 180) {
-                try? data.write(to: destination, options: .atomic)
-            }
+        guard !Task.isCancelled else { return }
+        if let data = CoverRenderer.thumbnailJPEG(from: source, maxPixelSize: 180) {
+            guard !Task.isCancelled else { return }
+            try? data.write(to: destination, options: .atomic)
         }
     }
 }
 
 extension View {
-    /// Keeps the Dynamic Island's reading session open while this book is.
     func readingActivity(for book: Book, library: LibraryStore) -> some View {
         onAppear { ReadingActivityController.shared.begin(book: book, library: library) }
             .onDisappear { ReadingActivityController.shared.end() }

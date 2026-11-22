@@ -11,12 +11,10 @@ struct SettingsView: View {
     @State private var confirmingRemoveDownloads = false
 
     var body: some View {
-        let preferences = library.preferences
-
         ChickenPage(title: "Settings") {
-            ChickenSection("Reading theme") {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionLabel(text: "Reading theme")
                 ThemeSwatchPicker()
-                    .padding(14)
             }
 
             ChickenSection("Library") {
@@ -49,15 +47,14 @@ struct SettingsView: View {
                 ChickenRow(isLast: true) {
                     HStack(alignment: .top, spacing: 14) {
                         Image(systemName: privacy.icon)
-                            .font(.system(size: 18, weight: .light))
+                            .font(.system(size: 17, weight: .light))
                             .foregroundStyle(palette.muted)
                             .frame(width: 26)
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: .leading, spacing: 5) {
                             Text(privacy.title)
-                                .font(.chickenSerif(16, weight: .semibold))
+                                .font(.chickenUI(15, weight: .semibold))
                                 .foregroundStyle(palette.text)
-                            // With iCloud on, Storage says how many books are here.
-                            Text(library.iCloudStatus == .on ? privacy.detail : "\(privacy.detail) \(books.count) books · \(library.librarySizeDescription())")
+                            Text(library.iCloudStatus == .on ? privacy.detail : "\(privacy.detail) \(books.count) books · \(library.librarySizeDescription(for: books))")
                                 .font(.chickenUI(13))
                                 .foregroundStyle(palette.muted)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -66,10 +63,10 @@ struct SettingsView: View {
                 }
             }
 
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 BrandLockup(size: 16)
                 Text("Version \(Bundle.main.appVersion)")
-                    .font(.chickenSerif(12, italic: true))
+                    .font(.chickenMono(11.5))
                     .foregroundStyle(palette.faint)
             }
             .frame(maxWidth: .infinity)
@@ -79,13 +76,10 @@ struct SettingsView: View {
         #if !os(macOS)
         .toolbar { SheetDoneButton { dismiss() } }
         #endif
-        .animation(.easeInOut(duration: 0.3), value: library.preferences.theme)
     }
 
-    /// Books whose files are on this device, and the switch that brings
-    /// them all down.
     private var storageSection: some View {
-        let downloaded = library.downloadedBooks()
+        let downloaded = library.downloadedBooks(in: books)
         let downloadsAll = library.preferences.downloadsAllBooks
         return ChickenSection("Storage") {
             ChickenRow {
@@ -95,7 +89,7 @@ struct SettingsView: View {
                         .foregroundStyle(palette.muted)
                         .frame(width: 26)
                     Text("Download all books")
-                        .font(.chickenSerif(16, weight: .semibold))
+                        .font(.chickenUI(15, weight: .semibold))
                         .foregroundStyle(palette.text)
                     Spacer(minLength: 8)
                     Toggle("Download all books", isOn: Binding(get: { downloadsAll }, set: { library.setDownloadsAllBooks($0) }))
@@ -106,31 +100,23 @@ struct SettingsView: View {
             }
             ChickenRow(isLast: true) {
                 if downloadsAll || downloaded.count == 0 {
-                    actionRowLabel(icon: "internaldrive", title: "On this \(Self.deviceName)", detail: storageDetail(downloaded))
+                    actionRowLabel(icon: "internaldrive", title: "On this \(Platform.deviceName)", detail: storageDetail(downloaded))
                 } else {
-                    actionRow(icon: "internaldrive", title: "On this \(Self.deviceName)", detail: storageDetail(downloaded), button: "Remove…") {
+                    actionRow(icon: "internaldrive", title: "On this \(Platform.deviceName)", detail: storageDetail(downloaded), button: "Remove…") {
                         confirmingRemoveDownloads = true
                     }
                 }
             }
         }
-        .confirmationDialog("Remove downloaded books from this \(Self.deviceName)?", isPresented: $confirmingRemoveDownloads, titleVisibility: .visible) {
+        .confirmationDialog("Remove downloaded books from this \(Platform.deviceName)?", isPresented: $confirmingRemoveDownloads, titleVisibility: .visible) {
             Button("Remove Downloads", role: .destructive) { library.removeDownload(books) }
         } message: {
-            Text("They stay in iCloud. Books you keep on this \(Self.deviceName) stay here.")
+            Text("They stay in iCloud. Books you keep on this \(Platform.deviceName) stay here.")
         }
     }
 
     private func storageDetail(_ downloaded: (count: Int, bytes: Int64)) -> String {
         "\(downloaded.count) of \(books.count) books · \(ByteCountFormatter.string(fromByteCount: downloaded.bytes, countStyle: .file))"
-    }
-
-    private static var deviceName: String {
-        #if os(macOS)
-        "Mac"
-        #else
-        UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
-        #endif
     }
 
     private var privacy: (icon: String, title: String, detail: String) {
@@ -153,15 +139,7 @@ struct SettingsView: View {
     }
 
     private func openDiscovery() {
-        #if os(macOS)
-        router?.showingDiscovery = true
-        #else
-        dismiss()
-        Task {
-            try? await Task.sleep(for: .milliseconds(350))
-            router?.showingDiscovery = true
-        }
-        #endif
+        router?.presentSheet(.discovery)
     }
 
     private func actionRow(icon: String, title: String, detail: String, button: String, action: @escaping () -> Void) -> some View {
@@ -183,7 +161,7 @@ struct SettingsView: View {
                 .frame(width: 26)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                    .font(.chickenSerif(16, weight: .semibold))
+                    .font(.chickenUI(15, weight: .semibold))
                     .foregroundStyle(palette.text)
                 if !detail.isEmpty {
                     Text(detail)

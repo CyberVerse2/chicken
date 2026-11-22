@@ -1,4 +1,5 @@
 import Foundation
+import PDFKit
 
 /// The result of copying a file into the managed library. A plain value so it
 /// can be produced off the main actor and turned into a model object there.
@@ -60,15 +61,40 @@ public enum BookImporter {
         }
 
         let format = BookFormat(fileExtension: fileExtension)
-        guard canOpen(destination, format: format) else {
+        let fresh: DocumentMetadata
+        let cover: String?
+
+        switch format {
+        case .epub:
+            guard let archive = try? ZipArchive(url: destination),
+                  let package = try? EPUBPackage(archive: archive)
+            else {
+                try? fileManager.removeItem(at: destination)
+                throw BookImportError.unreadableFile(name)
+            }
+            fresh = package.metadata
+            cover = CoverRenderer.generateEPUBCover(archive: archive, package: package, id: id, in: paths.covers)
+        case .pdf:
+            guard let document = PDFDocument(url: destination) else {
+                try? fileManager.removeItem(at: destination)
+                throw BookImportError.unreadableFile(name)
+            }
+            fresh = PDFMetadataReader.metadata(for: document)
+            cover = CoverRenderer.generatePDFCover(for: destination, id: id, in: paths.covers)
+        case .text:
+            guard fileManager.isReadableFile(atPath: destination.path) else {
+                try? fileManager.removeItem(at: destination)
+                throw BookImportError.unreadableFile(name)
+            }
+            fresh = .empty
+            cover = nil
+        case .document, .unknown:
             try? fileManager.removeItem(at: destination)
             throw BookImportError.unreadableFile(name)
         }
 
-        let fresh = DocumentMetadataReader.metadata(for: destination, format: format)
         let metadata = fresh.mergingFallbacks(from: knownMetadata)
         let fileSize = (try? destination.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
-        let cover = CoverRenderer.generateCover(for: destination, format: format, id: id, in: paths.covers)
 
         return ImportedBook(
             id: id,

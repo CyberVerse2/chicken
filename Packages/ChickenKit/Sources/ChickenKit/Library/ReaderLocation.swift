@@ -1,9 +1,23 @@
 import Foundation
 
+public protocol ReaderLocationCodable: Codable, Hashable, Sendable {
+    static var typeTag: String { get }
+    var type: String { get }
+}
+
+extension ReaderLocationCodable {
+    public var encoded: String? { ReaderLocationCoding.encode(self) }
+
+    public static func decode(_ value: String?) -> Self? {
+        ReaderLocationCoding.decode(value).flatMap { $0.type == Self.typeTag ? $0 : nil }
+    }
+}
+
 /// Saved EPUB position. The JSON shape is unchanged from earlier versions of
 /// Chicken so stored `lastLocation` strings keep resolving.
-public struct EPUBLocation: Codable, Hashable, Sendable {
-    public var type: String = "epub"
+public struct EPUBLocation: ReaderLocationCodable {
+    public static let typeTag = "epub"
+    public let type: String
     public let href: String
     public let spineIndex: Int
     /// Progress within the spine document, 0...1.
@@ -23,6 +37,7 @@ public struct EPUBLocation: Codable, Hashable, Sendable {
         pageNumber: Int? = nil,
         pageWithinSpine: Int? = nil
     ) {
+        self.type = Self.typeTag
         self.href = href
         self.spineIndex = spineIndex
         self.progression = progression
@@ -30,44 +45,30 @@ public struct EPUBLocation: Codable, Hashable, Sendable {
         self.pageNumber = pageNumber
         self.pageWithinSpine = pageWithinSpine
     }
-
-    public var encoded: String? { ReaderLocationCoding.encode(self) }
-
-    public static func decode(_ value: String?) -> EPUBLocation? {
-        ReaderLocationCoding.decode(value).flatMap { $0.type == "epub" ? $0 : nil }
-    }
 }
 
-public struct PDFLocation: Codable, Hashable, Sendable {
-    public var type: String = "pdf"
+public struct PDFLocation: ReaderLocationCodable {
+    public static let typeTag = "pdf"
+    public let type: String
     public let pageIndex: Int
     public let chapterIndex: Int
 
     public init(pageIndex: Int, chapterIndex: Int) {
+        self.type = Self.typeTag
         self.pageIndex = pageIndex
         self.chapterIndex = chapterIndex
-    }
-
-    public var encoded: String? { ReaderLocationCoding.encode(self) }
-
-    public static func decode(_ value: String?) -> PDFLocation? {
-        ReaderLocationCoding.decode(value).flatMap { $0.type == "pdf" ? $0 : nil }
     }
 }
 
 /// Position within a plain text document.
-public struct TextLocation: Codable, Hashable, Sendable {
-    public var type: String = "text"
+public struct TextLocation: ReaderLocationCodable {
+    public static let typeTag = "text"
+    public let type: String
     public let progression: Double
 
     public init(progression: Double) {
+        self.type = Self.typeTag
         self.progression = progression
-    }
-
-    public var encoded: String? { ReaderLocationCoding.encode(self) }
-
-    public static func decode(_ value: String?) -> TextLocation? {
-        ReaderLocationCoding.decode(value).flatMap { $0.type == "text" ? $0 : nil }
     }
 }
 
@@ -96,8 +97,18 @@ public struct ReaderPreferences: Codable, Hashable, Sendable {
     /// Body typeface for reflowable books; nil means the default. Optional
     /// so preferences saved before it existed still decode.
     public var typeface: String?
+    public var darkModePDF: Bool?
 
-    public init(theme: String, fontSize: Double, lineHeight: Double, columnWidth: Double, readingMode: String, zenMode: Bool, typeface: String? = nil) {
+    public init(
+        theme: String,
+        fontSize: Double,
+        lineHeight: Double,
+        columnWidth: Double,
+        readingMode: String,
+        zenMode: Bool,
+        typeface: String? = nil,
+        darkModePDF: Bool? = nil
+    ) {
         self.theme = theme
         self.fontSize = fontSize
         self.lineHeight = lineHeight
@@ -105,6 +116,7 @@ public struct ReaderPreferences: Codable, Hashable, Sendable {
         self.readingMode = readingMode
         self.zenMode = zenMode
         self.typeface = typeface
+        self.darkModePDF = darkModePDF
     }
 
     public static let fontSizeRange: ClosedRange<Double> = 13...28

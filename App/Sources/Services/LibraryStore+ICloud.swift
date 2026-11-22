@@ -10,32 +10,51 @@ import SwiftData
 /// the local folders and works as before.
 extension LibraryStore {
     func connectToICloud() {
-        guard paths.syncsWithICloud && CloudFolders.isEnabledInThisBuild else {
+        guard paths.syncsWithICloud && CloudFolders.isEnabledInThisBuild && cloudKitSynced else {
+            iCloudConnection = .off
             scheduleDerivedDataRefresh()
             return
         }
-        iCloudStatus = .checking
-        // Once, even when iCloud connects again after signing back in.
+        cloudConnectTask?.cancel()
+        stopWatchingICloudFiles()
+        iCloudConnection = .checking
         if cloudObservers.isEmpty {
             observeRemoteChanges()
             watchSyncHealth()
         }
-        Task.detached(priority: .utility) { [weak self] in
-            let folders = CloudFolders.resolve()
-            await MainActor.run {
-                guard let self else { return }
-                self.cloud = folders
-                self.iCloudStatus = folders == nil ? .unavailable : .on
-                guard folders != nil else {
-                    self.scheduleDerivedDataRefresh()
-                    return
-                }
-                self.watchICloudFiles()
-                self.moveFilesToICloud(thenRefreshDerivedData: true)
-                self.mergeDuplicateBooks()
-                self.mergeDuplicateCollections()
-            }
+        let task = Task<CloudFolders?, Never> {
+            await CloudFolders.resolveAsync()
         }
+        cloudConnectTask = task
+        Task { [weak self] in
+            let folders = await task.value
+            guard let self, !Task.isCancelled, self.cloudConnectTask == task else { return }
+            self.cloudConnectTask = nil
+            guard let folders else {
+                self.iCloudConnection = .unavailable
+                self.scheduleDerivedDataRefresh()
+                return
+            }
+            self.iCloudConnection = .connected(folders)
+            self.watchICloudFiles()
+            self.moveFilesToICloud(thenRefreshDerivedData: true)
+            self.mergeDuplicateBooks()
+            self.mergeDuplicateCollections()
+        }
+    }
+
+    func disconnectICloud() {
+        cloudConnectTask?.cancel()
+        cloudConnectTask = nil
+        stopWatchingICloudFiles()
+        downloadedCloudCovers = nil
+        bookFileStates = nil
+        iCloudConnection = .unavailable
+    }
+
+    private func stopWatchingICloudFiles() {
+        cloudWatcher?.stop()
+        cloudWatcher = nil
     }
 
     /// Moves books and covers from the local folders into iCloud. Only files
@@ -51,21 +70,33 @@ extension LibraryStore {
         let coverFiles = Set(books.compactMap(\.coverImageName))
         let paths = paths
         let previous = cloudMoveTask
-        cloudMoveTask = Task.detached(priority: .utility) { [weak self] in
+        cloudMoveTask = Task { [weak self] in
             await previous?.value
-            CloudFolders.moveIntoICloud(from: paths.books, to: cloud.books, only: bookFiles)
-            let movedCovers = CloudFolders.moveIntoICloud(from: paths.covers, to: cloud.covers, only: coverFiles)
-            await MainActor.run {
-                guard let self else { return }
-                // A cover moved from this device is downloaded by definition;
-                // record it now rather than wait for the watcher to say so.
-                if !movedCovers.isEmpty {
+            let movedCovers = await Self.moveFilesInBackground(
+                paths: paths, cloud: cloud, bookFiles: bookFiles, coverFiles: coverFiles
+            )
+            guard let self, !Task.isCancelled else { return }
+            if !movedCovers.isEmpty {
+                if self.downloadedCloudCovers == nil {
+                    self.downloadedCloudCovers = movedCovers
+                } else {
                     self.downloadedCloudCovers?.formUnion(movedCovers)
-                    self.cloudFilesGeneration += 1
                 }
-                if refreshDerivedData { self.scheduleDerivedDataRefresh() }
+                self.cloudFilesGeneration += 1
             }
+            if refreshDerivedData { self.scheduleDerivedDataRefresh() }
         }
+    }
+
+    @concurrent
+    private static func moveFilesInBackground(
+        paths: LibraryPaths,
+        cloud: CloudFolders,
+        bookFiles: Set<String>,
+        coverFiles: Set<String>
+    ) async -> Set<String> {
+        CloudFolders.moveIntoICloud(from: paths.books, to: cloud.books, only: bookFiles)
+        return CloudFolders.moveIntoICloud(from: paths.covers, to: cloud.covers, only: coverFiles)
     }
 
     /// The book's file if it can be read right now, without a download.
@@ -76,8 +107,8 @@ extension LibraryStore {
 
     /// Fetches the book from iCloud if this device doesn't have it yet.
     func downloadFile(for book: Book) async throws -> URL {
-        while iCloudStatus == .checking {
-            try await Task.sleep(for: .milliseconds(200))
+        if let pending = cloudConnectTask {
+            _ = await pending.value
         }
         let url = fileURL(for: book)
         do {
@@ -94,9 +125,6 @@ extension LibraryStore {
 
     // MARK: - Watching for changes
 
-    /// Notices covers arriving (from other devices, or downloads finishing)
-    /// and book files coming or going. The watching happens on a background
-    /// queue; this only hears about it when something actually changed.
     private func watchICloudFiles() {
         guard cloudWatcher == nil, let cloud else { return }
         let watcher = CloudFileWatcher(folders: cloud) { [weak self] change in
@@ -115,11 +143,9 @@ extension LibraryStore {
         }
         applyBookFileStates(change.bookFiles)
         iCloudFilesOverQuota(change.uploadsBlockedByQuota)
-        // A duplicate waits for the kept copy's file; this may be it.
         if change.bookFilesAddedOrRemoved { mergeDuplicateBooks() }
     }
 
-    /// Books, highlights, and reading time changed on another device.
     private func observeRemoteChanges() {
         cloudObservers.append(NotificationCenter.default.addObserver(forName: .NSPersistentStoreRemoteChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.libraryDidChangeRemotely() }
@@ -156,8 +182,6 @@ extension LibraryStore {
             let members = group
                 .flatMap { entry in books.filter { $0.id == entry.id } }
                 .filter { seen.insert(ObjectIdentifier($0)).inserted }
-            // Wait until the kept copy's file has reached iCloud (or this
-            // device), so the book stays readable everywhere.
             guard let keeper = members.first, CloudFolders.exists(fileURL(for: keeper)) else { continue }
             for duplicate in members.dropFirst() {
                 merge(duplicate, into: keeper)
@@ -170,7 +194,6 @@ extension LibraryStore {
     }
 
     private func merge(_ duplicate: Book, into keeper: Book) {
-        // Where you are follows whichever copy you read last.
         if (duplicate.lastOpenedAt ?? .distantPast) > (keeper.lastOpenedAt ?? .distantPast) {
             keeper.lastOpenedAt = duplicate.lastOpenedAt
             keeper.progress = duplicate.progress
@@ -196,7 +219,6 @@ extension LibraryStore {
                 bookmark.book = keeper
             }
         }
-        // One position per device: the more recent one stays.
         for position in duplicate.positions ?? [] {
             if let existing = keeper.positions?.first(where: { $0.device == position.device }) {
                 if position.updatedAt > existing.updatedAt {
@@ -217,9 +239,7 @@ extension LibraryStore {
         let keptNames = [keeper.storedFileName, keeper.coverImageName]
         let files = storedFiles(of: duplicate).filter { !keptNames.contains($0.lastPathComponent) }
         context.delete(duplicate)
-        Task.detached(priority: .utility) {
-            files.forEach(CloudFolders.remove)
-        }
+        Task { await CloudFolders.removeAll(files) }
     }
 }
 
