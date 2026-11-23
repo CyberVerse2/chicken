@@ -49,6 +49,7 @@ struct EPUBReader: PlatformViewRepresentable {
         let model: ReaderModel
         weak var webView: WKWebView?
         var style: EPUBStyle?
+        var loadedStyle: EPUBStyle?
         var onTapCenter: () -> Void = {}
         private var lifecycle: Lifecycle = .idle
         private var searchTask: Task<Void, Never>?
@@ -58,7 +59,7 @@ struct EPUBReader: PlatformViewRepresentable {
         private var registeredBookID: UUID?
         private var loadStartedAt: ContinuousClock.Instant?
         #if os(iOS)
-        private var scrollBridge: EPUBScrollBridge?
+        private var swipeObserver: EPUBBoundarySwipeObserver?
         #endif
 
         private var session: EPUBBookSession? {
@@ -82,11 +83,10 @@ struct EPUBReader: PlatformViewRepresentable {
             self.style = style
             self.onTapCenter = onTapCenter
             #if os(iOS)
-            let bridge = EPUBScrollBridge { [weak self] delta in
+            let observer = EPUBBoundarySwipeObserver(scrollView: webView.scrollView) { [weak self] delta in
                 self?.call("chicken.turnChapter", delta)
             }
-            scrollBridge = bridge
-            webView.scrollView.delegate = bridge
+            swipeObserver = observer
             updateScrollViewPaging(for: style.mode)
             #endif
         }
@@ -102,6 +102,7 @@ struct EPUBReader: PlatformViewRepresentable {
                 mode: model.readingMode,
                 typeface: model.typeface
             )
+            loadedStyle = initialStyle
             let preferredLocation = model.preferredStartLocation
             let fallbackChapter = model.chapterIndex
             let highlights = (model.book.highlights ?? []).map {
@@ -264,6 +265,10 @@ struct EPUBReader: PlatformViewRepresentable {
             lifecycle = .tornDown
             searchTask?.cancel()
             searchTask = nil
+            #if os(iOS)
+            swipeObserver?.detach()
+            swipeObserver = nil
+            #endif
             if let registeredBookID {
                 let bytes = EPUBSchemeRegistry.shared.totalBytesServed(for: registeredBookID)
                 PerfMonitor.log("epub_session_closed", bytes: bytes)
@@ -274,6 +279,7 @@ struct EPUBReader: PlatformViewRepresentable {
 
         func applyStyle(preservePosition: Bool, themeOnly: Bool = false) {
             guard isReady, let style else { return }
+            loadedStyle = style
             var config: [String: Any] = [
                 "background": ReaderPalette.css(style.palette.backgroundHex),
                 "textColor": ReaderPalette.css(style.palette.textHex),
@@ -340,6 +346,11 @@ struct EPUBReader: PlatformViewRepresentable {
                 model.engineDidBecomeReady()
                 handleProgress(message)
                 focusWebView()
+                if let style, let loadedStyle, style != loadedStyle {
+                    self.loadedStyle = style
+                    let themeOnly = loadedStyle.hasSameLayout(as: style)
+                    applyStyle(preservePosition: !themeOnly, themeOnly: themeOnly)
+                }
             case "progress":
                 handleProgress(message)
             case "selection":
@@ -523,24 +534,53 @@ struct EPUBReader: PlatformViewRepresentable {
             }
             return .cancel
         }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+            logNavigationFailure(error)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+            logNavigationFailure(error)
+        }
+
+        private func logNavigationFailure(_ error: any Error) {
+            let nsError = error as NSError
+            guard !(nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled) else { return }
+            ChickenLog.epub.error("EPUB WebView navigation failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }
 
 #if os(iOS)
-private final class EPUBScrollBridge: NSObject, UIScrollViewDelegate {
-    let onTurnChapter: (Int) -> Void
+private final class EPUBBoundarySwipeObserver: NSObject {
+    private weak var scrollView: UIScrollView?
+    private let onTurnChapter: (Int) -> Void
 
-    init(onTurnChapter: @escaping (Int) -> Void) {
+    init(scrollView: UIScrollView, onTurnChapter: @escaping (Int) -> Void) {
+        self.scrollView = scrollView
         self.onTurnChapter = onTurnChapter
+        super.init()
+        scrollView.panGestureRecognizer.addTarget(self, action: #selector(handlePan(_:)))
     }
 
-    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
-        guard scrollView.isPagingEnabled else { return }
+    func detach() {
+        scrollView?.panGestureRecognizer.removeTarget(self, action: #selector(handlePan(_:)))
+        scrollView = nil
+    }
+
+    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        guard recognizer.state == .ended,
+              let scrollView,
+              scrollView.isPagingEnabled
+        else { return }
         let x = scrollView.contentOffset.x
         let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
-        if x < -36 {
+        let translation = recognizer.translation(in: scrollView)
+        let tx = translation.x
+        let ty = translation.y
+        if x < -36 || (x <= 1 && tx > 55 && abs(tx) > abs(ty) * 1.4) {
             onTurnChapter(-1)
-        } else if x > maxX + 36 {
+        } else if x > maxX + 36 || (x >= maxX - 1 && tx < -55 && abs(tx) > abs(ty) * 1.4) {
             onTurnChapter(1)
         }
     }

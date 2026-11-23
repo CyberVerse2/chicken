@@ -69,11 +69,12 @@ nonisolated final class EPUBSchemeRegistry: Sendable {
 final class EPUBSchemeHandler: NSObject, WKURLSchemeHandler {
     static let shared = EPUBSchemeHandler()
 
-    private var activeTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
+    private var activeTaskIDs: Set<ObjectIdentifier> = []
+    private var runningTasks: [ObjectIdentifier: Task<Void, Never>] = [:]
 
     func webView(_ webView: WKWebView, start urlSchemeTask: any WKURLSchemeTask) {
         let taskID = ObjectIdentifier(urlSchemeTask)
-        activeTasks[taskID] = nil
+        activeTaskIDs.insert(taskID)
 
         guard let url = urlSchemeTask.request.url,
               let host = url.host(),
@@ -104,14 +105,14 @@ final class EPUBSchemeHandler: NSObject, WKURLSchemeHandler {
             }
             let task = Task { [weak self] in
                 let data = await Self.loadChapterJSON(session: session, index: index)
-                guard let self, self.activeTasks.keys.contains(taskID) else { return }
+                guard let self, self.activeTaskIDs.contains(taskID) else { return }
                 if let data {
                     self.reply(urlSchemeTask, taskID: taskID, url: url, data: data, mimeType: "application/json; charset=utf-8", cacheable: true, bookID: bookID)
                 } else {
                     self.finishWithError(urlSchemeTask, taskID: taskID, code: 404)
                 }
             }
-            activeTasks[taskID] = task
+            runningTasks[taskID] = task
             return
         }
 
@@ -125,30 +126,29 @@ final class EPUBSchemeHandler: NSObject, WKURLSchemeHandler {
             let fragment = String(parts[1]).removingPercentEncoding ?? String(parts[1])
             let task = Task { [weak self] in
                 let data = await Self.loadFootnoteJSON(session: session, chapterIndex: chapterIndex, fragment: fragment)
-                guard let self, self.activeTasks.keys.contains(taskID) else { return }
+                guard let self, self.activeTaskIDs.contains(taskID) else { return }
                 self.reply(urlSchemeTask, taskID: taskID, url: url, data: data, mimeType: "application/json; charset=utf-8", cacheable: true, bookID: bookID)
             }
-            activeTasks[taskID] = task
+            runningTasks[taskID] = task
             return
         }
 
         let task = Task { [weak self] in
             let result = await Self.loadResource(session: session, path: path)
-            guard let self, self.activeTasks.keys.contains(taskID) else { return }
+            guard let self, self.activeTaskIDs.contains(taskID) else { return }
             if let result {
                 self.reply(urlSchemeTask, taskID: taskID, url: url, data: result.data, mimeType: result.mimeType, cacheable: true, bookID: bookID)
             } else {
                 self.finishWithError(urlSchemeTask, taskID: taskID, code: 404)
             }
         }
-        activeTasks[taskID] = task
+        runningTasks[taskID] = task
     }
 
     func webView(_ webView: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
         let taskID = ObjectIdentifier(urlSchemeTask)
-        if let task = activeTasks.removeValue(forKey: taskID).flatMap({ $0 }) {
-            task.cancel()
-        }
+        activeTaskIDs.remove(taskID)
+        runningTasks.removeValue(forKey: taskID)?.cancel()
     }
 
     @concurrent
@@ -177,8 +177,8 @@ final class EPUBSchemeHandler: NSObject, WKURLSchemeHandler {
         cacheable: Bool,
         bookID: UUID
     ) {
-        guard activeTasks.keys.contains(taskID) else { return }
-        activeTasks.removeValue(forKey: taskID)
+        guard activeTaskIDs.remove(taskID) != nil else { return }
+        runningTasks.removeValue(forKey: taskID)
         EPUBSchemeRegistry.shared.recordBytes(data.count, for: bookID)
         var headers: [String: String] = [
             "Content-Type": mimeType,
@@ -197,8 +197,8 @@ final class EPUBSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func finishWithError(_ task: any WKURLSchemeTask, taskID: ObjectIdentifier, code: Int) {
-        guard activeTasks.keys.contains(taskID) else { return }
-        activeTasks.removeValue(forKey: taskID)
+        guard activeTaskIDs.remove(taskID) != nil else { return }
+        runningTasks.removeValue(forKey: taskID)
         task.didFailWithError(NSError(domain: NSURLErrorDomain, code: code))
     }
 }
@@ -242,9 +242,6 @@ final class EPUBWebViewPool {
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "chicken")
-        #if os(iOS)
-        webView.scrollView.delegate = nil
-        #endif
         if warmWebView == nil {
             webView.loadHTMLString("<!doctype html><html><body></body></html>", baseURL: nil)
             warmWebView = webView
