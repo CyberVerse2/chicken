@@ -318,9 +318,13 @@ struct ReaderView: View {
     }
 
     private var readingSurface: some View {
-        engineView
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .top) {
+        ZStack {
+            engineView
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(edges: .bottom)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .overlay(alignment: .top) {
                 ReaderTopBannerOverlay(
                     model: model,
                     book: book,
@@ -388,6 +392,16 @@ struct ReaderView: View {
                 }
             }
             .overlay(alignment: .bottom) {
+                ReaderBottomOverlay(
+                    model: model,
+                    book: book,
+                    chromeVisible: chromeVisible,
+                    isCompact: isCompact,
+                    reduceMotion: reduceMotion,
+                    onShareSelection: { selectedText in presentQuoteCard(text: selectedText) }
+                )
+            }
+            .overlay(alignment: .bottom) {
                 ReaderFootnoteOverlay(model: model, chromeVisible: chromeVisible, reduceMotion: reduceMotion)
             }
             .overlay {
@@ -411,16 +425,6 @@ struct ReaderView: View {
                 }
             }
             #endif
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                ReaderBottomOverlay(
-                    model: model,
-                    book: book,
-                    chromeVisible: chromeVisible,
-                    isCompact: isCompact,
-                    reduceMotion: reduceMotion,
-                    onShareSelection: { selectedText in presentQuoteCard(text: selectedText) }
-                )
-            }
     }
 
     @ViewBuilder
@@ -798,12 +802,15 @@ private struct ReaderImageOverlay: View {
 }
 
 private struct ReaderBottomOverlay: View {
+    @Environment(\.palette) private var palette
     let model: ReaderModel
     let book: Book
     let chromeVisible: Bool
     let isCompact: Bool
     let reduceMotion: Bool
     let onShareSelection: (String) -> Void
+
+    private var showsProgressBar: Bool { chromeVisible && model.error == nil }
 
     var body: some View {
         GlassEffectContainer(spacing: 10) {
@@ -822,7 +829,7 @@ private struct ReaderBottomOverlay: View {
                     )
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
-                if chromeVisible && model.error == nil {
+                if showsProgressBar {
                     HStack(spacing: 8) {
                         ReaderProgressBar(model: model, compact: isCompact)
                         if model.isOnLastPageState && !book.isFinished {
@@ -844,9 +851,31 @@ private struct ReaderBottomOverlay: View {
         }
         .padding(.horizontal, isCompact ? 12 : 24)
         .padding(.bottom, isCompact ? 6 : 14)
+        .frame(maxWidth: .infinity)
+        .background(alignment: .bottom) {
+            if showsProgressBar {
+                Color.clear
+                    .frame(height: 70)
+                    .background {
+                        LinearGradient(
+                            stops: [
+                                .init(color: palette.background.opacity(0), location: 0),
+                                .init(color: palette.background.opacity(0.6), location: 0.55),
+                                .init(color: palette.background, location: 1)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .ignoresSafeArea(edges: .bottom)
+                    }
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+        }
         .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.selection)
         .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.readAloud.state)
         .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.isOnLastPageState)
+        .animation(reduceMotion ? nil : ChickenMotion.standard, value: showsProgressBar)
     }
 }
 
