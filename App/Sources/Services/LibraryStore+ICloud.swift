@@ -66,7 +66,7 @@ extension LibraryStore {
             return
         }
         let books = allBooks()
-        let bookFiles = Set(books.map(\.storedFileName))
+        let bookFiles = Set(books.filter { !$0.isPhysical && !$0.storedFileName.isEmpty }.map(\.storedFileName))
         let coverFiles = Set(books.compactMap(\.coverImageName))
         let paths = paths
         let previous = cloudMoveTask
@@ -172,7 +172,7 @@ extension LibraryStore {
     /// first one added, folds the other's reading position, highlights, and
     /// bookmarks into it, and deletes the other's copy of the file.
     func mergeDuplicateBooks() {
-        let books = allBooks()
+        let books = allBooks().filter { !$0.isPhysical && !$0.storedFileName.isEmpty }
         let entries = books.map {
             DuplicateBooks.Entry(id: $0.id, fileName: $0.originalFileName, fileSize: $0.fileSize, importedAt: $0.importedAt)
         }

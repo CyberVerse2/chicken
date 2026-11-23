@@ -114,6 +114,9 @@ struct DetailPresentation: Identifiable, Equatable {
 enum ActiveSheet: Identifiable, Equatable {
     case discovery
     case settings
+    case addPhysicalBook(scanImmediately: Bool)
+    case physicalLog(UUID)
+    case bookFinished(UUID)
     case collectionPicker(CollectingBooks)
     case quoteCard(QuoteCardRequest)
 
@@ -121,6 +124,9 @@ enum ActiveSheet: Identifiable, Equatable {
         switch self {
         case .discovery: "discovery"
         case .settings: "settings"
+        case .addPhysicalBook(let scan): "add-physical-\(scan)"
+        case .physicalLog(let id): "physical-log-\(id.uuidString)"
+        case .bookFinished(let id): "book-finished-\(id.uuidString)"
         case .collectionPicker(let books): "collect-\(books.id.uuidString)"
         case .quoteCard(let request): "quote-\(request.id.uuidString)"
         }

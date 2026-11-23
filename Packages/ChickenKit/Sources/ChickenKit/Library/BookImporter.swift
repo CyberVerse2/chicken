@@ -88,7 +88,7 @@ public enum BookImporter {
             }
             fresh = .empty
             cover = nil
-        case .document, .unknown:
+        case .document, .physical, .unknown:
             try? fileManager.removeItem(at: destination)
             throw BookImportError.unreadableFile(name)
         }
@@ -117,7 +117,7 @@ public enum BookImporter {
             return (try? EPUBPackage(archive: archive)) != nil
         case .text:
             return FileManager.default.isReadableFile(atPath: url.path)
-        case .document, .unknown:
+        case .document, .physical, .unknown:
             return false
         }
     }

@@ -21,7 +21,7 @@ public enum CoverRenderer {
             guard let archive = try? ZipArchive(url: url) else { return nil }
             let package = try? EPUBPackage(archive: archive)
             return generateEPUBCover(archive: archive, package: package, id: id, in: directory)
-        case .text, .document, .unknown:
+        case .text, .document, .physical, .unknown:
             return nil
         }
     }

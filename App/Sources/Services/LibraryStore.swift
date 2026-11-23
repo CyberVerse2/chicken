@@ -377,21 +377,26 @@ final class LibraryStore {
         let files = storedFiles(of: book)
         let storedFileName = book.storedFileName
         preferences.keptBookIDs.remove(book.id)
-        bookDownloads.removeValue(forKey: storedFileName)
-        requestedDownloads.remove(storedFileName)
+        if !storedFileName.isEmpty {
+            bookDownloads.removeValue(forKey: storedFileName)
+            requestedDownloads.remove(storedFileName)
+        }
         context.delete(book)
         save()
         Task { await CloudFolders.removeAll(files) }
         publishWidgetSnapshot()
     }
 
-    /// The book's file and cover, wherever each is, including copies iCloud
-    /// knows about but hasn't downloaded.
     func storedFiles(of book: Book) -> [URL] {
-        var files = [paths.bookFile(named: book.storedFileName)]
+        var files: [URL] = []
+        if !book.isPhysical && !book.storedFileName.isEmpty {
+            files.append(paths.bookFile(named: book.storedFileName))
+        }
         if let name = book.coverImageName { files.append(paths.coverFile(named: name)) }
         if let cloud {
-            files.append(cloud.books.appendingPathComponent(book.storedFileName))
+            if !book.isPhysical && !book.storedFileName.isEmpty {
+                files.append(cloud.books.appendingPathComponent(book.storedFileName))
+            }
             if let name = book.coverImageName { files.append(cloud.covers.appendingPathComponent(name)) }
         }
         return files.filter(CloudFolders.exists)

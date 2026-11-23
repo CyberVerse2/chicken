@@ -299,7 +299,7 @@ struct EmptyLibraryView: View {
                     .tracking(-0.5)
                     .foregroundStyle(palette.text)
                     .multilineTextAlignment(.center)
-                Text("Import EPUBs, PDFs, or text files from anywhere on your device.")
+                Text("Import EPUBs, PDFs, or text files—or add physical books from your shelf.")
                     .font(.chickenUI(14.5))
                     .foregroundStyle(palette.muted)
                     .multilineTextAlignment(.center)
@@ -327,6 +327,9 @@ struct EmptyLibraryView: View {
     private var buttons: some View {
         PrimaryActionButton(title: "Find books in folders", systemImage: "folder") { router.presentSheet(.discovery) }
         SecondaryActionButton(title: "Import files", systemImage: "plus") { router.showingImporter = true }
+        SecondaryActionButton(title: "Add physical book", systemImage: "book.closed") {
+            router.presentSheet(.addPhysicalBook(scanImmediately: false))
+        }
     }
 }
 

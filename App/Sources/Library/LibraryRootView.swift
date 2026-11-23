@@ -6,9 +6,7 @@ import UniformTypeIdentifiers
 enum AppTab: Hashable {
     case home
     case library
-    case notebook
-    case search
-    case yourReading
+    case profile
     case book(UUID)
 }
 
@@ -40,9 +38,7 @@ struct LibraryRootView: View {
         #if DEBUG
         switch ProcessInfo.processInfo.environment["CHICKEN_DEBUG_TAB"] {
         case "library": return .library
-        case "notebook": return .notebook
-        case "search": return .search
-        case "reading": return .yourReading
+        case "reading", "profile": return .profile
         default: return .home
         }
         #else
@@ -136,6 +132,47 @@ struct LibraryRootView: View {
         case .settings:
             NavigationStack { SettingsView() }
                 .readingTheme(library.preferences.theme)
+        case .addPhysicalBook(let scanImmediately):
+            AddPhysicalBookSheet(startWithScanner: scanImmediately)
+                .environment(library)
+                .readingTheme(library.preferences.theme)
+        case .physicalLog(let id):
+            if let book = library.book(id: id) {
+                PhysicalBookLogSheet(book: book) { finishedBook in
+                    router.presentSheet(.bookFinished(finishedBook.id))
+                }
+                .environment(library)
+                .readingTheme(library.preferences.theme)
+            }
+        case .bookFinished(let id):
+            if let book = library.book(id: id) {
+                BookFinishedSheet(
+                    book: book,
+                    onShareQuote: { highlight in
+                        router.presentSheet(.quoteCard(QuoteCardRequest(
+                            quote: highlight.text,
+                            note: highlight.note,
+                            bookTitle: book.displayTitle,
+                            author: book.displayAuthor,
+                            highlightColor: highlight.color,
+                            coverTintIndex: book.coverTintIndex
+                        )))
+                    },
+                    onCloseReader: {
+                        router.activeSheet = nil
+                    },
+                    onKeepReading: {
+                        library.setFinished(false, for: book)
+                        router.activeSheet = nil
+                    },
+                    onOpenNext: { nextBook in
+                        router.activeSheet = nil
+                        open(nextBook.id)
+                    }
+                )
+                .environment(library)
+                .readingTheme(library.preferences.theme)
+            }
         case .collectionPicker(let request):
             CollectionPicker(bookIDs: request.bookIDs)
                 .environment(library)
@@ -155,11 +192,9 @@ struct LibraryRootView: View {
         } detail: {
             Group {
                 switch tab {
-                case .home: NavigationStack { HomeView() }
+                case .home: NavigationStack { HomeView { tab = .profile } }
                 case .library: NavigationStack { BooksView() }
-                case .notebook: NavigationStack { NotebookView() }
-                case .search: NavigationStack { SearchView() }
-                case .yourReading: NavigationStack { YourReadingView() }
+                case .profile: NavigationStack { ProfileView() }
                 case .book(let id): NavigationStack { BookDossierView(bookID: id, isPage: true) }.id(id)
                 }
             }
@@ -167,22 +202,13 @@ struct LibraryRootView: View {
         #else
         TabView(selection: $tab) {
             Tab("Home", systemImage: "book.pages", value: AppTab.home) {
-                NavigationStack { HomeView() }
+                NavigationStack { HomeView { tab = .profile } }
             }
             Tab("Library", systemImage: "books.vertical", value: AppTab.library) {
                 NavigationStack { BooksView() }
             }
-            Tab("Notebook", systemImage: "highlighter", value: AppTab.notebook) {
-                NavigationStack { NotebookView() }
-            }
-            Tab(value: AppTab.search, role: .search) {
-                NavigationStack { SearchView() }
-            }
-            if sizeClass == .regular {
-                Tab("Your Reading", systemImage: "chart.bar", value: AppTab.yourReading) {
-                    NavigationStack { YourReadingView() }
-                }
-                .defaultVisibility(.hidden, for: .tabBar)
+            Tab("Profile", systemImage: "person.crop.circle", value: AppTab.profile) {
+                NavigationStack { ProfileView() }
             }
             if sizeClass == .regular && !reading.isEmpty {
                 TabSection("Reading") {
@@ -201,10 +227,10 @@ struct LibraryRootView: View {
         .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(.onScrollDown)
         .tabViewSidebarHeader { SidebarHeader() }
-        .tabViewSidebarBottomBar { SidebarTodayMeter { tab = .yourReading } }
+        .tabViewSidebarBottomBar { SidebarTodayMeter { tab = .profile } }
         .modifier(NowReadingAccessoryModifier(
             book: reading.first,
-            isEnabled: sizeClass == .compact && (tab == .library || tab == .notebook || tab == .search) && router.presentedReader == nil && reading.first != nil,
+            isEnabled: sizeClass == .compact && (tab == .library || tab == .profile) && router.presentedReader == nil && reading.first != nil,
             onOpen: { book in
                 Haptics.impact(.light)
                 open(book.id)
@@ -231,6 +257,11 @@ struct LibraryRootView: View {
     }
 
     private func open(_ id: UUID, from source: CoverSource? = nil, jumpTo target: JumpTarget? = nil) {
+        if library.book(id: id)?.isPhysical == true {
+            router.dismissDetails()
+            router.presentSheet(.physicalLog(id))
+            return
+        }
         if let target {
             router.pendingJumps[id] = target
         }
@@ -244,6 +275,11 @@ struct LibraryRootView: View {
     }
 
     private func openFromDossier(_ id: UUID, from source: CoverSource? = nil, jumpTo target: JumpTarget? = nil) {
+        if library.book(id: id)?.isPhysical == true {
+            router.dismissDetails()
+            router.presentSheet(.physicalLog(id))
+            return
+        }
         if let target {
             router.pendingJumps[id] = target
         }
@@ -311,8 +347,8 @@ private extension URL {
 }
 
 struct LibraryToolbar: ToolbarContent {
-    @Environment(LibraryStore.self) private var library
     @Environment(AppRouter.self) private var router
+    var onOpenProfile: (() -> Void)? = nil
 
     var body: some ToolbarContent {
         #if os(macOS)
@@ -321,34 +357,25 @@ struct LibraryToolbar: ToolbarContent {
         ToolbarItemGroup(placement: Self.placement) {
             Menu {
                 Button("Import Files…", systemImage: "doc.badge.plus") { router.showingImporter = true }
+                Button("Add Physical Book…", systemImage: "book.closed") {
+                    router.presentSheet(.addPhysicalBook(scanImmediately: false))
+                }
+                #if os(iOS)
+                Button("Scan Book Barcode…", systemImage: "barcode.viewfinder") {
+                    router.presentSheet(.addPhysicalBook(scanImmediately: true))
+                }
+                #endif
+                Divider()
                 Button("Find Books in Folders…", systemImage: "folder.badge.gearshape") { router.presentSheet(.discovery) }
             } label: {
                 Label("Add Books", systemImage: "plus")
             }
 
-            Menu {
-                Picker("Theme", selection: themeBinding) {
-                    ForEach(ReadingTheme.allCases) { theme in
-                        Label(theme.label, systemImage: theme.systemImage).tag(theme)
-                    }
-                }
-                .pickerStyle(.inline)
-            } label: {
-                Label("Theme", systemImage: library.preferences.theme.systemImage)
+            if let onOpenProfile {
+                Button("Profile", systemImage: "person.crop.circle", action: onOpenProfile)
+                    .accessibilityLabel("Profile")
             }
-
-            #if os(macOS)
-            SettingsLink {
-                Label("Settings", systemImage: "gearshape")
-            }
-            #else
-            Button("Settings", systemImage: "gearshape") { router.presentSheet(.settings) }
-            #endif
         }
-    }
-
-    private var themeBinding: Binding<ReadingTheme> {
-        Binding(get: { library.preferences.theme }, set: { library.preferences.theme = $0 })
     }
 
     static var placement: ToolbarItemPlacement {

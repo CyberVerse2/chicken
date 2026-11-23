@@ -230,4 +230,13 @@ struct BookCatalogTests {
         let package = try EPUBPackage(archive: archive)
         #expect(package.metadata.isbn == "9780593135204")
     }
+
+    @Test func physicalFormatBehavesAsPrintBook() {
+        #expect(BookFormat.physical.rawValue == "physical")
+        #expect(BookFormat.physical.label == "Print")
+        #expect(BookFormat.physical.isPhysical)
+        #expect(!BookFormat.epub.isPhysical)
+        #expect(!BookFormat.physical.supportsFlowModes)
+        #expect(!BookImporter.canOpen(URL(fileURLWithPath: "/nonexistent"), format: .physical))
+    }
 }

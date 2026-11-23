@@ -142,6 +142,14 @@ final class Book {
         (bookmarks ?? []).sorted { $0.createdAt > $1.createdAt }
     }
 
+    var isPhysical: Bool { format == .physical }
+
+    var currentPageNumber: Int? {
+        guard let pageCount, pageCount > 0 else { return nil }
+        if isFinished { return pageCount }
+        return min(pageCount, max(0, Int((Double(pageCount) * progress).rounded())))
+    }
+
     var estimatedPagesLeft: Int? {
         guard let pageCount, pageCount > 0 else { return nil }
         return max(0, pageCount - Int((Double(pageCount) * progress).rounded()))

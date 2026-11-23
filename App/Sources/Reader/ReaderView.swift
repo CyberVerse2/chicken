@@ -472,7 +472,7 @@ struct ReaderView: View {
                         ),
                         onTapCenter: toggleChrome
                     )
-                case .text, .document, .unknown:
+                case .text, .document, .physical, .unknown:
                     TextReader(
                         model: model,
                         fileURL: fileURL,

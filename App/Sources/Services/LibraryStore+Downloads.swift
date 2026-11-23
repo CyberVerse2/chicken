@@ -26,7 +26,7 @@ final class BookDownload {
 extension LibraryStore {
     /// Nil when the library doesn't sync, so every book is on this device.
     func download(for book: Book) -> BookDownload? {
-        guard cloud != nil else { return nil }
+        guard cloud != nil, !book.isPhysical, !book.storedFileName.isEmpty else { return nil }
         let name = book.storedFileName
         if let existing = bookDownloads[name] { return existing }
         let download = BookDownload(status: fileTransferState(named: name))
@@ -35,7 +35,8 @@ extension LibraryStore {
     }
 
     func isOnDevice(_ book: Book) -> Bool {
-        download(for: book)?.isOnDevice ?? true
+        if book.isPhysical || book.storedFileName.isEmpty { return true }
+        return download(for: book)?.isOnDevice ?? true
     }
 
     func isKept(_ book: Book) -> Bool {
@@ -46,7 +47,7 @@ extension LibraryStore {
 
     func startDownload(_ books: [Book]) {
         guard let cloud else { return }
-        let wanted = books.filter { !isOnDevice($0) }
+        let wanted = books.filter { !$0.isPhysical && !$0.storedFileName.isEmpty && !isOnDevice($0) }
         noteRequestedDownloads(wanted)
         let urls = wanted.map { cloud.books.appendingPathComponent($0.storedFileName) }
         guard !urls.isEmpty else { return }
@@ -108,7 +109,7 @@ extension LibraryStore {
 
     func updateWantedDownloads() {
         let kept = preferences.keptBookIDs
-        let names = Set(allBooks().filter { kept.contains($0.id) }.map(\.storedFileName))
+        let names = Set(allBooks().filter { !$0.isPhysical && !$0.storedFileName.isEmpty && kept.contains($0.id) }.map(\.storedFileName))
         cloudWatcher?.keepDownloaded(all: preferences.downloadsAllBooks, names: names)
     }
 
@@ -123,7 +124,7 @@ extension LibraryStore {
     // MARK: Downloads the user asked for
 
     private func noteRequestedDownloads(_ books: [Book]) {
-        let added = Set(books.map(\.storedFileName)).subtracting(requestedDownloads)
+        let added = Set(books.filter { !$0.isPhysical && !$0.storedFileName.isEmpty }.map(\.storedFileName)).subtracting(requestedDownloads)
         requestedDownloads.formUnion(added)
         requestedDownloadCount += added.count
     }

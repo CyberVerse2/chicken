@@ -172,8 +172,11 @@ extension LibraryStore {
     private func enqueueEnrichment(for candidates: [Book], markChecked: Bool) {
         guard !candidates.isEmpty, !catalogEnrichState.isEnriching else { return }
         let items = candidates.map { book in
-            let url = fileURL(for: book)
-            let localURL: URL? = ((book.isbn ?? "").isEmpty && CloudFolders.isDownloaded(url)) ? url : nil
+            let localURL: URL? = {
+                guard !book.isPhysical, (book.isbn ?? "").isEmpty else { return nil }
+                let url = fileURL(for: book)
+                return CloudFolders.isDownloaded(url) ? url : nil
+            }()
             return EnrichmentWork(
                 id: book.id,
                 query: BookCatalogQuery(title: book.displayTitle, author: book.author, isbn: book.isbn),
@@ -364,6 +367,213 @@ extension LibraryStore {
             )
         }
         return (match, coverName, extractedISBN)
+    }
+
+    @discardableResult
+    func addPhysicalBook(
+        from rawMatch: BookCatalogMatch,
+        initialStatus: PhysicalBookStatus = .reading,
+        currentPage: Int? = nil
+    ) async -> Book {
+        let now = Date()
+        let title = rawMatch.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let book = Book(
+            title: title.isEmpty ? "Untitled Book" : title,
+            format: .physical,
+            originalFileName: "",
+            storedFileName: ""
+        )
+        book.importedAt = now
+        book.lastActivityAt = now
+        context.insert(book)
+
+        await applyCatalogMatch(rawMatch, to: book, replaceCover: true, replaceExistingFields: true)
+
+        applyInitialPhysicalStatus(initialStatus, currentPage: currentPage, to: book, at: now)
+        save()
+        syncHardcoverStatusIfEnabled(for: book, statusID: initialStatus.hardcoverStatusID)
+        publishWidgetSnapshot()
+        return book
+    }
+
+    @discardableResult
+    func addManualPhysicalBook(
+        title: String,
+        author: String?,
+        isbn: String?,
+        pageCount: Int?,
+        releaseYear: Int?,
+        publisher: String?,
+        initialStatus: PhysicalBookStatus = .reading,
+        currentPage: Int? = nil
+    ) -> Book {
+        let now = Date()
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let book = Book(
+            title: cleanTitle.isEmpty ? "Untitled Book" : cleanTitle,
+            format: .physical,
+            originalFileName: "",
+            storedFileName: ""
+        )
+        book.importedAt = now
+        book.lastActivityAt = now
+        let cleanAuthor = author?.trimmingCharacters(in: .whitespacesAndNewlines)
+        book.author = (cleanAuthor?.isEmpty == false) ? cleanAuthor : nil
+        let cleanISBN = isbn.flatMap(ISBNExtractor.normalize) ?? isbn?.trimmingCharacters(in: .whitespacesAndNewlines)
+        book.isbn = (cleanISBN?.isEmpty == false) ? cleanISBN : nil
+        if let pageCount, pageCount > 0 { book.pageCount = pageCount }
+        book.releaseYear = releaseYear
+        let cleanPublisher = publisher?.trimmingCharacters(in: .whitespacesAndNewlines)
+        book.publisher = (cleanPublisher?.isEmpty == false) ? cleanPublisher : nil
+        book.catalogChecked = false
+        context.insert(book)
+
+        applyInitialPhysicalStatus(initialStatus, currentPage: currentPage, to: book, at: now)
+        save()
+        publishWidgetSnapshot()
+        if book.author != nil || book.isbn != nil {
+            enrichBooksIfNeeded(ids: [book.id])
+        }
+        return book
+    }
+
+    @discardableResult
+    func logPhysicalProgress(
+        for book: Book,
+        currentPage: Int?,
+        totalPages: Int?,
+        percent: Double?,
+        durationSeconds: Int,
+        quoteText: String?,
+        quoteNote: String?,
+        quoteColor: HighlightColor = .amber
+    ) -> Bool {
+        let now = Date()
+        let wasFinished = book.isFinished
+        let hadStarted = book.progress > 0 || book.lastOpenedAt != nil
+        let previousPage = book.currentPageNumber
+
+        if let totalPages, totalPages > 0 {
+            book.pageCount = totalPages
+        }
+
+        var nextProgress = book.progress
+        var locationLabel = book.lastLocation
+
+        if let currentPage, let knownTotal = book.pageCount, knownTotal > 0 {
+            let clampedPage = min(max(currentPage, 0), knownTotal)
+            nextProgress = Double(clampedPage) / Double(knownTotal)
+            locationLabel = "Page \(clampedPage) of \(knownTotal)"
+        } else if let currentPage, currentPage >= 0 {
+            if let percent {
+                nextProgress = min(max(percent, 0), 1)
+            }
+            locationLabel = "Page \(currentPage)"
+        } else if let percent {
+            nextProgress = min(max(percent, 0), 1)
+            locationLabel = "\(Int((nextProgress * 100).rounded()))%"
+        }
+
+        book.progress = min(max(nextProgress, 0), 1)
+        if let locationLabel {
+            book.lastLocation = locationLabel
+        }
+        book.recordOpen(at: now)
+
+        if book.progress >= 1 {
+            book.markFinished(at: now)
+            if !wasFinished {
+                syncHardcoverStatusIfEnabled(for: book, statusID: 3)
+            }
+        } else {
+            book.finishedAt = nil
+            if !wasFinished && !hadStarted && book.progress > 0 {
+                syncHardcoverStatusIfEnabled(for: book, statusID: 2)
+            }
+        }
+
+        if durationSeconds > 0 {
+            addReadingSeconds(durationSeconds, toDay: ReadingLog.dayKey(for: now))
+            if let prev = previousPage, let currentPage, currentPage > prev {
+                recordReadingPace(pagesRead: Double(currentPage - prev), elapsedSeconds: Double(durationSeconds))
+            }
+        }
+
+        if let quoteText,
+           let highlight = addHighlight(
+               to: book,
+               chapterIndex: max(0, currentPage ?? 0),
+               text: quoteText,
+               color: quoteColor,
+               location: locationLabel
+           ) {
+            let trimmedNote = quoteNote?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !trimmedNote.isEmpty {
+                updateNote(trimmedNote, on: highlight)
+            }
+        }
+
+        save()
+        recomputeReadingStats()
+        publishWidgetSnapshot()
+        return book.isFinished && !wasFinished
+    }
+
+    private func applyInitialPhysicalStatus(
+        _ status: PhysicalBookStatus,
+        currentPage: Int?,
+        to book: Book,
+        at date: Date
+    ) {
+        switch status {
+        case .wantToRead:
+            book.progress = 0
+            book.finishedAt = nil
+            book.lastOpenedAt = nil
+        case .reading:
+            book.finishedAt = nil
+            book.lastOpenedAt = date
+            if let currentPage, currentPage > 0 {
+                if let total = book.pageCount, total > 0 {
+                    let clamped = min(currentPage, total)
+                    book.progress = min(0.999, Double(clamped) / Double(total))
+                    book.lastLocation = "Page \(clamped) of \(total)"
+                } else {
+                    book.progress = 0.05
+                    book.lastLocation = "Page \(currentPage)"
+                }
+            }
+        case .finished:
+            book.markFinished(at: date)
+            book.lastOpenedAt = date
+            if let total = book.pageCount, total > 0 {
+                book.lastLocation = "Page \(total) of \(total)"
+            }
+        }
+    }
+}
+
+enum PhysicalBookStatus: String, CaseIterable, Identifiable {
+    case reading
+    case wantToRead
+    case finished
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .reading: "Reading Now"
+        case .wantToRead: "Want to Read"
+        case .finished: "Finished"
+        }
+    }
+
+    var hardcoverStatusID: Int {
+        switch self {
+        case .wantToRead: 1
+        case .reading: 2
+        case .finished: 3
+        }
     }
 }
 

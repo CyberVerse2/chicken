@@ -661,11 +661,15 @@ struct BookDossierView: View {
                 showingMetadataMatch = true
             }
             #if os(macOS)
-            Button("Show in Finder", systemImage: "folder") {
-                NSWorkspace.shared.activateFileViewerSelecting([library.fileURL(for: book)])
+            if !book.isPhysical && !book.storedFileName.isEmpty {
+                Button("Show in Finder", systemImage: "folder") {
+                    NSWorkspace.shared.activateFileViewerSelecting([library.fileURL(for: book)])
+                }
             }
             #endif
-            DownloadMenuItems(book: book)
+            if !book.isPhysical {
+                DownloadMenuItems(book: book)
+            }
             Divider()
             Button("Remove from Library…", systemImage: "trash", role: .destructive) {
                 confirmingRemoval = true
@@ -684,6 +688,9 @@ struct BookDossierView: View {
     }
 
     private func actionTitle(for book: Book) -> String {
+        if book.isPhysical {
+            return book.isFinished ? "Update Log" : "Log Progress"
+        }
         if book.isFinished { return "Read Again" }
         return book.progress > 0 ? "Continue Reading" : "Begin Reading"
     }

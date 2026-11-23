@@ -8,6 +8,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     case unread
     case finished
     case quickReads
+    case physical
     case pdf
     case epub
     case onDevice
@@ -21,6 +22,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .unread: return "Unread"
         case .finished: return "Finished"
         case .quickReads: return "Quick Reads"
+        case .physical: return "Print"
         case .pdf: return "PDFs"
         case .epub: return "EPUBs"
         case .onDevice: return "On Device"
@@ -34,6 +36,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .unread: return book.progress == 0
         case .finished: return book.isFinished
         case .quickReads: return book.isQuickRead
+        case .physical: return book.isPhysical
         case .pdf: return book.format == .pdf
         case .epub: return book.format == .epub
         case .onDevice: return library.isOnDevice(book)
@@ -153,13 +156,16 @@ struct BooksView: View {
     @Environment(\.palette) private var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.openBook) private var openBook
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
+    @Query(sort: \Highlight.createdAt, order: .reverse) private var allHighlights: [Highlight]
     @AppStorage("Chicken.libraryFilter") private var filter: LibraryFilter = .all
     @AppStorage("Chicken.librarySort") private var sort: LibrarySort = .recent
     @AppStorage("Chicken.libraryViewMode") private var viewMode: LibraryViewMode = .covers
     @Query private var collections: [BookCollection]
     @AppStorage("Chicken.libraryCollection") private var collectionID = ""
 
+    @State private var searchQuery = ""
     @State private var selection: Set<UUID>?
     @State private var dialog: CollectionDialog?
     @State private var draftName = ""
@@ -167,6 +173,7 @@ struct BooksView: View {
 
     private var gutter: CGFloat { sizeClass == .compact ? 20 : 40 }
     private var isSelecting: Bool { selection != nil }
+    private var trimmedSearchQuery: String { searchQuery.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var sortedCollections: [BookCollection] {
         collections.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -177,18 +184,51 @@ struct BooksView: View {
     }
 
     private var visible: [Book] {
+        let base: [Book]
         if let facet = router.libraryFacet {
             let matched = books.filter { facet.matches($0) }
             if case .series = facet {
-                return LibrarySort.series.sorted(matched)
+                base = LibrarySort.series.sorted(matched)
+            } else {
+                base = sort.sorted(matched)
             }
-            return sort.sorted(matched)
-        }
-        if let activeCollection {
+        } else if let activeCollection {
             let ids = Set((activeCollection.books ?? []).map(\.id))
-            return sort.sorted(books.filter { ids.contains($0.id) })
+            base = sort.sorted(books.filter { ids.contains($0.id) })
+        } else {
+            base = sort.sorted(books.filter { filter.includes($0, in: library) })
         }
-        return sort.sorted(books.filter { filter.includes($0, in: library) })
+
+        guard !trimmedSearchQuery.isEmpty else { return base }
+        let q = trimmedSearchQuery
+        return base.filter { bookMatchesSearch($0, query: q) }
+    }
+
+    private var matchingHighlights: [(highlight: Highlight, book: Book)] {
+        let q = trimmedSearchQuery
+        guard !q.isEmpty else { return [] }
+        return allHighlights.compactMap { highlight in
+            guard let book = highlight.book else { return nil }
+            let hit = highlight.text.localizedStandardContains(q)
+                || highlight.note.localizedStandardContains(q)
+                || book.displayTitle.localizedStandardContains(q)
+            return hit ? (highlight, book) : nil
+        }
+        .prefix(20)
+        .map { $0 }
+    }
+
+    private func bookMatchesSearch(_ book: Book, query q: String) -> Bool {
+        if book.displayTitle.localizedStandardContains(q) || book.title.localizedStandardContains(q) { return true }
+        if (book.author ?? "").localizedStandardContains(q) { return true }
+        if (book.seriesName ?? "").localizedStandardContains(q) { return true }
+        if (book.summary ?? "").localizedStandardContains(q) { return true }
+        if (book.publisher ?? "").localizedStandardContains(q) { return true }
+        if (book.isbn ?? "").localizedStandardContains(q) { return true }
+        if let year = book.releaseYear, String(year).contains(q) { return true }
+        if book.genres.contains(where: { $0.localizedStandardContains(q) }) { return true }
+        if book.moods.contains(where: { $0.localizedStandardContains(q) }) { return true }
+        return false
     }
 
     private var filters: [LibraryFilter] {
@@ -291,26 +331,63 @@ struct BooksView: View {
                 if books.isEmpty {
                     EmptyLibraryView()
                         .padding(.horizontal, gutter)
-                } else if visible.isEmpty {
+                } else if visible.isEmpty && matchingHighlights.isEmpty {
                     Text(emptyMessage)
                         .font(.chickenUI(15))
                         .foregroundStyle(palette.muted)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 60)
                 } else {
-                    Group {
-                        switch viewMode {
-                        case .covers:
-                            BookGrid(books: visible, selection: selectionBinding)
-                        case .spines:
-                            BookSpineShelf(books: visible, selection: selectionBinding)
-                        case .list:
-                            BookEditorialList(books: visible, selection: selectionBinding)
+                    if !visible.isEmpty {
+                        Group {
+                            switch viewMode {
+                            case .covers:
+                                BookGrid(books: visible, selection: selectionBinding)
+                            case .spines:
+                                BookSpineShelf(books: visible, selection: selectionBinding)
+                            case .list:
+                                BookEditorialList(books: visible, selection: selectionBinding)
+                            }
                         }
+                        .padding(.horizontal, gutter)
+                        .animation(reduceMotion ? nil : ChickenMotion.standard, value: visible.map(\.id))
+                        .animation(reduceMotion ? nil : ChickenMotion.standard, value: viewMode)
                     }
-                    .padding(.horizontal, gutter)
-                    .animation(reduceMotion ? nil : ChickenMotion.standard, value: visible.map(\.id))
-                    .animation(reduceMotion ? nil : ChickenMotion.standard, value: viewMode)
+
+                    if !matchingHighlights.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Matching Highlights")
+                                .chickenEyebrow(palette)
+                            LazyVStack(spacing: 10) {
+                                ForEach(matchingHighlights, id: \.highlight.id) { item in
+                                    Button {
+                                        openBook(item.book.id, jumpTo: JumpTarget(location: item.highlight.location, chapterIndex: item.highlight.chapterIndex))
+                                    } label: {
+                                        VStack(alignment: .leading, spacing: 6) {
+                                            Text(item.highlight.text)
+                                                .font(.chickenSerif(15))
+                                                .foregroundStyle(palette.text)
+                                                .lineLimit(3)
+                                                .multilineTextAlignment(.leading)
+                                            Text(item.book.displayTitle)
+                                                .font(.chickenUI(12, weight: .medium))
+                                                .foregroundStyle(palette.muted)
+                                                .lineLimit(1)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(14)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                                .fill(palette.surface)
+                                                .stroke(palette.border, lineWidth: 0.5)
+                                        )
+                                    }
+                                    .buttonStyle(TactilePressStyle(scale: 0.99))
+                                }
+                            }
+                        }
+                        .padding(.horizontal, gutter)
+                    }
                 }
             }
             .padding(.top, sizeClass == .compact ? 6 : 20)
@@ -318,6 +395,7 @@ struct BooksView: View {
             .frame(maxWidth: 1240, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
+        .searchable(text: $searchQuery, prompt: "Search books, series, genres, or highlights")
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.hard, for: .top)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
@@ -470,6 +548,7 @@ struct BooksView: View {
         var unread = 0
         var finished = 0
         var quickReads = 0
+        var physical = 0
         var pdf = 0
         var epub = 0
         var onDevice = 0
@@ -483,7 +562,8 @@ struct BooksView: View {
                 unread += 1
             }
             if book.isQuickRead { quickReads += 1 }
-            if book.format == .pdf { pdf += 1 }
+            if book.format == .physical { physical += 1 }
+            else if book.format == .pdf { pdf += 1 }
             else if book.format == .epub { epub += 1 }
             if checkOnDevice && library.isOnDevice(book) { onDevice += 1 }
         }
@@ -493,6 +573,7 @@ struct BooksView: View {
             .unread: unread,
             .finished: finished,
             .quickReads: quickReads,
+            .physical: physical,
             .pdf: pdf,
             .epub: epub,
         ]
@@ -800,7 +881,7 @@ private struct BookEditorialList: View {
                     Haptics.impact(.light)
                     openBook(book.id, from: CoverSource(context: coverContext, bookID: book.id))
                 } label: {
-                    Text(inProgress ? "Read" : "Open")
+                    Text(book.isPhysical ? "Log" : (inProgress ? "Read" : "Open"))
                         .font(.chickenUI(12, weight: .semibold))
                         .foregroundStyle(inProgress ? palette.text : palette.muted)
                         .padding(.horizontal, 13)
@@ -809,7 +890,7 @@ private struct BookEditorialList: View {
                         .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Read \(book.displayTitle)")
+                .accessibilityLabel(book.isPhysical ? "Log progress for \(book.displayTitle)" : "Read \(book.displayTitle)")
             }
         }
         .padding(.horizontal, 16)

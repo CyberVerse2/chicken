@@ -138,7 +138,7 @@ public enum BookDiscovery {
         case .pdf: score += 34
         case .text: score += 20
         case .document: score += 10
-        case .unknown: break
+        case .physical, .unknown: break
         }
 
         if let pageCount = metadata.pageCount {

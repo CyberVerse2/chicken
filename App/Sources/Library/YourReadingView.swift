@@ -2,11 +2,11 @@ import ChickenKit
 import SwiftData
 import SwiftUI
 
-struct YourReadingView: View {
+struct ProfileView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(AppRouter.self) private var router
     @Environment(\.palette) private var palette
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @Environment(\.openBook) private var openBook
     @Query(filter: #Predicate<Book> { $0.finishedAt != nil }, sort: \Book.finishedAt, order: .reverse)
     private var finished: [Book]
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var allBooks: [Book]
@@ -20,16 +20,28 @@ struct YourReadingView: View {
         finished.filter { $0.finishedAt.map { Calendar.current.component(.year, from: $0) == currentYear } ?? false }
     }
 
+    private var physicalCount: Int {
+        allBooks.filter(\.isPhysical).count
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                PageHeader(title: "Your Reading")
-                    .padding(.horizontal, gutter)
+                PageHeader(
+                    title: "Profile",
+                    subtitle: physicalCount > 0
+                        ? "\(allBooks.count) books · \(physicalCount) print · \(highlights.count) highlights"
+                        : "\(allBooks.count) books · \(highlights.count) highlights"
+                )
+                .padding(.horizontal, gutter)
 
                 timeRead
                     .padding(.horizontal, gutter)
 
                 YearGoalCard(finished: finishedThisYear, goal: library.preferences.annualBookGoal)
+                    .padding(.horizontal, gutter)
+
+                notebookCard
                     .padding(.horizontal, gutter)
 
                 if !finishedThisYear.isEmpty {
@@ -38,11 +50,6 @@ struct YourReadingView: View {
 
                 if hasTasteData {
                     ReadingTasteCard(books: allBooks)
-                        .padding(.horizontal, gutter)
-                }
-
-                if let highlight = highlights.first, let book = highlight.book {
-                    latest(highlight, in: book)
                         .padding(.horizontal, gutter)
                 }
 
@@ -58,8 +65,77 @@ struct YourReadingView: View {
         .scrollEdgeEffectStyle(.hard, for: .top)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(palette.background.ignoresSafeArea())
-        .pageTitle("Your Reading")
+        .pageTitle("Profile")
+        .toolbar {
+            ToolbarItemGroup(placement: LibraryToolbar.placement) {
+                Menu {
+                    Picker("Theme", selection: Binding(
+                        get: { library.preferences.theme },
+                        set: { library.preferences.theme = $0 }
+                    )) {
+                        ForEach(ReadingTheme.allCases) { theme in
+                            Label(theme.label, systemImage: theme.systemImage).tag(theme)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label("Theme", systemImage: library.preferences.theme.systemImage)
+                }
+
+                #if os(macOS)
+                SettingsLink {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                #else
+                Button("Settings", systemImage: "gearshape") {
+                    router.presentSheet(.settings)
+                }
+                #endif
+            }
+        }
         .task(id: library.readingSecondsToday / 60) { year = library.readingYear() }
+    }
+
+    private var notebookCard: some View {
+        NavigationLink {
+            NotebookView()
+        } label: {
+            GoalCard {
+                HStack(alignment: .center) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Notebook").chickenEyebrow(palette)
+                        Text(highlights.isEmpty ? "No highlights yet" : "\(highlights.count) saved \(highlights.count == 1 ? "highlight" : "highlights")")
+                            .font(.chickenUI(16, weight: .semibold))
+                            .foregroundStyle(palette.text)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(palette.muted)
+                }
+                if let highlight = highlights.first, let book = highlight.book {
+                    HStack(alignment: .top, spacing: 12) {
+                        Capsule()
+                            .fill(highlight.color.bar)
+                            .frame(width: 3)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(highlight.text)
+                                .font(.chickenSerif(15.5))
+                                .foregroundStyle(palette.text)
+                                .lineLimit(3)
+                                .multilineTextAlignment(.leading)
+                            Text("\(book.displayTitle) · \(highlight.createdAt.formatted(.dateTime.month(.abbreviated).day()))")
+                                .font(.chickenUI(12, weight: .medium))
+                                .foregroundStyle(palette.muted)
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.top, 4)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(TactilePressStyle(scale: 0.99))
     }
 
     private var timeRead: some View {
@@ -119,36 +195,6 @@ struct YourReadingView: View {
         if hours == 0 { return (seconds > 0 && minutes == 0 ? "<1" : "\(minutes)", "min") }
         if hours < 10 { return ("\(hours)h \(minutes)", "min") }
         return ("\(hours)", "hours")
-    }
-
-    private func latest(_ highlight: Highlight, in book: Book) -> some View {
-        Button {
-            openBook(book.id, jumpTo: JumpTarget(location: highlight.location, chapterIndex: highlight.chapterIndex))
-        } label: {
-            GoalCard {
-                Text("Latest highlight").chickenEyebrow(palette)
-                HStack(alignment: .top, spacing: 14) {
-                    Capsule()
-                        .fill(palette.ribbon)
-                        .frame(width: 3)
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(highlight.text)
-                            .font(.chickenSerif(sizeClass == .compact ? 17 : 18.5))
-                            .foregroundStyle(palette.text)
-                            .lineLimit(6)
-                            .multilineTextAlignment(.leading)
-                        Text("\(book.displayTitle) · \(highlight.createdAt.formatted(.dateTime.month(.abbreviated).day()))")
-                            .font(.chickenUI(12.5, weight: .medium))
-                            .foregroundStyle(palette.muted)
-                            .lineLimit(1)
-                    }
-                }
-                .fixedSize(horizontal: false, vertical: true)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(TactilePressStyle(scale: 0.99))
-        .accessibilityHint("Opens the book at this passage")
     }
 }
 

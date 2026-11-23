@@ -68,5 +68,7 @@
 	<false/>
 	<key>HardcoverAPIToken</key>
 	<string>$(HARDCOVER_API_TOKEN)</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Scan book ISBN barcodes to add physical books to your library.</string>
 </dict>
 </plist>

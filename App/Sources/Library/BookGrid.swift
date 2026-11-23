@@ -150,7 +150,12 @@ private struct BookContextMenu: ViewModifier {
     func body(content: Content) -> some View {
         content
             .contextMenu {
-                Button("Open", systemImage: "book") { openBook(book.id, from: source) }
+                Button(
+                    book.isPhysical ? "Log Progress" : "Open",
+                    systemImage: book.isPhysical ? "book.closed" : "book"
+                ) {
+                    openBook(book.id, from: source)
+                }
                 Button("Details", systemImage: "info.circle") {
                     router.showDetails(book.id, in: bookSequence, from: source)
                 }
@@ -166,7 +171,9 @@ private struct BookContextMenu: ViewModifier {
                     Button("Mark as Finished", systemImage: "checkmark.circle") { library.setFinished(true, for: book) }
                 }
                 CollectionMenuItem(book: book)
-                DownloadMenuItems(book: book)
+                if !book.isPhysical {
+                    DownloadMenuItems(book: book)
+                }
                 Divider()
                 Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
             } preview: {

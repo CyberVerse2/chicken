@@ -11,6 +11,7 @@ struct HomeView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
+    var onOpenProfile: (() -> Void)? = nil
 
     @State private var heroHue: CoverHue?
 
@@ -144,7 +145,7 @@ struct HomeView: View {
                         }
 
                         NavigationLink {
-                            YourReadingView()
+                            ProfileView()
                         } label: {
                             ReadingPulseStrip(
                                 finishedCount: s.finishedThisYearCount,
@@ -182,7 +183,7 @@ struct HomeView: View {
             heroHue = await CoverTintModifier.hue(for: hero, library: library)
         }
         .toolbar {
-            LibraryToolbar()
+            LibraryToolbar(onOpenProfile: onOpenProfile)
         }
     }
 }
@@ -237,6 +238,13 @@ private struct ReadingDeskStage: View {
     @State private var hovering = false
 
     private var isCompact: Bool { sizeClass == .compact }
+
+    private var heroPrimaryTitle: String {
+        if book.isPhysical {
+            return book.isFinished ? "Update Log" : "Log Progress"
+        }
+        return isContinuing ? "Continue Reading" : "Begin Reading"
+    }
 
     var body: some View {
         Group {
@@ -306,8 +314,8 @@ private struct ReadingDeskStage: View {
             GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 10) {
                     PrimaryHeroButton(
-                        title: isContinuing ? "Continue Reading" : "Begin Reading",
-                        systemImage: "arrow.right",
+                        title: heroPrimaryTitle,
+                        systemImage: book.isPhysical ? "book.closed" : "arrow.right",
                         height: 50,
                         action: onRead
                     )
@@ -363,8 +371,8 @@ private struct ReadingDeskStage: View {
 
                 HStack(spacing: 12) {
                     PrimaryHeroButton(
-                        title: isContinuing ? "Continue Reading" : "Begin Reading",
-                        systemImage: "arrow.right",
+                        title: heroPrimaryTitle,
+                        systemImage: book.isPhysical ? "book.closed" : "arrow.right",
                         height: 46,
                         action: onRead
                     )

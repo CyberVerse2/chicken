@@ -6,6 +6,7 @@ public enum BookFormat: String, Codable, CaseIterable, Hashable, Sendable {
     case epub
     case text
     case document
+    case physical
     case unknown
 
     public init(fileExtension: String) {
@@ -35,6 +36,7 @@ public enum BookFormat: String, Codable, CaseIterable, Hashable, Sendable {
         case .epub: return "EPUB"
         case .text: return "Text"
         case .document: return "Document"
+        case .physical: return "Print"
         case .unknown: return "File"
         }
     }
@@ -45,11 +47,13 @@ public enum BookFormat: String, Codable, CaseIterable, Hashable, Sendable {
         case .epub: return "text.book.closed"
         case .text: return "doc.plaintext"
         case .document: return "doc.text"
+        case .physical: return "book.closed"
         case .unknown: return "doc"
         }
     }
 
-    /// Whether the reader offers scroll / pages / spread flow controls.
+    public var isPhysical: Bool { self == .physical }
+
     public var supportsFlowModes: Bool { self == .pdf || self == .epub }
 }
 
@@ -247,7 +251,7 @@ public enum DocumentMetadataReader {
                 return .empty
             }
             return package.metadata
-        case .text, .document, .unknown:
+        case .text, .document, .physical, .unknown:
             return .empty
         }
     }
