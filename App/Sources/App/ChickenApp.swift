@@ -133,6 +133,75 @@ enum ActiveSheet: Identifiable, Equatable {
     }
 }
 
+enum LibraryScope: String, CaseIterable, Identifiable {
+    case all
+    case reading
+    case unread
+    case finished
+    case collections
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: "All"
+        case .reading: "Reading"
+        case .unread: "Unread"
+        case .finished: "Finished"
+        case .collections: "Collections"
+        }
+    }
+
+    func includes(_ book: Book) -> Bool {
+        switch self {
+        case .all, .collections: true
+        case .reading: book.progress > 0 && !book.isFinished
+        case .unread: book.progress == 0
+        case .finished: book.isFinished
+        }
+    }
+}
+
+enum LibrarySecondaryFilter: String, CaseIterable, Identifiable {
+    case none
+    case quickReads
+    case physical
+    case epub
+    case pdf
+    case onDevice
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .none: "All Formats"
+        case .quickReads: "Quick Reads"
+        case .physical: "Print"
+        case .epub: "EPUBs"
+        case .pdf: "PDFs"
+        case .onDevice: "On Device"
+        }
+    }
+
+    func includes(_ book: Book, in library: LibraryStore) -> Bool {
+        switch self {
+        case .none: true
+        case .quickReads: book.isQuickRead
+        case .physical: book.isPhysical
+        case .epub: book.format == .epub
+        case .pdf: book.format == .pdf
+        case .onDevice: library.isOnDevice(book)
+        }
+    }
+}
+
+struct LibraryNavigationRequest: Equatable {
+    var scope: LibraryScope?
+    var secondaryFilter: LibrarySecondaryFilter?
+    var facet: LibraryFacetFilter?
+    var collectionID: String?
+}
+
 enum LibraryFacetFilter: Equatable, Hashable {
     case genre(String)
     case author(String)
@@ -175,8 +244,23 @@ final class AppRouter {
     var showingImporter = false
     var pendingDestination: ChickenLink.Destination?
     var pendingLibraryPlace: ChickenNotifications.Place?
+    var pendingLibraryRequest: LibraryNavigationRequest?
     var libraryFacet: LibraryFacetFilter?
     var pendingJumps: [UUID: JumpTarget] = [:]
+
+    func openLibrary(
+        scope: LibraryScope? = nil,
+        secondaryFilter: LibrarySecondaryFilter? = nil,
+        facet: LibraryFacetFilter? = nil,
+        collectionID: String? = nil
+    ) {
+        pendingLibraryRequest = LibraryNavigationRequest(
+            scope: scope,
+            secondaryFilter: secondaryFilter,
+            facet: facet,
+            collectionID: collectionID
+        )
+    }
 
     func showDetails(_ id: UUID, in sequence: [UUID] = [], from source: CoverSource? = nil) {
         let resolved = sequence.contains(id) ? sequence : [id]

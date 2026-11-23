@@ -7,6 +7,7 @@ enum AppTab: Hashable {
     case home
     case library
     case profile
+    case search
     case book(UUID)
 }
 
@@ -25,7 +26,8 @@ struct LibraryRootView: View {
     #if os(iOS)
     @State private var pendingReaderFromDossier: ReaderPresentation?
     #endif
-    @AppStorage("Chicken.libraryFilter") private var libraryFilter: LibraryFilter = .all
+    @AppStorage("Chicken.libraryScope") private var libraryScope: LibraryScope = .all
+    @AppStorage("Chicken.librarySecondaryFilter") private var librarySecondaryFilter: LibrarySecondaryFilter = .none
     @AppStorage("Chicken.librarySort") private var librarySort: LibrarySort = .recent
     @AppStorage("Chicken.libraryCollection") private var libraryCollection = ""
     @Namespace private var coverNamespace
@@ -95,6 +97,11 @@ struct LibraryRootView: View {
                 guard let place = router.pendingLibraryPlace else { return }
                 router.pendingLibraryPlace = nil
                 showLibrary(place)
+            }
+            .onChange(of: router.pendingLibraryRequest, initial: true) {
+                guard let request = router.pendingLibraryRequest else { return }
+                router.pendingLibraryRequest = nil
+                applyLibraryRequest(request)
             }
             .onChange(of: router.libraryFacet) { _, facet in
                 if facet != nil { tab = .library }
@@ -194,6 +201,7 @@ struct LibraryRootView: View {
                 case .home: NavigationStack { HomeView { tab = .profile } }
                 case .library: NavigationStack { BooksView() }
                 case .profile: NavigationStack { ProfileView() }
+                case .search: NavigationStack { LibrarySearchView() }
                 case .book(let id): NavigationStack { BookDossierView(bookID: id, isPage: true) }.id(id)
                 }
             }
@@ -208,6 +216,9 @@ struct LibraryRootView: View {
             }
             Tab("Profile", systemImage: "person.crop.circle", value: AppTab.profile) {
                 NavigationStack { ProfileView() }
+            }
+            Tab(value: AppTab.search, role: .search) {
+                NavigationStack { LibrarySearchView() }
             }
             if sizeClass == .regular && !reading.isEmpty {
                 TabSection("Reading") {
@@ -229,7 +240,7 @@ struct LibraryRootView: View {
         .tabViewSidebarBottomBar { SidebarTodayMeter { tab = .profile } }
         .modifier(NowReadingAccessoryModifier(
             book: reading.first,
-            isEnabled: sizeClass == .compact && (tab == .library || tab == .profile) && router.presentedReader == nil && reading.first != nil,
+            isEnabled: sizeClass == .compact && tab != .search && router.presentedReader == nil && reading.first != nil,
             onOpen: { book in
                 Haptics.impact(.light)
                 open(book.id)
@@ -241,14 +252,28 @@ struct LibraryRootView: View {
     private func showLibrary(_ place: ChickenNotifications.Place) {
         switch place {
         case .downloadedBooks:
-            libraryFilter = .onDevice
+            libraryScope = .all
+            librarySecondaryFilter = .onDevice
             libraryCollection = ""
+            router.libraryFacet = nil
             router.presentedReader = nil
             router.dismissDetails()
             tab = .library
         case .settings:
             router.presentSheet(.settings)
         }
+    }
+
+    private func applyLibraryRequest(_ request: LibraryNavigationRequest) {
+        if let scope = request.scope {
+            libraryScope = scope
+        }
+        librarySecondaryFilter = request.secondaryFilter ?? .none
+        router.libraryFacet = request.facet
+        libraryCollection = request.collectionID ?? ""
+        router.presentedReader = nil
+        router.dismissDetails()
+        tab = .library
     }
 
     private func select(_ id: UUID, in sequence: [UUID], from source: CoverSource?) {
@@ -346,9 +371,6 @@ private extension URL {
 }
 
 struct LibraryToolbar: ToolbarContent {
-    @Environment(AppRouter.self) private var router
-    var onOpenProfile: (() -> Void)? = nil
-
     var body: some ToolbarContent {
         #if os(macOS)
         ToolbarSpacer(.flexible)
@@ -358,11 +380,6 @@ struct LibraryToolbar: ToolbarContent {
                 AddBooksMenuItems()
             } label: {
                 Label("Add Books", systemImage: "plus")
-            }
-
-            if let onOpenProfile {
-                Button("Profile", systemImage: "person.crop.circle", action: onOpenProfile)
-                    .accessibilityLabel("Profile")
             }
         }
     }
@@ -458,56 +475,34 @@ private struct NowReadingAccessoryModifier: ViewModifier {
 
 private struct NowReadingTabBarAccessory: View {
     @Environment(\.palette) private var palette
-    @Environment(\.tabViewBottomAccessoryPlacement) private var placement
     let book: Book
     let onOpen: () -> Void
 
-    private var isInline: Bool { placement == .inline }
-
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: isInline ? 8 : 11) {
+            HStack(spacing: 10) {
                 BookCover(book: book, style: .mini)
-                    .frame(width: isInline ? 18 : 23, height: isInline ? 27 : 34)
-                    .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .frame(width: 20, height: 30)
+                    .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
                     .shadow(color: palette.shadow, radius: 1.5, x: 0, y: 1)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(book.displayTitle)
-                        .font(.chickenUI(isInline ? 13 : 14, weight: .semibold))
-                        .foregroundStyle(palette.text)
-                        .lineLimit(1)
-                    if !isInline {
-                        HStack(spacing: 5) {
-                            Text("\(Int((book.progress * 100).rounded()))%")
-                                .font(.chickenMono(11.5, weight: .semibold))
-                                .foregroundStyle(palette.ribbon)
-                            if let chapter = book.lastChapterTitle, !chapter.isEmpty, chapter != book.title {
-                                Text("·")
-                                    .foregroundStyle(palette.faint)
-                                Text(chapter)
-                                    .font(.chickenUI(11.5))
-                                    .foregroundStyle(palette.muted)
-                                    .lineLimit(1)
-                            } else if let author = book.author, !author.isEmpty {
-                                Text("·")
-                                    .foregroundStyle(palette.faint)
-                                Text(author)
-                                    .font(.chickenSerif(12, italic: true))
-                                    .foregroundStyle(palette.muted)
-                                    .lineLimit(1)
-                            }
-                        }
-                    }
-                }
+                Text(book.displayTitle)
+                    .font(.chickenUI(13.5, weight: .semibold))
+                    .foregroundStyle(palette.text)
+                    .lineLimit(1)
 
-                Spacer(minLength: 4)
+                Spacer(minLength: 6)
+
+                Text("\(Int((book.progress * 100).rounded()))%")
+                    .font(.chickenMono(11.5, weight: .semibold))
+                    .foregroundStyle(palette.ribbon)
+                    .monospacedDigit()
 
                 Image(systemName: "arrow.right")
-                    .font(.system(size: isInline ? 12 : 13, weight: .semibold))
+                    .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(palette.muted)
             }
-            .padding(.horizontal, isInline ? 12 : 16)
+            .padding(.horizontal, 14)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

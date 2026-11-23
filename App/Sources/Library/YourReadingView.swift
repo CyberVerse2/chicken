@@ -28,15 +28,13 @@ struct ProfileView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                HStack(alignment: .top, spacing: 10) {
-                    PageHeader(
-                        title: "Profile",
-                        subtitle: physicalCount > 0
-                            ? "\(allBooks.count) books · \(physicalCount) print · \(highlights.count) highlights"
-                            : "\(allBooks.count) books · \(highlights.count) highlights"
-                    )
+                ChickenScreenHeader(
+                    title: "Profile",
+                    subtitle: physicalCount > 0
+                        ? "\(allBooks.count) books · \(physicalCount) print · \(highlights.count) highlights"
+                        : "\(allBooks.count) books · \(highlights.count) highlights"
+                ) {
                     #if !os(macOS)
-                    Spacer(minLength: 8)
                     GlassEffectContainer(spacing: 8) {
                         HStack(spacing: 8) {
                             CircularGlassMenu(title: "Theme", systemImage: library.preferences.theme.systemImage) {
@@ -60,7 +58,6 @@ struct ProfileView: View {
                             }
                         }
                     }
-                    .padding(.top, 4)
                     #endif
                 }
                 .padding(.horizontal, gutter)
