@@ -21,8 +21,17 @@ struct HomeView: View {
         books.first { $0.lastOpenedAt != nil && !$0.isFinished }
     }
 
+    private var unfinishedByRecent: [Book] {
+        books
+            .filter { !$0.isFinished }
+            .sorted { lhs, rhs in
+                if lhs.importedAt != rhs.importedAt { return lhs.importedAt > rhs.importedAt }
+                return lhs.title < rhs.title
+            }
+    }
+
     private var featuredBook: Book? {
-        activeBook ?? upNext.first ?? books.first
+        activeBook ?? unfinishedByRecent.first ?? books.first
     }
 
     private var deskBooks: [Book] {
@@ -30,13 +39,8 @@ struct HomeView: View {
     }
 
     private var upNext: [Book] {
-        let excluded = Set(([featuredBook].compactMap { $0?.id }) + deskBooks.map(\.id))
-        let candidates = books.filter { !excluded.contains($0.id) && !$0.isFinished }
-        let ordered = candidates.sorted { lhs, rhs in
-            if lhs.importedAt != rhs.importedAt { return lhs.importedAt > rhs.importedAt }
-            return lhs.title < rhs.title
-        }
-        return Array(ordered.prefix(16))
+        let excluded = Set(([featuredBook?.id].compactMap { $0 }) + deskBooks.map(\.id))
+        return Array(unfinishedByRecent.filter { !excluded.contains($0.id) }.prefix(16))
     }
 
     private var finishedThisYear: [Book] {
