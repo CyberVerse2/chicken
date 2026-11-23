@@ -75,6 +75,19 @@ struct BookDossierView: View {
                     if let summary = book.summary, !summary.isEmpty {
                         summarySection(summary)
                             .padding(.horizontal, isCompact ? 20 : 32)
+                    } else {
+                        Button {
+                            showingMetadataMatch = true
+                        } label: {
+                            Label("Fetch Synopsis & Details", systemImage: "sparkles.rectangle.stack")
+                                .font(.chickenUI(13, weight: .semibold))
+                                .foregroundStyle(palette.ribbon)
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 9)
+                                .chickenGlass(in: Capsule(), interactive: true)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.horizontal, isCompact ? 20 : 32)
                     }
                     if ReadingCompanion.isAvailable && (book.progress > 0.05 || (book.summary ?? "").isEmpty) {
                         companionSection(for: book)

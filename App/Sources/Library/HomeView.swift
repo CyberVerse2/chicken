@@ -752,7 +752,7 @@ struct ActivityToast: View {
     }
 
     private var isWorking: Bool {
-        library.importState.isImporting || library.coverRefreshState.isRefreshing
+        library.importState.isImporting || library.coverRefreshState.isRefreshing || library.catalogEnrichState.isEnriching
     }
 
     private var message: String? {
@@ -770,6 +770,15 @@ struct ActivityToast: View {
             return "Refreshing covers \(completed) of \(total)"
         case .finished(let refreshed):
             return "Refreshed \(refreshed) covers"
+        case .idle:
+            break
+        }
+        switch library.catalogEnrichState {
+        case .enriching(let completed, let total):
+            return "Fetching metadata \(completed) of \(total)"
+        case .finished(let updated):
+            guard updated > 0 else { return nil }
+            return updated == 1 ? "Updated 1 book" : "Updated \(updated) books"
         case .idle:
             return nil
         }

@@ -118,6 +118,9 @@ struct LibraryRootView: View {
                 try? await Task.sleep(for: .milliseconds(600))
                 guard !Task.isCancelled else { return }
                 EPUBWebViewPool.shared.warmUpIfNeeded()
+                try? await Task.sleep(for: .milliseconds(900))
+                guard !Task.isCancelled else { return }
+                library.scheduleCatalogEnrichmentIfNeeded()
             }
     }
 

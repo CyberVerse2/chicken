@@ -29,6 +29,7 @@ final class Book {
     /// Set once cover/metadata extraction has been attempted, so launches
     /// don't keep re-parsing books that have no embedded cover.
     var derivedDataChecked: Bool = false
+    var catalogChecked: Bool = false
     var lastLocation: String?
     /// Title of the chapter at `lastLocation`, recorded by the reader so
     /// Home can say where you are without opening the book.

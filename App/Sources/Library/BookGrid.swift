@@ -143,6 +143,7 @@ private struct BookContextMenu: ViewModifier {
     @Environment(\.bookSequence) private var bookSequence
     let book: Book
     @State private var confirmingRemoval = false
+    @State private var showingMetadataMatch = false
 
     private var source: CoverSource { CoverSource(context: coverContext, bookID: book.id) }
 
@@ -152,6 +153,9 @@ private struct BookContextMenu: ViewModifier {
                 Button("Open", systemImage: "book") { openBook(book.id, from: source) }
                 Button("Details", systemImage: "info.circle") {
                     router.showDetails(book.id, in: bookSequence, from: source)
+                }
+                Button("Match Metadata…", systemImage: "text.magnifyingglass") {
+                    showingMetadataMatch = true
                 }
                 Divider()
                 if book.progress > 0 {
@@ -175,6 +179,13 @@ private struct BookContextMenu: ViewModifier {
                 Button("Remove", role: .destructive) { library.delete(book) }
             } message: {
                 Text("Chicken's copy, highlights, and bookmarks for this book will be deleted. The original file is not affected.")
+            }
+            .sheet(isPresented: $showingMetadataMatch) {
+                NavigationStack {
+                    BookMetadataMatchSheet(book: book)
+                        .environment(library)
+                }
+                .readingTheme(library.preferences.theme)
             }
     }
 }
