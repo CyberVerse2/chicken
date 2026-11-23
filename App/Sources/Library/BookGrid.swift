@@ -73,19 +73,23 @@ private struct BookTile: View {
                     #endif
                     .coverRibbon(inProgress)
 
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(book.displayTitle)
-                        .font(.chickenUI(sizeClass == .compact ? 13.5 : 14.5, weight: .semibold))
-                        .foregroundStyle(palette.text)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                    if book.coverImageName == nil, let author = book.author, !author.isEmpty {
-                        Text(author)
-                            .font(.chickenUI(sizeClass == .compact ? 12 : 13))
-                            .foregroundStyle(palette.muted)
-                            .lineLimit(1)
+                if book.coverImageName == nil || book.isFinished || book.progress > 0 {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if book.coverImageName == nil {
+                            Text(book.displayTitle)
+                                .font(.chickenUI(sizeClass == .compact ? 13.5 : 14.5, weight: .semibold))
+                                .foregroundStyle(palette.text)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                            if let author = book.author, !author.isEmpty {
+                                Text(author)
+                                    .font(.chickenUI(sizeClass == .compact ? 12 : 13))
+                                    .foregroundStyle(palette.muted)
+                                    .lineLimit(1)
+                            }
+                        }
+                        status
                     }
-                    status
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

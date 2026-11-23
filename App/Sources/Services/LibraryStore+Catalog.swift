@@ -3,7 +3,7 @@ import Foundation
 import SwiftData
 
 extension LibraryStore {
-    static let currentCatalogEnrichVersion = 2
+    static let currentCatalogEnrichVersion = 3
 
     func applyCatalogMatch(
         _ rawMatch: BookCatalogMatch,
@@ -23,7 +23,7 @@ extension LibraryStore {
                 staleCoverFiles = storedFiles(of: book).filter { $0.lastPathComponent == existingName }
             }
             if let data = await BookCatalogClient.shared.downloadCoverData(from: coverURL) {
-                downloadedCoverName = await Self.encodeCoverData(data, bookID: book.id, directory: coversDirectory)
+                downloadedCoverName = await Self.encodeCoverData(data, bookID: UUID(), directory: coversDirectory)
             }
         }
 
@@ -180,7 +180,7 @@ extension LibraryStore {
             return EnrichmentWork(
                 id: book.id,
                 query: BookCatalogQuery(title: book.displayTitle, author: book.author, isbn: book.isbn),
-                needsCover: !book.hasCatalogCover || book.coverImageName == nil,
+                needsCover: !book.hasCatalogCover || book.coverImageName == nil || Self.hasLegacyCoverName(book),
                 hadExistingCover: book.coverImageName != nil,
                 fileURL: localURL,
                 format: book.format
@@ -195,55 +195,71 @@ extension LibraryStore {
             var completed = 0
             var updated = 0
             var unsavedUpdates = 0
-            for (index, item) in items.enumerated() {
-                if Task.isCancelled { return }
-                if index > 0 {
-                    try? await Task.sleep(for: .milliseconds(400))
-                    if Task.isCancelled { return }
-                }
-                let result = await Self.fetchEnrichment(item: item, token: token, coversDirectory: coversDirectory)
-                guard !Task.isCancelled, let self else { return }
-                completed += 1
-                var staleFilesToRemove: [URL] = []
-                if let book = self.book(id: item.id) {
-                    var didUpdate = false
-                    if let extractedISBN = result.extractedISBN, (book.isbn ?? "").isEmpty {
-                        book.isbn = extractedISBN
-                        didUpdate = true
+
+            await withTaskGroup(of: EnrichmentResult.self) { group in
+                var iterator = items.makeIterator()
+                for _ in 0..<min(3, items.count) {
+                    if let first = iterator.next() {
+                        group.addTask {
+                            await Self.fetchEnrichment(item: first, token: token, coversDirectory: coversDirectory)
+                        }
                     }
-                    if let match = result.match {
-                        if self.applyMissingCatalogFields(match, to: book) {
+                }
+
+                for await result in group {
+                    guard !Task.isCancelled, let self else {
+                        group.cancelAll()
+                        return
+                    }
+                    completed += 1
+                    var staleFilesToRemove: [URL] = []
+                    if let book = self.book(id: result.id) {
+                        var didUpdate = false
+                        if let extractedISBN = result.extractedISBN, (book.isbn ?? "").isEmpty {
+                            book.isbn = extractedISBN
                             didUpdate = true
                         }
-                        if let coverName = result.coverImageName {
-                            if let existingName = book.coverImageName, existingName != coverName {
-                                staleFilesToRemove = self.storedFiles(of: book).filter { $0.lastPathComponent == existingName }
+                        if let match = result.match {
+                            if self.applyMissingCatalogFields(match, to: book) {
+                                didUpdate = true
                             }
-                            book.coverImageName = coverName
-                            book.hasCatalogCover = true
-                            CoverImageCache.shared.invalidate()
-                            self.coversGeneration += 1
-                            didUpdate = true
+                            if let coverName = result.coverImageName {
+                                if let existingName = book.coverImageName, existingName != coverName {
+                                    staleFilesToRemove = self.storedFiles(of: book).filter { $0.lastPathComponent == existingName }
+                                }
+                                book.coverImageName = coverName
+                                book.hasCatalogCover = true
+                                CoverImageCache.shared.invalidate()
+                                self.coversGeneration += 1
+                                didUpdate = true
+                            }
+                        }
+                        if markChecked {
+                            book.catalogChecked = true
+                            book.catalogEnrichVersion = Self.currentCatalogEnrichVersion
+                        }
+                        if didUpdate {
+                            updated += 1
+                            unsavedUpdates += 1
+                            if unsavedUpdates >= 3 {
+                                unsavedUpdates = 0
+                                self.save()
+                            }
                         }
                     }
-                    if markChecked {
-                        book.catalogChecked = true
-                        book.catalogEnrichVersion = Self.currentCatalogEnrichVersion
+                    if !staleFilesToRemove.isEmpty {
+                        await CloudFolders.removeAll(staleFilesToRemove)
                     }
-                    if didUpdate {
-                        updated += 1
-                        unsavedUpdates += 1
-                        if unsavedUpdates >= 3 {
-                            unsavedUpdates = 0
-                            self.save()
+                    self.catalogEnrichState = .enriching(completed: completed, total: items.count)
+
+                    if let next = iterator.next(), !Task.isCancelled {
+                        group.addTask {
+                            await Self.fetchEnrichment(item: next, token: token, coversDirectory: coversDirectory)
                         }
                     }
                 }
-                if !staleFilesToRemove.isEmpty {
-                    await CloudFolders.removeAll(staleFilesToRemove)
-                }
-                self.catalogEnrichState = .enriching(completed: completed, total: items.count)
             }
+
             guard !Task.isCancelled, let self else { return }
             if unsavedUpdates > 0 || markChecked {
                 self.save()
@@ -324,6 +340,10 @@ extension LibraryStore {
         return didUpdate
     }
 
+    private static func hasLegacyCoverName(_ book: Book) -> Bool {
+        book.catalogEnrichVersion < currentCatalogEnrichVersion && book.coverImageName == "\(book.id.uuidString).jpg"
+    }
+
     private static func needsCatalogEnrichment(_ book: Book) -> Bool {
         (book.summary ?? "").isEmpty
             || (book.author ?? "").isEmpty
@@ -331,6 +351,7 @@ extension LibraryStore {
             || (book.pageCount ?? 0) <= 0
             || book.coverImageName == nil
             || !book.hasCatalogCover
+            || hasLegacyCoverName(book)
             || book.releaseYear == nil
             || book.genres.isEmpty
     }
@@ -345,7 +366,7 @@ extension LibraryStore {
         item: EnrichmentWork,
         token: String?,
         coversDirectory: URL
-    ) async -> (match: BookCatalogMatch?, coverImageName: String?, extractedISBN: String?) {
+    ) async -> EnrichmentResult {
         var query = item.query
         var extractedISBN: String?
         if query.isbn == nil, let url = item.fileURL {
@@ -353,20 +374,20 @@ extension LibraryStore {
             query.isbn = extractedISBN
         }
         guard let match = await BookCatalogClient.shared.bestMatch(for: query, hardcoverToken: token) else {
-            return (nil, nil, extractedISBN)
+            return EnrichmentResult(id: item.id, match: nil, coverImageName: nil, extractedISBN: extractedISBN)
         }
         var coverName: String?
         if item.needsCover, let coverURL = match.coverURL,
            let data = await BookCatalogClient.shared.downloadCoverData(from: coverURL) {
             coverName = CoverRenderer.saveCover(
                 from: data,
-                id: item.id,
+                id: UUID(),
                 in: coversDirectory,
                 minWidth: item.hadExistingCover ? 200 : 80,
                 minHeight: item.hadExistingCover ? 260 : 80
             )
         }
-        return (match, coverName, extractedISBN)
+        return EnrichmentResult(id: item.id, match: match, coverImageName: coverName, extractedISBN: extractedISBN)
     }
 
     @discardableResult
@@ -584,4 +605,11 @@ nonisolated private struct EnrichmentWork: Sendable {
     let hadExistingCover: Bool
     let fileURL: URL?
     let format: BookFormat
+}
+
+nonisolated private struct EnrichmentResult: Sendable {
+    let id: UUID
+    let match: BookCatalogMatch?
+    let coverImageName: String?
+    let extractedISBN: String?
 }

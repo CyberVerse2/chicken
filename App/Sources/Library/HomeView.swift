@@ -261,30 +261,37 @@ private struct ReadingDeskStage: View {
             sculptedCover(width: 158)
                 .padding(.bottom, 22)
 
-            VStack(spacing: 5) {
-                if let seriesBadge = book.seriesBadgeText {
-                    Text(seriesBadge)
-                        .chickenEyebrow(palette, color: palette.ribbon)
-                        .lineLimit(1)
-                }
-                Text(book.displayTitle)
-                    .font(.chickenDisplay(24))
-                    .tracking(-0.5)
-                    .foregroundStyle(palette.text)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.82)
-                    .fixedSize(horizontal: false, vertical: true)
+            if book.coverImageName == nil {
+                VStack(spacing: 5) {
+                    if let seriesBadge = book.seriesBadgeText {
+                        Text(seriesBadge)
+                            .chickenEyebrow(palette, color: palette.ribbon)
+                            .lineLimit(1)
+                    }
+                    Text(book.displayTitle)
+                        .font(.chickenDisplay(24))
+                        .tracking(-0.5)
+                        .foregroundStyle(palette.text)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                if let author = book.author, !author.isEmpty {
-                    Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
-                        .font(.chickenSerif(15.5, italic: true))
-                        .foregroundStyle(palette.muted)
-                        .lineLimit(1)
+                    if let author = book.author, !author.isEmpty {
+                        Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
+                            .font(.chickenSerif(15.5, italic: true))
+                            .foregroundStyle(palette.muted)
+                            .lineLimit(1)
+                    }
                 }
+                .frame(maxWidth: 300)
+                .padding(.bottom, 16)
+            } else if let seriesBadge = book.seriesBadgeText {
+                Text(seriesBadge)
+                    .chickenEyebrow(palette, color: palette.ribbon)
+                    .lineLimit(1)
+                    .padding(.bottom, 12)
             }
-            .frame(maxWidth: 300)
-            .padding(.bottom, 16)
 
             if isContinuing {
                 VStack(spacing: 7) {
@@ -342,25 +349,27 @@ private struct ReadingDeskStage: View {
                 if let seriesBadge = book.seriesBadgeText {
                     Text(seriesBadge)
                         .chickenEyebrow(palette, color: palette.ribbon)
-                        .padding(.bottom, 6)
+                        .padding(.bottom, book.coverImageName == nil ? 6 : 14)
                 }
-                Text(book.displayTitle)
-                    .font(.chickenDisplay(38))
-                    .tracking(-0.9)
-                    .foregroundStyle(palette.text)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.75)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.bottom, 6)
+                if book.coverImageName == nil {
+                    Text(book.displayTitle)
+                        .font(.chickenDisplay(38))
+                        .tracking(-0.9)
+                        .foregroundStyle(palette.text)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.75)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 6)
 
-                if let author = book.author, !author.isEmpty {
-                    Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
-                        .font(.chickenSerif(18, italic: true))
-                        .foregroundStyle(palette.muted)
-                        .lineLimit(1)
-                        .padding(.bottom, 24)
-                } else {
-                    Spacer().frame(height: 18)
+                    if let author = book.author, !author.isEmpty {
+                        Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
+                            .font(.chickenSerif(18, italic: true))
+                            .foregroundStyle(palette.muted)
+                            .lineLimit(1)
+                            .padding(.bottom, 24)
+                    } else {
+                        Spacer().frame(height: 18)
+                    }
                 }
 
                 if isContinuing {
@@ -654,28 +663,32 @@ private struct ShelfItem: View {
                     .offset(y: hovering && !reduceMotion ? -4 : 0)
                     #endif
                     .coverRibbon(inProgress)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(book.displayTitle)
-                        .font(.chickenUI(13.5, weight: .semibold))
-                        .foregroundStyle(palette.text)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if book.coverImageName == nil, let author = book.author, !author.isEmpty {
-                        Text(author)
-                            .font(.chickenUI(12))
-                            .foregroundStyle(palette.muted)
-                            .lineLimit(1)
-                    }
-                    if showsProgress {
-                        HStack(spacing: 6) {
-                            ProgressLine(progress: book.progress, height: 2.5)
-                            Text("\(Int((book.progress * 100).rounded()))%")
-                                .font(.chickenMono(10.5, weight: .medium))
-                                .foregroundStyle(palette.ribbon)
-                                .fixedSize()
+                if book.coverImageName == nil || showsProgress {
+                    VStack(alignment: .leading, spacing: 2) {
+                        if book.coverImageName == nil {
+                            Text(book.displayTitle)
+                                .font(.chickenUI(13.5, weight: .semibold))
+                                .foregroundStyle(palette.text)
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                            if let author = book.author, !author.isEmpty {
+                                Text(author)
+                                    .font(.chickenUI(12))
+                                    .foregroundStyle(palette.muted)
+                                    .lineLimit(1)
+                            }
                         }
-                        .padding(.top, 3)
+                        if showsProgress {
+                            HStack(spacing: 6) {
+                                ProgressLine(progress: book.progress, height: 2.5)
+                                Text("\(Int((book.progress * 100).rounded()))%")
+                                    .font(.chickenMono(10.5, weight: .medium))
+                                    .foregroundStyle(palette.ribbon)
+                                    .fixedSize()
+                            }
+                            .padding(.top, 3)
+                        }
                     }
                 }
             }

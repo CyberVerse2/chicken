@@ -67,7 +67,7 @@ struct BookCover: View {
         let preset = CoverPreset.preset(for: book.coverTintIndex)
         let coverURL = library.coverURL(for: book)
         let cached = coverURL.flatMap { CoverImageCache.shared.cachedImage(for: $0, maxPixelSize: style.decodeSize) }
-        let cachedTextPage = (book.format == .pdf)
+        let cachedTextPage = (book.format == .pdf && !book.hasCatalogCover)
             ? (coverURL.flatMap { CoverImageCache.shared.cachedIsTextPage(at: $0) } ?? isTextPage)
             : false
         let shownImage = image ?? cached
@@ -103,7 +103,7 @@ struct BookCover: View {
                     return
                 }
                 if let hit = CoverImageCache.shared.cachedImage(for: url, maxPixelSize: style.decodeSize) {
-                    if book.format == .pdf {
+                    if book.format == .pdf && !book.hasCatalogCover {
                         isTextPage = await CoverImageCache.shared.isTextPage(hit, at: url)
                     } else if isTextPage {
                         isTextPage = false
@@ -112,7 +112,7 @@ struct BookCover: View {
                     return
                 }
                 let loaded = await CoverImageCache.shared.image(for: url, maxPixelSize: style.decodeSize)
-                if book.format == .pdf, let loaded {
+                if book.format == .pdf && !book.hasCatalogCover, let loaded {
                     isTextPage = await CoverImageCache.shared.isTextPage(loaded, at: url)
                 } else {
                     isTextPage = false
