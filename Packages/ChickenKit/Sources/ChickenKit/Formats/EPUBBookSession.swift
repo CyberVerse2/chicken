@@ -36,8 +36,9 @@ public final class EPUBBookSession: Sendable {
     private struct CacheState {
         var chapters: [Int: PreparedChapter] = [:]
         var chapterLRU: [Int] = []
-        var smallResources: [String: (Data, String)] = [:]
-        var smallResourceLRU: [String] = []
+        var resources: [String: (data: Data, mimeType: String)] = [:]
+        var resourceLRU: [String] = []
+        var resourceBytes: Int = 0
         var plainTexts: [Int: String] = [:]
     }
 
@@ -199,7 +200,7 @@ public final class EPUBBookSession: Sendable {
             state.chapters[index] = prepared
             state.chapterLRU.removeAll { $0 == index }
             state.chapterLRU.append(index)
-            if state.chapterLRU.count > 8 {
+            if state.chapterLRU.count > 16 {
                 let evicted = state.chapterLRU.removeFirst()
                 state.chapters.removeValue(forKey: evicted)
             }
@@ -211,23 +212,36 @@ public final class EPUBBookSession: Sendable {
         let trimmed = rawPath.hasPrefix("/") ? String(rawPath.dropFirst()) : rawPath
         let decoded = trimmed.removingPercentEncoding ?? trimmed
         let candidates = decoded == trimmed ? [trimmed] : [decoded, trimmed]
+        let maxSingleEntryBytes = 4 * 1024 * 1024
+        let maxTotalCacheBytes = 24 * 1024 * 1024
 
         for candidate in candidates {
-            if let cached = cache.withLock({ $0.smallResources[candidate] }) {
+            if let cached = cache.withLock({ state -> (Data, String)? in
+                guard let hit = state.resources[candidate] else { return nil }
+                state.resourceLRU.removeAll { $0 == candidate }
+                state.resourceLRU.append(candidate)
+                return hit
+            }) {
                 return cached
             }
             guard let entry = archive.entry(candidate),
                   let data = try? archive.data(for: entry)
             else { continue }
             let mime = mimeByPath[entry.path] ?? Self.mimeType(forPath: entry.path)
-            if data.count <= 256 * 1024 {
+            if data.count <= maxSingleEntryBytes {
                 cache.withLock { state in
-                    state.smallResources[candidate] = (data, mime)
-                    state.smallResourceLRU.removeAll { $0 == candidate }
-                    state.smallResourceLRU.append(candidate)
-                    if state.smallResourceLRU.count > 64 {
-                        let evicted = state.smallResourceLRU.removeFirst()
-                        state.smallResources.removeValue(forKey: evicted)
+                    if let previous = state.resources.removeValue(forKey: candidate) {
+                        state.resourceBytes -= previous.data.count
+                    }
+                    state.resources[candidate] = (data, mime)
+                    state.resourceBytes += data.count
+                    state.resourceLRU.removeAll { $0 == candidate }
+                    state.resourceLRU.append(candidate)
+                    while state.resourceBytes > maxTotalCacheBytes, !state.resourceLRU.isEmpty {
+                        let evictedKey = state.resourceLRU.removeFirst()
+                        if let evicted = state.resources.removeValue(forKey: evictedKey) {
+                            state.resourceBytes -= evicted.data.count
+                        }
                     }
                 }
             }
@@ -334,12 +348,12 @@ public final class EPUBBookSession: Sendable {
           <style>
             .chicken-spine-section { min-height: 60vh; padding-bottom: 3.2rem; margin-bottom: 2.6rem; }
           </style>
+          \(prepared.stylesHTML)
           <style id="chicken-reader-style">\(styleCSS)</style>
         </head>
         <body class="chicken-reader-body">
           <main id="chicken-stage">
             <section class="chicken-spine-section" id="chapter-\(clampedIndex)" data-chicken-spine-index="\(clampedIndex)">
-              \(prepared.stylesHTML)
               \(prepared.bodyHTML)
             </section>
           </main>

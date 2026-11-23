@@ -3,11 +3,11 @@ import SwiftUI
 
 struct ReaderProgressBar: View {
     @Environment(\.palette) private var palette
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let model: ReaderModel
     let compact: Bool
     @State private var dragProgress: Double?
     @State private var lastSeekTime: Date = .distantPast
+    @State private var trackWidth: CGFloat = 300
 
     private var shown: Double { min(1, max(0, dragProgress ?? model.overallProgress)) }
 
@@ -17,7 +17,6 @@ struct ReaderProgressBar: View {
                 .font(.chickenMono(11.5, weight: .semibold))
                 .foregroundStyle(palette.text)
                 .frame(minWidth: 32, alignment: .leading)
-                .contentTransition(.numericText())
 
             scrubber
 
@@ -25,7 +24,7 @@ struct ReaderProgressBar: View {
                 VStack(alignment: .trailing, spacing: 1.5) {
                     if !model.pageReadout.isEmpty {
                         Text(model.pageReadout)
-                            .font(model.isOnLastPage ? .chickenSerif(12, italic: true) : .chickenMono(11, weight: .medium))
+                            .font(model.isOnLastPageState ? .chickenSerif(12, italic: true) : .chickenMono(11, weight: .medium))
                             .foregroundStyle(palette.muted)
                     }
                     if !model.timeReadout.isEmpty {
@@ -43,72 +42,80 @@ struct ReaderProgressBar: View {
         .padding(.vertical, compact ? 8 : 10)
         .frame(maxWidth: 820)
         .chickenGlass(in: Capsule())
-        .animation(reduceMotion || dragProgress != nil ? nil : ChickenMotion.micro, value: shown)
     }
 
     private var scrubber: some View {
-        GeometryReader { geometry in
-            let width = max(geometry.size.width, 1)
-            let isDragging = dragProgress != nil
-            let thumbSize: CGFloat = isDragging ? 14 : 10
-            let trackOffset = (width - thumbSize) * shown
-            ZStack(alignment: .leading) {
-                HStack(spacing: 0) {
-                    ForEach(0..<18, id: \.self) { index in
-                        let fraction = Double(index) / 17.0
-                        Rectangle()
-                            .fill(fraction <= shown ? palette.ribbon.opacity(0.45) : palette.text.opacity(0.12))
-                            .frame(width: 1, height: index % 3 == 0 ? 5 : 3)
-                        if index < 17 { Spacer(minLength: 0) }
-                    }
-                }
-                .offset(y: 6)
-                .allowsHitTesting(false)
+        let isDragging = dragProgress != nil
+        let thumbSize: CGFloat = isDragging ? 14 : 10
+        let activeTickColor = palette.ribbon.opacity(0.45)
+        let inactiveTickColor = palette.text.opacity(0.12)
+        let trackColor = palette.text.opacity(0.14)
+        let ribbonColor = palette.ribbon
+        let thumbStrokeColor = palette.background.opacity(0.85)
 
-                Capsule().fill(palette.text.opacity(0.14)).frame(height: 3)
-                Capsule().fill(palette.ribbon).frame(width: max(thumbSize / 2, width * shown), height: 3)
-                Circle()
-                    .fill(palette.ribbon)
-                    .overlay(Circle().stroke(palette.background.opacity(0.85), lineWidth: 1.5))
-                    .frame(width: thumbSize, height: thumbSize)
-                    .overlay(alignment: .top) {
-                        if isDragging {
-                            Text("\(Int((shown * 100).rounded()))%")
-                                .font(.chickenMono(11.5, weight: .semibold))
-                                .foregroundStyle(palette.text)
-                                .padding(.horizontal, 9)
-                                .padding(.vertical, 4)
-                                .chickenGlass(in: Capsule())
-                                .fixedSize()
-                                .offset(y: -36)
-                                .allowsHitTesting(false)
-                        }
-                    }
-                    .offset(x: trackOffset)
+        return Canvas { context, size in
+            let width = max(size.width, 1)
+            let midY = size.height / 2
+            let tickCount = 18
+            let step = (width - 1) / Double(tickCount - 1)
+            let tickY = midY + 6
+            for index in 0..<tickCount {
+                let fraction = Double(index) / Double(tickCount - 1)
+                let h: CGFloat = index % 3 == 0 ? 5 : 3
+                let x = (Double(index) * step).rounded(.down)
+                let rect = CGRect(x: x, y: tickY - h / 2, width: 1, height: h)
+                context.fill(Path(rect), with: .color(fraction <= shown ? activeTickColor : inactiveTickColor))
             }
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        if dragProgress == nil { Haptics.selection() }
-                        let progress = min(1, max(0, value.location.x / width))
-                        dragProgress = progress
-                        let now = Date()
-                        if now.timeIntervalSince(lastSeekTime) >= 0.08 {
-                            lastSeekTime = now
-                            model.seek(to: progress)
-                        }
-                    }
-                    .onEnded { value in
-                        let finalProgress = min(1, max(0, value.location.x / width))
-                        model.seek(to: finalProgress)
-                        dragProgress = nil
-                        Haptics.impact(.light)
-                    }
-            )
+
+            let trackRect = CGRect(x: 0, y: midY - 1.5, width: width, height: 3)
+            context.fill(Path(roundedRect: trackRect, cornerRadius: 1.5), with: .color(trackColor))
+
+            let fillWidth = max(thumbSize / 2, width * shown)
+            let fillRect = CGRect(x: 0, y: midY - 1.5, width: fillWidth, height: 3)
+            context.fill(Path(roundedRect: fillRect, cornerRadius: 1.5), with: .color(ribbonColor))
+
+            let trackOffset = (width - thumbSize) * shown
+            let thumbRect = CGRect(x: trackOffset, y: midY - thumbSize / 2, width: thumbSize, height: thumbSize)
+            let thumbPath = Path(ellipseIn: thumbRect)
+            context.fill(thumbPath, with: .color(ribbonColor))
+            context.stroke(thumbPath, with: .color(thumbStrokeColor), lineWidth: 1.5)
         }
         .frame(height: 32)
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { trackWidth = max($0, 1) }
+        .overlay(alignment: .topLeading) {
+            if isDragging {
+                let pillOffset = (trackWidth - thumbSize) * shown - 12
+                Text("\(Int((shown * 100).rounded()))%")
+                    .font(.chickenMono(11.5, weight: .semibold))
+                    .foregroundStyle(palette.text)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .chickenGlass(in: Capsule())
+                    .fixedSize()
+                    .offset(x: max(0, min(trackWidth - 44, pillOffset)), y: -32)
+                    .allowsHitTesting(false)
+            }
+        }
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { value in
+                    if dragProgress == nil { Haptics.selection() }
+                    let progress = min(1, max(0, value.location.x / max(trackWidth, 1)))
+                    dragProgress = progress
+                    let now = Date()
+                    if now.timeIntervalSince(lastSeekTime) >= 0.08 {
+                        lastSeekTime = now
+                        model.seek(to: progress)
+                    }
+                }
+                .onEnded { value in
+                    let finalProgress = min(1, max(0, value.location.x / max(trackWidth, 1)))
+                    model.seek(to: finalProgress)
+                    dragProgress = nil
+                    Haptics.impact(.light)
+                }
+        )
         .accessibilityElement()
         .accessibilityLabel("Reading position")
         .accessibilityValue("\(Int((shown * 100).rounded())) percent")

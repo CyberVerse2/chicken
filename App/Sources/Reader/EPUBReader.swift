@@ -82,12 +82,24 @@ struct EPUBReader: PlatformViewRepresentable {
             self.webView = webView
             self.style = style
             self.onTapCenter = onTapCenter
+            applyWebViewBackground(hex: style.palette.backgroundHex)
             #if os(iOS)
             let observer = EPUBBoundarySwipeObserver(scrollView: webView.scrollView) { [weak self] delta in
                 self?.call("chicken.turnChapter", delta)
             }
             swipeObserver = observer
             updateScrollViewPaging(for: style.mode)
+            #endif
+        }
+
+        private func applyWebViewBackground(hex: UInt32) {
+            guard let webView else { return }
+            let color = PlatformColor.hex(hex)
+            webView.underPageBackgroundColor = color
+            #if !os(macOS)
+            webView.isOpaque = true
+            webView.backgroundColor = color
+            webView.scrollView.backgroundColor = color
             #endif
         }
 
@@ -280,6 +292,7 @@ struct EPUBReader: PlatformViewRepresentable {
         func applyStyle(preservePosition: Bool, themeOnly: Bool = false) {
             guard isReady, let style else { return }
             loadedStyle = style
+            applyWebViewBackground(hex: style.palette.backgroundHex)
             var config: [String: Any] = [
                 "background": ReaderPalette.css(style.palette.backgroundHex),
                 "textColor": ReaderPalette.css(style.palette.textHex),
@@ -385,11 +398,14 @@ struct EPUBReader: PlatformViewRepresentable {
             model.engineDidChangeChapter(index)
 
             let displayPage = message.page.map { $0 + 1 }
-            if model.totalPages != message.pageCount { model.totalPages = message.pageCount }
-            if model.currentPage != displayPage { model.currentPage = displayPage }
-            model.chapterProgress = message.sectionProgression
-            model.chapterPage = message.pageWithinSpine.map { $0 + 1 }
-            model.chapterPageCount = message.chapterPageCount
+            model.applyPosition(
+                totalPages: message.pageCount,
+                updateTotalPages: message.pageCount != nil,
+                currentPage: displayPage,
+                chapterProgress: message.sectionProgression,
+                chapterPage: message.pageWithinSpine.map { $0 + 1 },
+                chapterPageCount: message.chapterPageCount
+            )
 
             let location = EPUBLocation(
                 href: session.package.spine[index].locationHref,

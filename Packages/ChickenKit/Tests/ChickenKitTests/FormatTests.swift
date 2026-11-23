@@ -121,6 +121,26 @@ struct EPUBPackageTests {
         let mid = session.globalProgress(spineIndex: 1, localProgress: 0.5)
         let back = session.location(forGlobalProgress: mid)
         #expect(back.spineIndex == 1)
+
+        let initialHTML = session.initialDocumentHTML(chapterIndex: 0, styleCSS: "body{}", bootJSON: "{}")
+        let headRange = try #require(initialHTML.range(of: "</head>"))
+        let stylePos = try #require(initialHTML.range(of: "OEBPS/Styles/book.css"))
+        #expect(stylePos.upperBound <= headRange.lowerBound)
+    }
+
+    @Test func rewritesMixedCaseAndNonASCIIHTML() {
+        let html = #"<p>Straße İstanbul é</p><IMG SRC="../Images/front.jpg" alt="ß"/><a HREF="chapter2.xhtml#part">Next</a><svg><image XLINK:HREF="../Images/front.jpg"/></svg>"#
+        let rewritten = EPUBPublication.rewriteResourceURLs(
+            in: html,
+            directory: "OEBPS/Text",
+            spineIndexByPath: ["OEBPS/Text/chapter2.xhtml": 1],
+            injectLazyImages: true
+        )
+        #expect(rewritten.contains(#"SRC="OEBPS/Images/front.jpg""#))
+        #expect(rewritten.contains(#"loading="lazy" decoding="async""#))
+        #expect(rewritten.contains(##"HREF="#part" data-chicken-target-chapter="1""##))
+        #expect(rewritten.contains(#"XLINK:HREF="OEBPS/Images/front.jpg""#))
+        #expect(rewritten.contains("Straße İstanbul é"))
     }
 }
 

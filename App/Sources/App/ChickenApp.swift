@@ -34,16 +34,38 @@ struct ChickenApp: App {
         default: break
         }
         #endif
+        #if DEBUG && os(macOS)
+        if !(ProcessInfo.processInfo.environment["CHICKEN_SCROLL_BENCH"] ?? "").isEmpty {
+            Task { @MainActor in
+                ScrollBenchmarkRunner.shared.startIfRequested()
+            }
+        }
+        #endif
     }
 
     var body: some Scene {
         WindowGroup("Library", id: SceneID.library) {
+            #if DEBUG && os(macOS)
+            if !(ProcessInfo.processInfo.environment["CHICKEN_SCROLL_BENCH"] ?? "").isEmpty {
+                Color.clear
+                    .frame(width: 10, height: 10)
+                    .task { ScrollBenchmarkRunner.shared.startIfRequested() }
+            } else {
+                LibraryRootView()
+                    .environment(library)
+                    .environment(router)
+                    .modelContainer(library.container)
+                    .readingTheme(library.preferences.theme)
+                    .task { ChickenNotifications.shared.start(library: library) }
+            }
+            #else
             LibraryRootView()
                 .environment(library)
                 .environment(router)
                 .modelContainer(library.container)
                 .readingTheme(library.preferences.theme)
                 .task { ChickenNotifications.shared.start(library: library) }
+            #endif
         }
         #if os(macOS)
         .defaultSize(width: 1200, height: 820)

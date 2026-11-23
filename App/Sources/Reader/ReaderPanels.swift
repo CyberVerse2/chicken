@@ -32,9 +32,11 @@ struct ChaptersList: View {
             .background(palette.background.ignoresSafeArea())
             .onAppear { proxy.scrollTo(model.chapterIndex, anchor: .center) }
             .onChange(of: model.chapters.count) { proxy.scrollTo(model.chapterIndex, anchor: .center) }
-            .onChange(of: model.chapterIndex) { _, index in
+            .task(id: model.chapterIndex) {
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled else { return }
                 withAnimation(reduceMotion ? nil : ChickenMotion.micro) {
-                    proxy.scrollTo(index, anchor: .center)
+                    proxy.scrollTo(model.chapterIndex, anchor: .center)
                 }
             }
         }

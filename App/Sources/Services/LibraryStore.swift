@@ -58,7 +58,9 @@ final class LibraryStore {
     @ObservationIgnored var widgetTask: Task<Void, Never>?
     @ObservationIgnored var lastPublishedSnapshot: WidgetSnapshot?
     @ObservationIgnored var lastPublishedWidgetCoverURL: URL?
-    @ObservationIgnored var pendingProgress: (book: Book, progress: Double, location: String?)?
+    @ObservationIgnored var pendingProgress: (book: Book, progress: Double, location: String?, chapterTitle: String?)?
+    @ObservationIgnored var firstPendingProgressAt: ContinuousClock.Instant?
+    @ObservationIgnored var progressFlushDeadline: ContinuousClock.Instant?
     @ObservationIgnored var progressFlushTask: Task<Void, Never>?
     @ObservationIgnored var cloudWatcher: CloudFileWatcher?
     @ObservationIgnored var cloudConnectTask: Task<CloudFolders?, Never>?
@@ -249,45 +251,59 @@ final class LibraryStore {
         }
     }
 
-    /// Records where the reader is. Called on every page turn, so the book
-    /// itself is updated at most every 1.5 seconds: each change to it redraws
-    /// every view showing it (the library stays live behind the reader) and
-    /// queues it for iCloud. `save()` writes anything still waiting.
-    func updateProgress(for book: Book, progress: Double, location: String?) {
+    func updateProgress(for book: Book, progress: Double, location: String?, chapterTitle: String? = nil) {
         if let pending = pendingProgress, pending.book !== book { flushPendingProgress() }
-        pendingProgress = (book, progress, location)
+        pendingProgress = (book, progress, location, chapterTitle)
+        let now = ContinuousClock.now
+        if firstPendingProgressAt == nil {
+            firstPendingProgressAt = now
+        }
+        if let first = firstPendingProgressAt, first.duration(to: now) >= .seconds(15) {
+            flushPendingProgress()
+            return
+        }
+        progressFlushDeadline = now + .seconds(2.5)
         guard progressFlushTask == nil else { return }
         progressFlushTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(5))
-            guard !Task.isCancelled else { return }
-            self?.flushPendingProgress()
+            while let self, !Task.isCancelled, let deadline = self.progressFlushDeadline {
+                let remaining = ContinuousClock.now.duration(to: deadline)
+                if remaining <= .zero {
+                    self.flushPendingProgress()
+                    return
+                }
+                try? await Task.sleep(for: remaining)
+            }
         }
     }
 
     func flushPendingProgress() {
         progressFlushTask?.cancel()
         progressFlushTask = nil
+        progressFlushDeadline = nil
+        firstPendingProgressAt = nil
         guard let pending = pendingProgress else { return }
         pendingProgress = nil
         guard pending.book.modelContext != nil, !pending.book.isDeleted else { return }
-        applyProgress(for: pending.book, progress: pending.progress, location: pending.location)
+        applyProgress(for: pending.book, progress: pending.progress, location: pending.location, chapterTitle: pending.chapterTitle)
         #if os(iOS)
         ReadingActivityController.shared.refresh()
         #endif
     }
 
-    private func applyProgress(for book: Book, progress: Double, location: String?) {
+    private func applyProgress(for book: Book, progress: Double, location: String?, chapterTitle: String?) {
         let clamped = min(max(progress, 0), 1)
         let now = Date()
         let wasFinished = book.isFinished
         let nowFinished = clamped >= 1
         let progressChanged = abs(book.progress - clamped) >= 0.001
         let locationChanged = location != nil && book.lastLocation != location
+        let titleChanged = chapterTitle != nil && book.lastChapterTitle != chapterTitle
         let refreshOpened = book.lastOpenedAt.map { now.timeIntervalSince($0) >= 300 } ?? true
-        guard progressChanged || locationChanged || wasFinished != nowFinished || refreshOpened else { return }
+        guard progressChanged || locationChanged || titleChanged || wasFinished != nowFinished || refreshOpened else { return }
 
         book.progress = clamped
         if locationChanged { book.lastLocation = location }
+        if titleChanged { book.lastChapterTitle = chapterTitle }
         if refreshOpened {
             book.recordOpen(at: now)
         }

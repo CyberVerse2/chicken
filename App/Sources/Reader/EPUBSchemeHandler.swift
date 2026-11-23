@@ -262,12 +262,8 @@ final class EPUBWebViewPool {
 
         let webView = WKWebView(frame: .zero, configuration: configuration)
         webView.isInspectable = true
-        #if os(macOS)
-        webView.setValue(false, forKey: "drawsBackground")
-        #else
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
+        #if !os(macOS)
+        webView.isOpaque = true
         webView.scrollView.contentInsetAdjustmentBehavior = .never
         #endif
         return webView

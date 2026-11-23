@@ -58,7 +58,7 @@ struct EPUBStyle: Equatable {
           font-size: \(size)px !important;
           line-height: \(lineHeight) !important;
           overflow-wrap: break-word;
-          text-rendering: optimizeLegibility;
+          text-rendering: auto;
           -webkit-font-smoothing: antialiased;
         }
         body::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: \(horizontal ? "none" : "initial"); }

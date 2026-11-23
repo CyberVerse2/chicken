@@ -104,6 +104,7 @@ final class ReaderModel {
     @ObservationIgnored private var paceAnchorPage: Int?
     @ObservationIgnored private var paceAnchorDate: Date?
     @ObservationIgnored private var savePreferencesTask: Task<Void, Never>?
+    @ObservationIgnored private var pendingChapterTitle: String?
     @ObservationIgnored let sessionOpenedAt = Date()
 
     var chapters: [ReaderChapter] = [] {
@@ -113,11 +114,13 @@ final class ReaderModel {
         didSet { recordChapterTitle() }
     }
     var position = ReaderPosition()
+    var hasInitialPosition = false
+    var isOnLastPageState = false
     var loadStatus: ReaderLoadStatus = .loading
     var selection: ReaderSelection?
     var activeFootnote: ReaderFootnote?
     var activeImage: ReaderImagePreview?
-    var currentLocation: String?
+    @ObservationIgnored var currentLocation: String?
     var searchMatchSummary: String?
     var showingFinishedRitual = false
     @ObservationIgnored var reportedProgress: Double?
@@ -133,26 +136,86 @@ final class ReaderModel {
     var error: String? { loadStatus.errorMessage }
     var totalPages: Int? {
         get { position.totalPages }
-        set { position.totalPages = newValue }
+        set {
+            guard position.totalPages != newValue else { return }
+            position.totalPages = newValue
+            syncDerivedPositionState()
+        }
     }
     var currentPage: Int? {
         get { position.currentPage }
         set {
+            guard position.currentPage != newValue else { return }
             position.currentPage = newValue
+            syncDerivedPositionState()
             recordPageForPace(newValue)
         }
     }
     var chapterProgress: Double? {
         get { position.chapterProgress }
-        set { position.chapterProgress = newValue }
+        set {
+            let quantized = Self.quantizeProgress(newValue)
+            guard position.chapterProgress != quantized else { return }
+            position.chapterProgress = quantized
+            syncDerivedPositionState()
+        }
     }
     var chapterPage: Int? {
         get { position.chapterPage }
-        set { position.chapterPage = newValue }
+        set {
+            guard position.chapterPage != newValue else { return }
+            position.chapterPage = newValue
+        }
     }
     var chapterPageCount: Int? {
         get { position.chapterPageCount }
-        set { position.chapterPageCount = newValue }
+        set {
+            guard position.chapterPageCount != newValue else { return }
+            position.chapterPageCount = newValue
+        }
+    }
+
+    func applyPosition(
+        totalPages: Int? = nil,
+        updateTotalPages: Bool = false,
+        currentPage: Int?,
+        chapterProgress: Double?,
+        chapterPage: Int?,
+        chapterPageCount: Int?
+    ) {
+        let next = ReaderPosition(
+            totalPages: updateTotalPages ? totalPages : position.totalPages,
+            currentPage: currentPage,
+            chapterProgress: Self.quantizeProgress(chapterProgress),
+            chapterPage: chapterPage,
+            chapterPageCount: chapterPageCount
+        )
+        let pageChanged = position.currentPage != next.currentPage
+        if position != next {
+            position = next
+            syncDerivedPositionState()
+        }
+        if pageChanged {
+            recordPageForPace(next.currentPage)
+        }
+    }
+
+    private static func quantizeProgress(_ value: Double?) -> Double? {
+        guard let value else { return nil }
+        if value <= 0 { return 0 }
+        if value >= 1 { return 1 }
+        return (value * 500).rounded() / 500
+    }
+
+    private func syncDerivedPositionState() {
+        let hasPos = position.currentPage != nil || position.chapterProgress != nil
+        if hasInitialPosition != hasPos {
+            hasInitialPosition = hasPos
+        }
+        let nextLast = isOnLastPage
+        if isOnLastPageState != nextLast {
+            isOnLastPageState = nextLast
+        }
     }
 
     init(book: Book, library: LibraryStore, defaultMode: ReadingMode, initialJump: JumpTarget? = nil) {
@@ -306,9 +369,9 @@ final class ReaderModel {
         loadStatus = .ready
     }
 
-    func engineDidChangeChapter(_ index: Int) {
+    func engineDidChangeChapter(_ index: Int, haptic: Bool = false) {
         guard index != chapterIndex else { return }
-        if loadStatus == .ready { Haptics.selection() }
+        if haptic && loadStatus == .ready { Haptics.selection() }
         chapterIndex = index
     }
 
@@ -321,7 +384,7 @@ final class ReaderModel {
             return
         }
         let wasFinished = book.isFinished
-        library.updateProgress(for: book, progress: progress, location: location)
+        library.updateProgress(for: book, progress: progress, location: location, chapterTitle: pendingChapterTitle)
         if !wasAlreadyFinishedOnOpen && !wasFinished && book.isFinished {
             wasAlreadyFinishedOnOpen = true
             Haptics.success()
@@ -353,16 +416,13 @@ final class ReaderModel {
 
     private func recordChapterTitle() {
         guard chapters.indices.contains(chapterIndex) else { return }
-        let title = chapters[chapterIndex].title
-        guard book.lastChapterTitle != title else { return }
-        book.lastChapterTitle = title
-        #if os(iOS)
-        ReadingActivityController.shared.refresh()
-        #endif
+        pendingChapterTitle = chapters[chapterIndex].title
     }
 
     func resetPosition() {
         position = ReaderPosition()
+        hasInitialPosition = false
+        isOnLastPageState = false
     }
 
     var chapterTitle: String {

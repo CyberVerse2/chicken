@@ -124,7 +124,7 @@ struct ReaderView: View {
             .toolbarVisibility(chromeVisible ? .automatic : .hidden, for: Self.toolbarPlacement)
             .navigationTitle(book.displayTitle)
             #if os(macOS)
-            .navigationSubtitle(model.chapters.isEmpty ? book.displayAuthor : model.chapterTitle)
+            .modifier(ReaderSubtitleModifier(model: model, book: book))
             #else
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -425,67 +425,18 @@ struct ReaderView: View {
 
     @ViewBuilder
     private var engineView: some View {
-        if let error = model.error {
-            ContentUnavailableView {
-                Label(book.displayTitle, systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(error)
-            } actions: {
-                HStack(spacing: 12) {
-                    Button("Try Again") {
-                        model.loadStatus = .loading
-                        engineReloadToken = UUID()
-                    }
-                    .buttonStyle(.glass)
-                    #if os(iOS)
-                    Button("Close") { dismiss() }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(palette.muted)
-                    #endif
-                }
-            }
-            .foregroundStyle(palette.text)
-        } else if let fileURL = fileState.url {
-            Group {
-                switch book.format {
-                case .pdf:
-                    PDFReader(
-                        model: model,
-                        fileURL: fileURL,
-                        palette: palette,
-                        readingMode: effectiveMode,
-                        darkPages: model.darkModePDF,
-                        onTapCenter: toggleChrome
-                    )
-                case .epub:
-                    EPUBReader(
-                        model: model,
-                        fileURL: fileURL,
-                        cacheDirectory: library.paths.epubCache,
-                        style: EPUBStyle(
-                            palette: palette,
-                            fontSize: model.fontSize,
-                            lineHeight: model.lineHeight,
-                            columnWidth: model.columnWidth,
-                            mode: effectiveMode,
-                            typeface: model.typeface
-                        ),
-                        onTapCenter: toggleChrome
-                    )
-                case .text, .document, .physical, .unknown:
-                    TextReader(
-                        model: model,
-                        fileURL: fileURL,
-                        palette: palette,
-                        fontSize: model.fontSize,
-                        lineHeight: model.lineHeight,
-                        columnWidth: model.columnWidth,
-                        typeface: model.typeface,
-                        onTapCenter: toggleChrome
-                    )
-                }
-            }
-            .id(engineReloadToken)
+        if let fileURL = fileState.url {
+            ReaderEngineHost(
+                model: model,
+                book: book,
+                fileURL: fileURL,
+                cacheDirectory: library.paths.epubCache,
+                palette: palette,
+                effectiveMode: effectiveMode,
+                engineReloadToken: $engineReloadToken,
+                onTapCenter: toggleChrome,
+                onDismiss: { dismiss() }
+            )
         } else {
             downloadingView
                 .task(id: downloadAttemptID) {
@@ -600,21 +551,7 @@ struct ReaderView: View {
 
         #if os(iOS)
         ToolbarItem(placement: .principal) {
-            VStack(spacing: 1) {
-                Text(book.displayTitle)
-                    .font(.chickenUI(isCompact ? 13.5 : 15, weight: .semibold))
-                    .foregroundStyle(palette.text)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.85)
-                    .allowsTightening(true)
-                if !model.chapters.isEmpty && model.chapterTitle != book.displayTitle {
-                    Text(model.chapterTitle)
-                        .font(.chickenUI(11))
-                        .foregroundStyle(palette.muted)
-                        .lineLimit(1)
-                }
-            }
-            .frame(maxWidth: isCompact ? 200 : 360)
+            ReaderPrincipalTitleView(model: model, book: book, isCompact: isCompact)
         }
         #endif
 
@@ -637,12 +574,7 @@ struct ReaderView: View {
                 }
 
             if !isCompact {
-                Button(model.isBookmarked ? "Remove Bookmark" : "Bookmark", systemImage: model.isBookmarked ? "bookmark.fill" : "bookmark") {
-                    model.toggleBookmark()
-                }
-                .keyboardShortcut("d")
-                .symbolEffect(.bounce, value: model.isBookmarked)
-                .help(model.isBookmarked ? "Remove bookmark" : "Bookmark this place")
+                ReaderBookmarkToolbarButton(model: model)
 
                 Button("Highlights & Bookmarks", systemImage: "highlighter") { showAnnotations.toggle() }
                     .keyboardShortcut("h", modifiers: [.command, .option])
@@ -653,9 +585,7 @@ struct ReaderView: View {
                 if isCompact {
                     Button("Highlights & Bookmarks", systemImage: "highlighter") { showAnnotations = true }
                     Button("Search", systemImage: "magnifyingglass") { showSearch = true }
-                    Button(model.isBookmarked ? "Remove Bookmark" : "Bookmark", systemImage: model.isBookmarked ? "bookmark.fill" : "bookmark") {
-                        model.toggleBookmark()
-                    }
+                    ReaderBookmarkMenuButton(model: model)
                     Divider()
                 }
                 Picker("Theme", selection: themeBinding) {
@@ -719,8 +649,7 @@ private struct ReaderCoverWaitingOverlay: View {
         guard book.format == .epub || book.format == .pdf else { return false }
         return fileReady
             && model.error == nil
-            && model.currentPage == nil
-            && model.chapterProgress == nil
+            && !model.hasInitialPosition
             && !coverTimedOut
     }
 
@@ -760,8 +689,7 @@ private struct ReaderTopBannerOverlay: View {
         guard book.format == .epub || book.format == .pdf else { return false }
         return fileReady
             && model.error == nil
-            && model.currentPage == nil
-            && model.chapterProgress == nil
+            && !model.hasInitialPosition
             && !coverTimedOut
     }
 
@@ -897,7 +825,7 @@ private struct ReaderBottomOverlay: View {
                 if chromeVisible && model.error == nil {
                     HStack(spacing: 8) {
                         ReaderProgressBar(model: model, compact: isCompact)
-                        if model.isOnLastPage && !book.isFinished {
+                        if model.isOnLastPageState && !book.isFinished {
                             Button {
                                 model.completeBookAndCelebrate()
                             } label: {
@@ -918,6 +846,143 @@ private struct ReaderBottomOverlay: View {
         .padding(.bottom, isCompact ? 6 : 14)
         .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.selection)
         .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.readAloud.state)
-        .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.isOnLastPage)
+        .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.isOnLastPageState)
     }
 }
+
+private struct ReaderEngineHost: View {
+    @Environment(\.palette) private var envPalette
+    let model: ReaderModel
+    let book: Book
+    let fileURL: URL
+    let cacheDirectory: URL
+    let palette: ReaderPalette
+    let effectiveMode: ReadingMode
+    @Binding var engineReloadToken: UUID
+    let onTapCenter: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        if let error = model.error {
+            ContentUnavailableView {
+                Label(book.displayTitle, systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(error)
+            } actions: {
+                HStack(spacing: 12) {
+                    Button("Try Again") {
+                        model.loadStatus = .loading
+                        engineReloadToken = UUID()
+                    }
+                    .buttonStyle(.glass)
+                    #if os(iOS)
+                    Button("Close", action: onDismiss)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(envPalette.muted)
+                    #endif
+                }
+            }
+            .foregroundStyle(envPalette.text)
+        } else {
+            Group {
+                switch book.format {
+                case .pdf:
+                    PDFReader(
+                        model: model,
+                        fileURL: fileURL,
+                        palette: palette,
+                        readingMode: effectiveMode,
+                        darkPages: model.darkModePDF,
+                        onTapCenter: onTapCenter
+                    )
+                case .epub:
+                    EPUBReader(
+                        model: model,
+                        fileURL: fileURL,
+                        cacheDirectory: cacheDirectory,
+                        style: EPUBStyle(
+                            palette: palette,
+                            fontSize: model.fontSize,
+                            lineHeight: model.lineHeight,
+                            columnWidth: model.columnWidth,
+                            mode: effectiveMode,
+                            typeface: model.typeface
+                        ),
+                        onTapCenter: onTapCenter
+                    )
+                case .text, .document, .physical, .unknown:
+                    TextReader(
+                        model: model,
+                        fileURL: fileURL,
+                        palette: palette,
+                        fontSize: model.fontSize,
+                        lineHeight: model.lineHeight,
+                        columnWidth: model.columnWidth,
+                        typeface: model.typeface,
+                        onTapCenter: onTapCenter
+                    )
+                }
+            }
+            .id(engineReloadToken)
+        }
+    }
+}
+
+private struct ReaderBookmarkToolbarButton: View {
+    let model: ReaderModel
+
+    var body: some View {
+        Button(model.isBookmarked ? "Remove Bookmark" : "Bookmark", systemImage: model.isBookmarked ? "bookmark.fill" : "bookmark") {
+            model.toggleBookmark()
+        }
+        .keyboardShortcut("d")
+        .symbolEffect(.bounce, value: model.isBookmarked)
+        .help(model.isBookmarked ? "Remove bookmark" : "Bookmark this place")
+    }
+}
+
+private struct ReaderBookmarkMenuButton: View {
+    let model: ReaderModel
+
+    var body: some View {
+        Button(model.isBookmarked ? "Remove Bookmark" : "Bookmark", systemImage: model.isBookmarked ? "bookmark.fill" : "bookmark") {
+            model.toggleBookmark()
+        }
+    }
+}
+
+#if os(macOS)
+private struct ReaderSubtitleModifier: ViewModifier {
+    let model: ReaderModel
+    let book: Book
+
+    func body(content: Content) -> some View {
+        content.navigationSubtitle(model.chapters.isEmpty ? book.displayAuthor : model.chapterTitle)
+    }
+}
+#else
+private struct ReaderPrincipalTitleView: View {
+    @Environment(\.palette) private var palette
+    let model: ReaderModel
+    let book: Book
+    let isCompact: Bool
+
+    var body: some View {
+        VStack(spacing: 1) {
+            Text(book.displayTitle)
+                .font(.chickenUI(isCompact ? 13.5 : 15, weight: .semibold))
+                .foregroundStyle(palette.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .allowsTightening(true)
+            if !model.chapters.isEmpty && model.chapterTitle != book.displayTitle {
+                Text(model.chapterTitle)
+                    .font(.chickenUI(11))
+                    .foregroundStyle(palette.muted)
+                    .lineLimit(1)
+            }
+        }
+        .frame(maxWidth: isCompact ? 200 : 360)
+    }
+}
+#endif

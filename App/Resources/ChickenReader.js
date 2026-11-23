@@ -33,6 +33,7 @@
     chapterPageCounts: new Map(),
     chapterCache: new Map(),
     inFlightChapters: new Map(),
+    loadedStyleKeys: new Set(),
     scriptScrollUntil: 0,
     turnIndex: null,
     lastWheelTurn: 0,
@@ -43,10 +44,16 @@
     userInteracted: false,
     reduceMotion: Boolean(motionQuery && motionQuery.matches),
     scrollExpanding: false,
+    scrollFramePending: false,
+    idleScrollTimer: null,
+    resizeMetricsTimer: null,
     navigationToken: 0,
     speakableCache: null,
     speakableChapter: -1,
     metrics: null,
+    metricsCacheDirty: true,
+    cachedPrefixPages: null,
+    cachedTotalPages: 1,
   };
 
   if (motionQuery && motionQuery.addEventListener) {
@@ -113,6 +120,7 @@
           state.chapterPageCounts.set(s.index, Math.max(1, s.end - s.start + 1));
         }
       }
+      state.metricsCacheDirty = true;
       state.metrics = { width, height, pageUnit, turnUnit, maxX, pageCount, turnCount, sections };
     } else {
       const scrollH = Math.max(doc().scrollHeight || 0, document.body.scrollHeight || 0);
@@ -127,6 +135,7 @@
       for (const s of sections) {
         state.chapterPageCounts.set(s.index, Math.max(1, Math.ceil(s.height / verticalUnit)));
       }
+      state.metricsCacheDirty = true;
       state.metrics = { width, height, verticalUnit, maxY, scrollH, sections };
     }
     return state.metrics;
@@ -134,7 +143,8 @@
 
   const getMetrics = () => state.metrics || recomputeMetrics();
 
-  const estimatedBytesPerPage = () => {
+  const ensurePageEstimateCache = () => {
+    if (!state.metricsCacheDirty && state.cachedPrefixPages) return;
     let observedBytes = 0;
     let observedPages = 0;
     for (const [idx, pages] of state.chapterPageCounts.entries()) {
@@ -143,14 +153,17 @@
         observedPages += pages;
       }
     }
-    return observedPages > 0 ? Math.max(300, observedBytes / observedPages) : 1800;
-  };
-
-  const estimatedPagesForSpine = (idx) => {
-    const known = state.chapterPageCounts.get(idx);
-    if (known !== undefined) return known;
-    const weight = state.spineWeights[idx] || 512;
-    return Math.max(1, Math.round(weight / estimatedBytesPerPage()));
+    const bytesPerPage = observedPages > 0 ? Math.max(300, observedBytes / observedPages) : 1800;
+    const prefix = new Array(state.spineCount + 1);
+    prefix[0] = 0;
+    for (let i = 0; i < state.spineCount; i++) {
+      const known = state.chapterPageCounts.get(i);
+      const pages = known !== undefined ? known : Math.max(1, Math.round((state.spineWeights[i] || 512) / bytesPerPage));
+      prefix[i + 1] = prefix[i] + pages;
+    }
+    state.cachedPrefixPages = prefix;
+    state.cachedTotalPages = Math.max(1, prefix[state.spineCount]);
+    state.metricsCacheDirty = false;
   };
 
   const currentPageInMounted = () => {
@@ -226,12 +239,9 @@
     let globalPage = pageWithinSpine;
     let totalPages = chapterPageCount;
     if (state.spineCount > 1) {
-      let prefixPages = 0;
-      for (let i = 0; i < idx; i++) prefixPages += estimatedPagesForSpine(i);
-      let suffixPages = 0;
-      for (let i = idx + 1; i < state.spineCount; i++) suffixPages += estimatedPagesForSpine(i);
-      globalPage = prefixPages + pageWithinSpine;
-      totalPages = Math.max(1, prefixPages + chapterPageCount + suffixPages);
+      ensurePageEstimateCache();
+      globalPage = (state.cachedPrefixPages[idx] || 0) + pageWithinSpine;
+      totalPages = state.cachedTotalPages;
     }
 
     return {
@@ -249,13 +259,13 @@
   let progressRAF = null;
   const reportProgress = (force = false) => {
     const now = Date.now();
-    if (!force && now - state.lastProgressPost < 200) return;
+    if (!force && now - state.lastProgressPost < 350) return;
     if (!force) {
       if (progressRAF) return;
       progressRAF = requestAnimationFrame(() => {
         progressRAF = null;
         const snap = snapshot();
-        const key = `${snap.index}|${snap.page}|${Math.round(snap.sectionProgression * 1000)}`;
+        const key = `${snap.index}|${snap.page}|${Math.round(snap.sectionProgression * 500)}`;
         if (key === state.lastPostedKey) return;
         state.lastPostedKey = key;
         state.lastProgressPost = Date.now();
@@ -265,7 +275,9 @@
     }
     state.lastProgressPost = now;
     const snap = snapshot();
-    state.lastPostedKey = `${snap.index}|${snap.page}|${Math.round(snap.sectionProgression * 1000)}`;
+    const key = `${snap.index}|${snap.page}|${Math.round(snap.sectionProgression * 500)}`;
+    if (key === state.lastPostedKey) return;
+    state.lastPostedKey = key;
     post(snap);
   };
 
@@ -294,7 +306,7 @@
         state.inFlightChapters.delete(index);
         if (data) {
           state.chapterCache.set(index, data);
-          if (state.chapterCache.size > 6) {
+          if (state.chapterCache.size > 16) {
             const oldest = state.chapterCache.keys().next().value;
             state.chapterCache.delete(oldest);
           }
@@ -311,23 +323,66 @@
 
   const prefetchNeighbors = (index) => {
     const run = () => {
-      if (index + 1 < state.spineCount && !state.chapterCache.has(index + 1) && !state.inFlightChapters.has(index + 1)) {
-        fetchChapter(index + 1);
-      }
-      if (index - 1 >= 0 && !state.chapterCache.has(index - 1) && !state.inFlightChapters.has(index - 1)) {
-        fetchChapter(index - 1);
+      const targets = isHorizontal()
+        ? [index + 1, index - 1]
+        : [state.mountedLast + 1, state.mountedLast + 2, state.mountedFirst - 1, index + 1, index - 1];
+      for (const target of targets) {
+        if (target >= 0 && target < state.spineCount && !state.chapterCache.has(target) && !state.inFlightChapters.has(target)) {
+          fetchChapter(target);
+        }
       }
     };
     if (window.requestIdleCallback) requestIdleCallback(run, { timeout: 300 });
     else setTimeout(run, 40);
   };
 
+  const hashStyleText = (str) => {
+    let h = 5381;
+    for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+    return String(h);
+  };
+
+  const seedLoadedStyles = () => {
+    document.head.querySelectorAll('link[rel~="stylesheet" i], style').forEach((el) => {
+      if (el.id === 'chicken-reader-style') return;
+      if (el.tagName === 'LINK') {
+        const href = el.getAttribute('href');
+        if (href) state.loadedStyleKeys.add(`link:${href}`);
+      } else if (el.tagName === 'STYLE') {
+        state.loadedStyleKeys.add(`style:${hashStyleText(el.textContent || '')}`);
+      }
+    });
+  };
+
+  const ensureChapterStyles = (stylesHTML) => {
+    if (!stylesHTML || !stylesHTML.trim()) return;
+    const tpl = document.createElement('template');
+    tpl.innerHTML = stylesHTML;
+    const anchor = document.getElementById('chicken-reader-style');
+    const nodes = Array.from(tpl.content.children);
+    for (const node of nodes) {
+      if (node.tagName === 'LINK') {
+        const href = node.getAttribute('href') || '';
+        const key = `link:${href}`;
+        if (!href || state.loadedStyleKeys.has(key)) continue;
+        state.loadedStyleKeys.add(key);
+        document.head.insertBefore(node, anchor);
+      } else if (node.tagName === 'STYLE') {
+        const key = `style:${hashStyleText(node.textContent || '')}`;
+        if (state.loadedStyleKeys.has(key)) continue;
+        state.loadedStyleKeys.add(key);
+        document.head.insertBefore(node, anchor);
+      }
+    }
+  };
+
   const buildSectionElement = (chapterData) => {
+    ensureChapterStyles(chapterData.styles);
     const section = document.createElement('section');
     section.className = 'chicken-spine-section';
     section.id = `chapter-${chapterData.index}`;
     section.dataset.chickenSpineIndex = String(chapterData.index);
-    section.innerHTML = `${chapterData.styles || ''}\n${chapterData.body || ''}`;
+    section.innerHTML = chapterData.body || '';
     const items = state.highlightsByChapter[String(chapterData.index)];
     if (items && items.length) {
       for (const item of items) wrapText(section, item.text, item.color, item.id);
@@ -421,15 +476,37 @@
       return;
     }
     scrollToLocalPage(target, 'auto');
-    reportProgress(true);
+    requestAnimationFrame(() => reportProgress(true));
+  };
+
+  const trimDistantChaptersIfNeeded = () => {
+    if (isHorizontal() || state.mountedLast - state.mountedFirst <= 10) return;
+    let trimmed = false;
+    while (state.mountedLast - state.mountedFirst > 10 && state.activeChapter - state.mountedFirst > 4) {
+      const firstEl = document.getElementById(`chapter-${state.mountedFirst}`);
+      if (!firstEl) break;
+      const h = firstEl.offsetHeight;
+      firstEl.remove();
+      state.mountedFirst += 1;
+      window.scrollBy(0, -h);
+      trimmed = true;
+    }
+    while (state.mountedLast - state.mountedFirst > 10 && state.mountedLast - state.activeChapter > 4) {
+      const lastEl = document.getElementById(`chapter-${state.mountedLast}`);
+      if (!lastEl) break;
+      lastEl.remove();
+      state.mountedLast -= 1;
+      trimmed = true;
+    }
+    if (trimmed) recomputeMetrics();
   };
 
   const expandScrollWindowIfNeeded = async () => {
     if (isHorizontal() || state.scrollExpanding) return;
     const m = getMetrics();
     const y = scrollY();
-    const nearBottom = y + m.height >= m.scrollH - m.height * 1.5;
-    const nearTop = y < 180;
+    const nearBottom = y + m.height >= m.scrollH - m.height * 2.5;
+    const nearTop = y <= m.height * 1.5;
 
     if (nearBottom && state.mountedLast + 1 < state.spineCount) {
       state.scrollExpanding = true;
@@ -439,15 +516,30 @@
         const el = buildSectionElement(data);
         stage().appendChild(el);
         state.mountedLast = nextIdx;
-        while (state.mountedLast - state.mountedFirst > 5) {
-          const firstEl = document.getElementById(`chapter-${state.mountedFirst}`);
-          if (!firstEl) break;
-          const h = firstEl.offsetHeight;
-          firstEl.remove();
-          state.mountedFirst += 1;
-          window.scrollBy(0, -h);
+        if (state.metrics && !isHorizontal()) {
+          state.metrics.sections.push({
+            index: nextIdx,
+            el,
+            top: state.metrics.scrollH,
+            height: state.metrics.verticalUnit,
+          });
+          requestAnimationFrame(() => {
+            if (!state.metrics || isHorizontal()) return;
+            const entry = state.metrics.sections.find((s) => s.index === nextIdx);
+            if (entry) {
+              const h = el.scrollHeight || state.metrics.verticalUnit;
+              entry.top = el.offsetTop;
+              entry.height = h;
+              state.chapterPageCounts.set(nextIdx, Math.max(1, Math.ceil(h / state.metrics.verticalUnit)));
+              state.metricsCacheDirty = true;
+            }
+            const newScrollH = Math.max(doc().scrollHeight || 0, document.body.scrollHeight || 0);
+            state.metrics.scrollH = newScrollH;
+            state.metrics.maxY = Math.max(0, newScrollH - state.metrics.height);
+          });
+        } else {
+          recomputeMetrics();
         }
-        recomputeMetrics();
         prefetchNeighbors(nextIdx);
       }
       state.scrollExpanding = false;
@@ -463,12 +555,6 @@
         const deltaH = container.scrollHeight - prevH;
         if (deltaH > 0) window.scrollBy(0, deltaH);
         state.mountedFirst = prevIdx;
-        while (state.mountedLast - state.mountedFirst > 5) {
-          const lastEl = document.getElementById(`chapter-${state.mountedLast}`);
-          if (!lastEl) break;
-          lastEl.remove();
-          state.mountedLast -= 1;
-        }
         recomputeMetrics();
         prefetchNeighbors(prevIdx);
       }
@@ -679,7 +765,7 @@
     turnPage(forward ? 1 : -1, true);
   });
 
-  window.addEventListener('wheel', (event) => {
+  const onWheel = (event) => {
     if (!isHorizontal()) return;
     const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
     if (Math.abs(delta) < 8) return;
@@ -688,7 +774,14 @@
     if (now - state.lastWheelTurn < 260) return;
     state.lastWheelTurn = now;
     turnPage(delta > 0 ? 1 : -1);
-  }, { passive: false });
+  };
+
+  const syncWheelListener = () => {
+    window.removeEventListener('wheel', onWheel);
+    if (isHorizontal()) {
+      window.addEventListener('wheel', onWheel, { passive: false });
+    }
+  };
 
   let touchStart = null;
   window.addEventListener('touchstart', (event) => {
@@ -865,13 +958,27 @@
 
   window.addEventListener('scroll', () => {
     if (state.nativeSwipe && Date.now() > state.scriptScrollUntil) state.turnIndex = null;
-    if (!state.nativeSwipe) reportProgress();
-    if (!isHorizontal()) expandScrollWindowIfNeeded();
-    clearTimeout(snapTimer);
-    snapTimer = setTimeout(() => {
-      snapToPage();
-      reportProgress(true);
-    }, 150);
+    if (!state.scrollFramePending) {
+      state.scrollFramePending = true;
+      requestAnimationFrame(() => {
+        state.scrollFramePending = false;
+        if (!state.nativeSwipe) reportProgress();
+        if (!isHorizontal()) expandScrollWindowIfNeeded();
+      });
+    }
+    if (isHorizontal()) {
+      clearTimeout(snapTimer);
+      snapTimer = setTimeout(() => {
+        snapToPage();
+        reportProgress(true);
+      }, 150);
+    } else {
+      clearTimeout(state.idleScrollTimer);
+      state.idleScrollTimer = setTimeout(() => {
+        trimDistantChaptersIfNeeded();
+        reportProgress(true);
+      }, 380);
+    }
   }, { passive: true });
 
   let resizeTimer = null;
@@ -887,11 +994,16 @@
     }, 120);
   };
   window.addEventListener('resize', handleResize);
+  const scheduleMetricsRecompute = () => {
+    if (!state.restored || state.resizeMetricsTimer) return;
+    state.resizeMetricsTimer = setTimeout(() => {
+      state.resizeMetricsTimer = null;
+      recomputeMetrics();
+    }, 180);
+  };
   if (window.ResizeObserver) {
     new ResizeObserver(() => {
-      if (state.restored) {
-        recomputeMetrics();
-      }
+      scheduleMetricsRecompute();
     }).observe(doc());
   }
 
@@ -984,6 +1096,7 @@
     state.nativeSwipe = Boolean(config.nativeSwipe);
     state.turnIndex = null;
     if (config.layoutKey) state.layoutKey = config.layoutKey;
+    syncWheelListener();
 
     let style = document.getElementById('chicken-reader-style');
     if (!style) {
@@ -1026,6 +1139,8 @@
     endReadingAloud,
   };
 
+  seedLoadedStyles();
+  syncWheelListener();
   setThemeVars(state.background, state.textColor, state.mutedColor);
   const initialHighlights = state.highlightsByChapter[String(state.activeChapter)];
   if (initialHighlights && initialHighlights.length) {

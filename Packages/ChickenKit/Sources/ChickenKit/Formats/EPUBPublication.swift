@@ -207,28 +207,30 @@ public struct EPUBPublication: Sendable {
         spineIndexByPath: [String: Int],
         injectLazyImages: Bool
     ) -> String {
-        let lowerHTML = html.lowercased()
         let utf8 = Array(html.utf8)
-        let lowerUTF8 = Array(lowerHTML.utf8)
-        guard utf8.count == lowerUTF8.count else {
-            return rewriteResourceURLsSlow(in: html, directory: directory, spineIndexByPath: spineIndexByPath)
-        }
         let count = utf8.count
         var output = Data()
         output.reserveCapacity(count + 128)
         var lastCopied = 0
         var i = 0
 
+        @inline(__always)
+        func asciiLower(_ b: UInt8) -> UInt8 {
+            (b >= 65 && b <= 90) ? (b &+ 32) : b
+        }
+        @inline(__always)
         func isIdentChar(_ b: UInt8) -> Bool {
             (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57) || b == 95 || b == 45 || b == 58
         }
+        @inline(__always)
         func isSpace(_ b: UInt8) -> Bool {
             b == 32 || b == 9 || b == 10 || b == 13
         }
+        @inline(__always)
         func matchesLower(_ at: Int, _ pattern: [UInt8]) -> Bool {
             guard at + pattern.count <= count else { return false }
             for k in 0..<pattern.count {
-                if lowerUTF8[at + k] != pattern[k] { return false }
+                if asciiLower(utf8[at + k]) != pattern[k] { return false }
             }
             return true
         }
@@ -239,7 +241,7 @@ public struct EPUBPublication: Sendable {
         let patXlink: [UInt8] = [120, 108, 105, 110, 107, 58, 104, 114, 101, 102]
 
         while i < count {
-            let byte = lowerUTF8[i]
+            let byte = asciiLower(utf8[i])
             if injectLazyImages && byte == 60 && matchesLower(i, patImg) {
                 let after = i + 4
                 if after < count && isSpace(utf8[after]) {
@@ -326,19 +328,6 @@ public struct EPUBPublication: Sendable {
             .joined(separator: "/")
         let rewritten = encodedPath + (fragment.map { "#\($0)" } ?? "")
         return "\(attribute)=\"\(rewritten)\""
-    }
-
-    private static func rewriteResourceURLsSlow(
-        in html: String,
-        directory: String,
-        spineIndexByPath: [String: Int]
-    ) -> String {
-        html.replacing(/(?i)\b(src|href|xlink:href)\s*=\s*["']([^"']+)["']/) { match in
-            let attribute = String(match.output.1)
-            let rawValue = String(match.output.2)
-            return rewriteAttribute(attribute: attribute, rawValue: rawValue, directory: directory, spineIndexByPath: spineIndexByPath)
-                ?? String(match.output.0)
-        }
     }
 }
 

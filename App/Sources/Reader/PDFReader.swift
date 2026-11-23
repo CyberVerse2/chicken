@@ -1,4 +1,5 @@
 import ChickenKit
+import CoreImage
 import PDFKit
 import SwiftUI
 
@@ -21,10 +22,13 @@ struct PDFReader: View {
             inverted: shouldInvertPages,
             onTapCenter: onTapCenter
         )
+        #if !os(macOS)
         .modifier(PDFDarkPagesModifier(active: shouldInvertPages))
+        #endif
     }
 }
 
+#if !os(macOS)
 private struct PDFDarkPagesModifier: ViewModifier {
     let active: Bool
 
@@ -39,6 +43,7 @@ private struct PDFDarkPagesModifier: ViewModifier {
         }
     }
 }
+#endif
 
 private struct PDFSurface: PlatformViewRepresentable {
     let model: ReaderModel
@@ -54,6 +59,11 @@ private struct PDFSurface: PlatformViewRepresentable {
         let view = ChickenPDFView()
         view.autoScales = true
         view.displaysAsBook = true
+        view.enableDataDetectors = false
+        view.pageShadowsEnabled = false
+        #if !os(macOS)
+        view.isOpaque = true
+        #endif
         context.coordinator.attach(view, onTapCenter: onTapCenter)
         context.coordinator.load(fileURL)
         apply(to: view, coordinator: context.coordinator)
@@ -75,6 +85,12 @@ private struct PDFSurface: PlatformViewRepresentable {
             coordinator.appliedBackgroundHex = targetHex
             view.backgroundColor = PlatformColor.hex(targetHex)
         }
+        #if os(macOS)
+        if coordinator.appliedDarkInversion != inverted {
+            coordinator.appliedDarkInversion = inverted
+            view.applyDarkPageFilter(inverted)
+        }
+        #endif
         guard coordinator.appliedMode != readingMode else { return }
         coordinator.appliedMode = readingMode
         let page = view.currentPage
@@ -133,6 +149,7 @@ private struct PDFSurface: PlatformViewRepresentable {
         var onTapCenter: () -> Void = {}
         var appliedMode: ReadingMode?
         var appliedBackgroundHex: UInt32?
+        var appliedDarkInversion: Bool?
 
         private var outline: [OutlineEntry] = []
         private var isOutlineSorted = true
@@ -144,6 +161,8 @@ private struct PDFSurface: PlatformViewRepresentable {
         private var observers: [NSObjectProtocol] = []
         private var restoreState: RestoreState = .idle
         private var loadTask: Task<Void, Never>?
+        private var settledPageTask: Task<Void, Never>?
+        private var lastPageUIUpdateAt: ContinuousClock.Instant?
         private var annotatedPages: Set<Int> = []
         private var pendingHighlightsByPage: [Int: [PendingHighlight]] = [:]
         private var appliedHighlightPages: Set<Int> = []
@@ -172,6 +191,8 @@ private struct PDFSurface: PlatformViewRepresentable {
             captureLocation()
             loadTask?.cancel()
             loadTask = nil
+            settledPageTask?.cancel()
+            settledPageTask = nil
             view?.document?.cancelFindString()
             view?.document?.delegate = nil
             if case .settling(let task) = restoreState { task.cancel() }
@@ -182,6 +203,7 @@ private struct PDFSurface: PlatformViewRepresentable {
 
         isolated deinit {
             loadTask?.cancel()
+            settledPageTask?.cancel()
             if case .settling(let task) = restoreState { task.cancel() }
             observers.forEach(NotificationCenter.default.removeObserver)
         }
@@ -326,6 +348,24 @@ private struct PDFSurface: PlatformViewRepresentable {
             guard case .ready = restoreState,
                   let view, let document = view.document, let page = view.currentPage else { return }
             let pageIndex = document.index(for: page)
+            let now = ContinuousClock.now
+            if lastPageUIUpdateAt.map({ $0.duration(to: now) >= .milliseconds(100) }) ?? true {
+                lastPageUIUpdateAt = now
+                updatePageState(pageIndex: pageIndex, document: document)
+            }
+            settledPageTask?.cancel()
+            settledPageTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .milliseconds(180))
+                guard !Task.isCancelled, let self,
+                      let view = self.view, let doc = view.document,
+                      let settledPage = view.currentPage else { return }
+                let settledIndex = doc.index(for: settledPage)
+                self.flushSettledPage(pageIndex: settledIndex, document: doc)
+            }
+        }
+
+        private func flushSettledPage(pageIndex: Int, document: PDFDocument) {
+            lastPageUIUpdateAt = ContinuousClock.now
             applyHighlightsNear(pageIndex: pageIndex, in: document)
             updatePageState(pageIndex: pageIndex, document: document)
             let chapter = chapter(forPage: pageIndex)
@@ -340,10 +380,12 @@ private struct PDFSurface: PlatformViewRepresentable {
             let range = pageRange(forChapter: chapter, document: document)
             let chapterPage = max(1, min(range.count, pageIndex - range.lowerBound + 1))
             model.engineDidChangeChapter(chapter)
-            model.currentPage = pageIndex + 1
-            model.chapterPage = chapterPage
-            model.chapterPageCount = range.count
-            model.chapterProgress = Double(chapterPage) / Double(range.count)
+            model.applyPosition(
+                currentPage: pageIndex + 1,
+                chapterProgress: Double(chapterPage) / Double(range.count),
+                chapterPage: chapterPage,
+                chapterPageCount: range.count
+            )
         }
 
         private func selectionChanged() {
@@ -537,7 +579,11 @@ private struct PDFSurface: PlatformViewRepresentable {
         }
 
         func captureLocation() {
-            pageChanged()
+            settledPageTask?.cancel()
+            settledPageTask = nil
+            guard case .ready = restoreState,
+                  let view, let document = view.document, let page = view.currentPage else { return }
+            flushSettledPage(pageIndex: document.index(for: page), document: document)
         }
 
         static let annotationTag = "chicken-highlight"
@@ -581,6 +627,21 @@ final class ChickenPDFView: PDFView {
 
     #if os(macOS)
     private var lastTurn = Date.distantPast
+
+    func applyDarkPageFilter(_ active: Bool) {
+        wantsLayer = true
+        layerUsesCoreImageFilters = active
+        guard active, let filter = CIFilter(name: "CIColorMatrix") else {
+            layer?.filters = nil
+            return
+        }
+        filter.setValue(CIVector(x: 0.5748, y: -1.4304, z: -0.1444, w: 0), forKey: "inputRVector")
+        filter.setValue(CIVector(x: -0.4252, y: -0.4304, z: -0.1444, w: 0), forKey: "inputGVector")
+        filter.setValue(CIVector(x: -0.4252, y: -1.4304, z: 0.8556, w: 0), forKey: "inputBVector")
+        filter.setValue(CIVector(x: 0, y: 0, z: 0, w: 1), forKey: "inputAVector")
+        filter.setValue(CIVector(x: 0.96, y: 0.96, z: 0.96, w: 0), forKey: "inputBiasVector")
+        layer?.filters = [filter]
+    }
 
     override var acceptsFirstResponder: Bool { true }
 

@@ -59,8 +59,9 @@ struct TextReader: PlatformViewRepresentable {
         var onTapCenter: () -> Void = {}
         private var document: TextDocument?
         private var renderKey = ""
+        private var highlightsRevision = 0
         private var restored = false
-        private var lastReported = Date.distantPast
+        private var lastReportedTime: CFTimeInterval = 0
         private var searchQuery = ""
         private var searchMatches: [NSRange] = []
         private var searchFingerprint = ""
@@ -154,13 +155,15 @@ struct TextReader: PlatformViewRepresentable {
 
         func render(palette: ReaderPalette, fontSize: Double, lineHeight: Double, typeface: ReaderTypeface) {
             lastPalette = palette
+            #if !os(macOS)
+            textView?.applyBackground(PlatformColor.hex(palette.backgroundHex))
+            #endif
             guard let document, textView != nil else { return }
+            let key = "\(palette.backgroundHex)|\(fontSize)|\(lineHeight)|\(typeface.rawValue)|\(document.fingerprint)|\(highlightsRevision)"
+            guard key != renderKey else { return }
             let highlightSpecs = (model.book.highlights ?? []).map {
                 TextDocumentLoader.HighlightSpec(id: $0.id, text: $0.text, color: $0.color)
             }
-            let highlightsKey = highlightSpecs.map { "\($0.id)\($0.color.rawValue)" }.sorted().joined()
-            let key = "\(palette.backgroundHex)|\(fontSize)|\(lineHeight)|\(typeface.rawValue)|\(document.fingerprint)|\(highlightsKey)"
-            guard key != renderKey else { return }
             let isFirstRender = renderKey.isEmpty
             let anchor = currentProgress
             renderKey = key
@@ -227,10 +230,11 @@ struct TextReader: PlatformViewRepresentable {
         }
 
         private func report(force: Bool) {
-            guard force || Date().timeIntervalSince(lastReported) > 0.3 else { return }
-            lastReported = Date()
+            let now = CFAbsoluteTimeGetCurrent()
+            guard force || now - lastReportedTime >= 0.35 else { return }
+            lastReportedTime = now
             let progress = currentProgress
-            model.chapterProgress = progress
+            model.applyPosition(currentPage: nil, chapterProgress: progress, chapterPage: nil, chapterPageCount: nil)
             model.reportProgress(progress, location: TextLocation(progression: progress).encoded)
         }
 
@@ -320,6 +324,7 @@ struct TextReader: PlatformViewRepresentable {
         }
 
         func refreshHighlights() {
+            highlightsRevision += 1
             render(palette: lastPalette, fontSize: model.fontSize, lineHeight: model.lineHeight, typeface: model.typeface)
         }
 
@@ -424,7 +429,7 @@ final class ColumnTextScrollView: NSScrollView {
         super.tile()
         let width = contentView.bounds.width
         let inset = max(28, (width - columnWidth) / 2)
-        if textView.textContainerInset.width != inset {
+        if abs(textView.textContainerInset.width - inset) > 0.5 {
             textView.textContainerInset = NSSize(width: inset, height: 48)
         }
     }
@@ -449,7 +454,7 @@ final class ColumnTextView: UITextView {
         super.init(frame: .zero, textContainer: nil)
         isEditable = false
         isSelectable = true
-        backgroundColor = .clear
+        isOpaque = true
         textContainer.lineFragmentPadding = 0
         alwaysBounceVertical = true
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
@@ -459,10 +464,15 @@ final class ColumnTextView: UITextView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
+    func applyBackground(_ color: UIColor) {
+        guard backgroundColor != color else { return }
+        backgroundColor = color
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         let inset = max(20, (bounds.width - columnWidth) / 2)
-        if textContainerInset.left != inset {
+        if abs(textContainerInset.left - inset) > 0.5 {
             textContainerInset = UIEdgeInsets(top: 40, left: inset, bottom: 120, right: inset)
         }
     }
@@ -616,6 +626,9 @@ enum TextDocumentLoader {
     ) -> NSMutableAttributedString {
         let size = CGFloat(fontSize)
         let bodyFont = typeface.platformFont(size: size)
+        let bodyBoldFont = boldFont(from: bodyFont)
+        let bodyItalicFont = italicFont(from: bodyFont)
+        let bodyBoldItalicFont = boldItalicFont(from: bodyFont)
         let monoFont = PlatformFont.monospacedSystemFont(ofSize: max(12, size * 0.88), weight: .regular)
         let textColor = PlatformColor.hex(palette.textHex)
         let mutedColor = PlatformColor.hex(palette.mutedHex)
@@ -625,11 +638,67 @@ enum TextDocumentLoader {
         let bodyParagraph = NSMutableParagraphStyle()
         bodyParagraph.lineHeightMultiple = CGFloat(lineHeight)
         bodyParagraph.paragraphSpacing = (size * 0.85).rounded()
-        bodyParagraph.hyphenationFactor = 0.5
+        bodyParagraph.hyphenationFactor = 0
+
+        let codeStyle = NSMutableParagraphStyle()
+        codeStyle.lineHeightMultiple = 1.4
+        codeStyle.headIndent = 14
+        codeStyle.firstLineHeadIndent = 14
+        codeStyle.tailIndent = -14
+        codeStyle.paragraphSpacingBefore = (size * 0.4).rounded()
+        codeStyle.paragraphSpacing = (size * 0.9).rounded()
+
+        let quoteStyle = NSMutableParagraphStyle()
+        quoteStyle.lineHeightMultiple = CGFloat(lineHeight)
+        quoteStyle.firstLineHeadIndent = 18
+        quoteStyle.headIndent = 18
+        quoteStyle.paragraphSpacing = (size * 0.8).rounded()
+        let quoteFont = bodyItalicFont
+
+        let listStyle = NSMutableParagraphStyle()
+        listStyle.lineHeightMultiple = CGFloat(lineHeight)
+        listStyle.firstLineHeadIndent = 12
+        listStyle.headIndent = 24
+        listStyle.paragraphSpacing = (size * 0.45).rounded()
+
+        let listBullet = NSAttributedString(string: "•  ", attributes: [
+            .font: bodyFont,
+            .foregroundColor: ribbonColor,
+            .paragraphStyle: listStyle,
+        ])
+        let bodyNewline = NSAttributedString(string: "\n", attributes: [.font: bodyFont, .paragraphStyle: bodyParagraph])
+        let quoteNewline = NSAttributedString(string: "\n", attributes: [.font: quoteFont, .paragraphStyle: quoteStyle])
+        let listNewline = NSAttributedString(string: "\n", attributes: [.font: bodyFont, .paragraphStyle: listStyle])
+
+        func makeHeadingFont(level: Int) -> PlatformFont {
+            let scale: CGFloat = level == 1 ? 1.65 : (level == 2 ? 1.35 : 1.15)
+            let headingSize = (size * scale).rounded()
+            let baseHeading = PlatformFont.systemFont(ofSize: headingSize, weight: .semibold)
+            if let descriptor = baseHeading.fontDescriptor.withDesign(.serif) {
+                #if os(macOS)
+                return PlatformFont(descriptor: descriptor, size: headingSize) ?? baseHeading
+                #else
+                return PlatformFont(descriptor: descriptor, size: headingSize)
+                #endif
+            }
+            return baseHeading
+        }
+
+        let headingFonts = [makeHeadingFont(level: 1), makeHeadingFont(level: 2), makeHeadingFont(level: 3)]
+        let headingStyleFirst = NSMutableParagraphStyle()
+        headingStyleFirst.lineHeightMultiple = 1.25
+        headingStyleFirst.paragraphSpacingBefore = 0
+        headingStyleFirst.paragraphSpacing = (size * 0.5).rounded()
+        let headingStyleNext = NSMutableParagraphStyle()
+        headingStyleNext.lineHeightMultiple = 1.25
+        headingStyleNext.paragraphSpacingBefore = (size * 1.1).rounded()
+        headingStyleNext.paragraphSpacing = (size * 0.5).rounded()
 
         let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
         let lines = normalized.components(separatedBy: "\n")
         let output = NSMutableAttributedString()
+        output.beginEditing()
+        defer { output.endEditing() }
 
         var index = 0
         var inCodeBlock = false
@@ -639,36 +708,33 @@ enum TextDocumentLoader {
         func flushParagraph() {
             guard !paragraphBuffer.isEmpty else { return }
             let raw = paragraphBuffer.joined(separator: " ").trimmingCharacters(in: .whitespaces)
-            paragraphBuffer.removeAll()
+            paragraphBuffer.removeAll(keepingCapacity: true)
             guard !raw.isEmpty else { return }
             appendInlineMarkdown(
                 raw,
                 baseFont: bodyFont,
+                boldFont: bodyBoldFont,
+                italicFont: bodyItalicFont,
+                boldItalicFont: bodyBoldItalicFont,
+                monoFont: monoFont,
                 color: textColor,
                 linkColor: ribbonColor,
                 codeBG: codeBG,
                 paragraphStyle: bodyParagraph,
                 to: output
             )
-            output.append(NSAttributedString(string: "\n", attributes: [.font: bodyFont, .paragraphStyle: bodyParagraph]))
+            output.append(bodyNewline)
         }
 
         func flushCodeBlock() {
             guard !codeLines.isEmpty else { return }
-            let style = NSMutableParagraphStyle()
-            style.lineHeightMultiple = 1.4
-            style.headIndent = 14
-            style.firstLineHeadIndent = 14
-            style.tailIndent = -14
-            style.paragraphSpacingBefore = (size * 0.4).rounded()
-            style.paragraphSpacing = (size * 0.9).rounded()
             let joined = codeLines.joined(separator: "\n") + "\n"
-            codeLines.removeAll()
+            codeLines.removeAll(keepingCapacity: true)
             output.append(NSAttributedString(string: joined, attributes: [
                 .font: monoFont,
                 .foregroundColor: textColor,
                 .backgroundColor: codeBG,
-                .paragraphStyle: style,
+                .paragraphStyle: codeStyle,
             ]))
         }
 
@@ -702,25 +768,15 @@ enum TextDocumentLoader {
 
             if let heading = parseHeading(trimmed) {
                 flushParagraph()
-                let scale: CGFloat = heading.level == 1 ? 1.65 : (heading.level == 2 ? 1.35 : 1.15)
-                let headingSize = (size * scale).rounded()
-                let baseHeading = PlatformFont.systemFont(ofSize: headingSize, weight: .semibold)
-                let headingFont: PlatformFont = if let descriptor = baseHeading.fontDescriptor.withDesign(.serif) {
-                    #if os(macOS)
-                    PlatformFont(descriptor: descriptor, size: headingSize) ?? baseHeading
-                    #else
-                    PlatformFont(descriptor: descriptor, size: headingSize)
-                    #endif
-                } else {
-                    baseHeading
-                }
-                let style = NSMutableParagraphStyle()
-                style.lineHeightMultiple = 1.25
-                style.paragraphSpacingBefore = output.length == 0 ? 0 : (size * 1.1).rounded()
-                style.paragraphSpacing = (size * 0.5).rounded()
+                let headingFont = headingFonts[min(max(heading.level - 1, 0), 2)]
+                let style = output.length == 0 ? headingStyleFirst : headingStyleNext
                 appendInlineMarkdown(
                     heading.text,
                     baseFont: headingFont,
+                    boldFont: nil,
+                    italicFont: nil,
+                    boldItalicFont: nil,
+                    monoFont: monoFont,
                     color: textColor,
                     linkColor: ribbonColor,
                     codeBG: codeBG,
@@ -735,22 +791,20 @@ enum TextDocumentLoader {
             if trimmed.hasPrefix(">") {
                 flushParagraph()
                 let quoteText = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
-                let quoteStyle = NSMutableParagraphStyle()
-                quoteStyle.lineHeightMultiple = CGFloat(lineHeight)
-                quoteStyle.firstLineHeadIndent = 18
-                quoteStyle.headIndent = 18
-                quoteStyle.paragraphSpacing = (size * 0.8).rounded()
-                let quoteFont = italicFont(from: bodyFont)
                 appendInlineMarkdown(
                     quoteText,
                     baseFont: quoteFont,
+                    boldFont: bodyBoldItalicFont,
+                    italicFont: quoteFont,
+                    boldItalicFont: bodyBoldItalicFont,
+                    monoFont: monoFont,
                     color: mutedColor,
                     linkColor: ribbonColor,
                     codeBG: codeBG,
                     paragraphStyle: quoteStyle,
                     to: output
                 )
-                output.append(NSAttributedString(string: "\n", attributes: [.font: quoteFont, .paragraphStyle: quoteStyle]))
+                output.append(quoteNewline)
                 index += 1
                 continue
             }
@@ -758,26 +812,21 @@ enum TextDocumentLoader {
             if trimmed.hasPrefix("- ") || trimmed.hasPrefix("* ") || trimmed.hasPrefix("• ") {
                 flushParagraph()
                 let itemText = String(trimmed.dropFirst(2))
-                let listStyle = NSMutableParagraphStyle()
-                listStyle.lineHeightMultiple = CGFloat(lineHeight)
-                listStyle.firstLineHeadIndent = 12
-                listStyle.headIndent = 24
-                listStyle.paragraphSpacing = (size * 0.45).rounded()
-                output.append(NSAttributedString(string: "•  ", attributes: [
-                    .font: bodyFont,
-                    .foregroundColor: ribbonColor,
-                    .paragraphStyle: listStyle,
-                ]))
+                output.append(listBullet)
                 appendInlineMarkdown(
                     itemText,
                     baseFont: bodyFont,
+                    boldFont: bodyBoldFont,
+                    italicFont: bodyItalicFont,
+                    boldItalicFont: bodyBoldItalicFont,
+                    monoFont: monoFont,
                     color: textColor,
                     linkColor: ribbonColor,
                     codeBG: codeBG,
                     paragraphStyle: listStyle,
                     to: output
                 )
-                output.append(NSAttributedString(string: "\n", attributes: [.font: bodyFont, .paragraphStyle: listStyle]))
+                output.append(listNewline)
                 index += 1
                 continue
             }
@@ -805,6 +854,10 @@ enum TextDocumentLoader {
     private nonisolated static func appendInlineMarkdown(
         _ raw: String,
         baseFont: PlatformFont,
+        boldFont: PlatformFont?,
+        italicFont: PlatformFont?,
+        boldItalicFont: PlatformFont?,
+        monoFont: PlatformFont,
         color: PlatformColor,
         linkColor: PlatformColor,
         codeBG: PlatformColor,
@@ -823,20 +876,19 @@ enum TextDocumentLoader {
             output.append(NSAttributedString(string: raw, attributes: baseAttributes))
             return
         }
-        let chunk = NSMutableAttributedString()
         for run in parsed.runs {
             let text = String(parsed[run.range].characters)
             var attrs = baseAttributes
             if let intent = run.inlinePresentationIntent {
                 if intent.contains(.code) {
-                    attrs[.font] = PlatformFont.monospacedSystemFont(ofSize: max(12, baseFont.pointSize * 0.88), weight: .regular)
+                    attrs[.font] = monoFont
                     attrs[.backgroundColor] = codeBG
                 } else if intent.contains(.stronglyEmphasized) && intent.contains(.emphasized) {
-                    attrs[.font] = boldItalicFont(from: baseFont)
+                    attrs[.font] = boldItalicFont ?? Self.boldItalicFont(from: baseFont)
                 } else if intent.contains(.stronglyEmphasized) {
-                    attrs[.font] = boldFont(from: baseFont)
+                    attrs[.font] = boldFont ?? Self.boldFont(from: baseFont)
                 } else if intent.contains(.emphasized) {
-                    attrs[.font] = italicFont(from: baseFont)
+                    attrs[.font] = italicFont ?? Self.italicFont(from: baseFont)
                 }
                 if intent.contains(.strikethrough) {
                     attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
@@ -846,9 +898,8 @@ enum TextDocumentLoader {
                 attrs[.link] = link
                 attrs[.foregroundColor] = linkColor
             }
-            chunk.append(NSAttributedString(string: text, attributes: attrs))
+            output.append(NSAttributedString(string: text, attributes: attrs))
         }
-        output.append(chunk)
     }
 
     private nonisolated static func renderPlain(
@@ -865,7 +916,7 @@ enum TextDocumentLoader {
         let paragraph = NSMutableParagraphStyle()
         paragraph.lineHeightMultiple = CGFloat(lineHeight)
         paragraph.paragraphSpacing = (size * 0.95).rounded()
-        paragraph.hyphenationFactor = 0.6
+        paragraph.hyphenationFactor = 0
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: body,
@@ -875,19 +926,14 @@ enum TextDocumentLoader {
 
         let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
         let separator = normalized.contains("\n\n") ? "\n\n" : "\n"
-        let paragraphs = normalized
+        let joined = normalized
             .components(separatedBy: separator)
+            .lazy
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+            .joined(separator: "\n")
 
-        let result = NSMutableAttributedString()
-        for (index, text) in paragraphs.enumerated() {
-            result.append(NSAttributedString(string: text, attributes: attributes))
-            if index < paragraphs.count - 1 {
-                result.append(NSAttributedString(string: "\n", attributes: attributes))
-            }
-        }
-        return result
+        return NSMutableAttributedString(string: joined, attributes: attributes)
     }
 
     private nonisolated static func applyHighlights(_ highlights: [HighlightSpec], to result: NSMutableAttributedString) {
