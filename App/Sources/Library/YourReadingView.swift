@@ -84,7 +84,7 @@ struct ProfileView: View {
                     .padding(.horizontal, gutter)
             }
             .padding(.top, sizeClass == .compact ? 6 : 20)
-            .padding(.bottom, 92)
+            .padding(.bottom, sizeClass == .compact ? 128 : 88)
             .frame(maxWidth: 1180, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -166,10 +166,21 @@ struct ProfileView: View {
         GoalCard {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .top, spacing: 32) { figures }
-                Grid(alignment: .leading, horizontalSpacing: 28, verticalSpacing: 18) {
-                    GridRow { figure("Today", library.readingSecondsToday); figure("This week", week) }
-                    GridRow { figure(String(currentYear), year.totalSeconds); days }
+                Grid(alignment: .leading, horizontalSpacing: 20, verticalSpacing: 18) {
+                    GridRow {
+                        figure("Today", library.readingSecondsToday)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        figure("This week", week)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    GridRow {
+                        figure(String(currentYear), year.totalSeconds)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        days
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             MonthChart(seconds: year.monthSeconds, currentMonth: Calendar.current.component(.month, from: Date()))
                 .padding(.top, 6)
@@ -217,7 +228,10 @@ struct ProfileView: View {
         let hours = seconds / 3600
         let minutes = (seconds % 3600) / 60
         if hours == 0 { return (seconds > 0 && minutes == 0 ? "<1" : "\(minutes)", "min") }
-        if hours < 10 { return ("\(hours)h \(minutes)", "min") }
+        if hours < 10 {
+            if minutes == 0 { return ("\(hours)", hours == 1 ? "hour" : "hours") }
+            return ("\(hours)h \(minutes)m", "")
+        }
         return ("\(hours)", "hours")
     }
 }
@@ -250,9 +264,11 @@ struct GoalFigure: View {
                 .tracking(-0.6)
                 .foregroundStyle(palette.text)
                 .contentTransition(.numericText())
-            Text(unit)
-                .font(.chickenUI(13.5))
-                .foregroundStyle(palette.muted)
+            if !unit.isEmpty {
+                Text(unit)
+                    .font(.chickenUI(13.5))
+                    .foregroundStyle(palette.muted)
+            }
         }
         .monospacedDigit()
     }
@@ -381,7 +397,7 @@ struct EggCarton: View {
 
     var body: some View {
         let perRow = total <= 12 ? max(1, total) : min(12, (total + 1) / 2)
-        let columns = Array(repeating: GridItem(.flexible(minimum: 12, maximum: 20), spacing: 6), count: perRow)
+        let columns = Array(repeating: GridItem(.flexible(minimum: 12, maximum: 24), spacing: 6), count: perRow)
         LazyVGrid(columns: columns, alignment: .leading, spacing: 7) {
             ForEach(0..<total, id: \.self) { index in
                 let filled = index < laid
@@ -393,10 +409,10 @@ struct EggCarton: View {
                     }
                 }
                 .aspectRatio(0.78, contentMode: .fit)
-                .frame(maxWidth: 20)
+                .frame(maxWidth: 24)
             }
         }
-        .frame(maxWidth: CGFloat(perRow) * 26, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityHidden(true)
     }
 }
@@ -410,26 +426,35 @@ private struct MonthChart: View {
         let height: CGFloat = 64
         let scale = max(seconds.max() ?? 0, 60)
         let symbols = Calendar.current.veryShortMonthSymbols
-        HStack(alignment: .bottom, spacing: 0) {
-            ForEach(0..<12, id: \.self) { index in
-                let month = index + 1
-                VStack(spacing: 6) {
+        VStack(spacing: 6) {
+            HStack(alignment: .bottom, spacing: 0) {
+                ForEach(0..<12, id: \.self) { index in
+                    let month = index + 1
                     ZStack(alignment: .bottom) {
-                        RoundedRectangle(cornerRadius: 3).fill(palette.surfaceAlt).frame(width: 12, height: height)
+                        RoundedRectangle(cornerRadius: 3).fill(palette.surfaceAlt.opacity(0.65)).frame(width: 12, height: height)
                         if month <= currentMonth, seconds[index] > 0 {
                             RoundedRectangle(cornerRadius: 3)
                                 .fill(month == currentMonth ? palette.ribbon : palette.muted.opacity(0.45))
                                 .frame(width: 12, height: max(3, height * Double(seconds[index]) / Double(scale)))
                         }
                     }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            Rectangle()
+                .fill(palette.border)
+                .frame(height: 0.5)
+            HStack(spacing: 0) {
+                ForEach(0..<12, id: \.self) { index in
+                    let month = index + 1
                     Text(symbols[index])
                         .font(.chickenUI(9.5, weight: month == currentMonth ? .semibold : .medium))
                         .foregroundStyle(month == currentMonth ? palette.text : palette.faint)
+                        .frame(maxWidth: .infinity)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(Calendar.current.monthSymbols[index])
+                        .accessibilityValue("\(seconds[index] / 60) minutes")
                 }
-                .frame(maxWidth: .infinity)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(Calendar.current.monthSymbols[index])
-                .accessibilityValue("\(seconds[index] / 60) minutes")
             }
         }
     }

@@ -175,9 +175,9 @@ struct AddPhysicalBookSheet: View {
                         } label: {
                             Label("Scan ISBN", systemImage: "barcode.viewfinder")
                                 .font(.chickenUI(13.5, weight: .semibold))
+                                .foregroundStyle(palette.text)
                         }
-                        .buttonStyle(.bordered)
-                        .tint(palette.ribbon)
+                        .buttonStyle(.glass)
                         #endif
 
                         Spacer()
@@ -434,6 +434,7 @@ struct AddPhysicalBookSheet: View {
         }
         .frame(width: 50, height: 74)
         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).stroke(palette.border, lineWidth: 0.5))
     }
 
     private func prefillManualFromQuery() {

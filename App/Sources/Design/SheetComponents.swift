@@ -105,9 +105,9 @@ struct ChickenSection<Content: View, Accessory: View>: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(palette.surface)
-                    .stroke(palette.border, lineWidth: 0.75)
+                    .stroke(palette.border, lineWidth: 0.5)
             )
             if let footer {
                 Text(footer)

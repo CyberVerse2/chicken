@@ -252,7 +252,7 @@ struct BooksView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 14) {
                 ChickenScreenHeader(title: "Library") {
                     #if !os(macOS)
                     if isSelecting {
@@ -352,7 +352,7 @@ struct BooksView: View {
                 }
             }
             .padding(.top, sizeClass == .compact ? 6 : 20)
-            .padding(.bottom, 96)
+            .padding(.bottom, sizeClass == .compact ? 128 : 88)
             .frame(maxWidth: 1240, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -936,13 +936,15 @@ private struct CollectionShelfCard: View {
                         }
                 } else {
                     ForEach(Array(previewBooks.enumerated().reversed()), id: \.element.id) { index, book in
-                        let angle = Double(index - (previewBooks.count - 1) / 2) * 7
-                        let xOffset = CGFloat(index - (previewBooks.count - 1) / 2) * 20
+                        let center = Double(previewBooks.count - 1) / 2.0
+                        let offsetIndex = Double(index) - center
+                        let angle = offsetIndex * 7
+                        let xOffset = CGFloat(offsetIndex) * 20
                         BookCover(book: book, style: .mini)
                             .frame(width: 62, height: (62 / book.resolvedAspectRatio).rounded())
                             .shadow(color: palette.shadow, radius: 6, y: 3)
                             .rotationEffect(.degrees(angle), anchor: .bottom)
-                            .offset(x: xOffset, y: index == 0 ? -3 : 2)
+                            .offset(x: xOffset, y: abs(offsetIndex) < 0.5 ? -3 : 2)
                     }
                 }
             }
@@ -1009,7 +1011,7 @@ private struct CollectionDetailView: View {
                 }
             }
             .padding(.top, 10)
-            .padding(.bottom, 96)
+            .padding(.bottom, sizeClass == .compact ? 128 : 88)
             .frame(maxWidth: 1240, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -1081,8 +1083,9 @@ private struct BookEditorialList: View {
                             .foregroundStyle(isSelected ? palette.ribbon : palette.faint)
                     }
 
+                    let coverHeight = min(72, max(56, (44 / book.resolvedAspectRatio).rounded()))
                     BookCover(book: book, style: .mini)
-                        .frame(width: 44, height: 66)
+                        .frame(width: 44, height: coverHeight)
                         .downloadBadge(book, size: 18)
                         .shadow(color: palette.shadow, radius: 3, x: 0, y: 2)
 

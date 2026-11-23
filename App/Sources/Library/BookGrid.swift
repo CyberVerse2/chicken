@@ -30,7 +30,7 @@ struct BookGrid: View {
     }
 
     var body: some View {
-        let grid = LazyVGrid(columns: columns, alignment: .center, spacing: sizeClass == .compact ? 26 : 36) {
+        let grid = LazyVGrid(columns: columns, alignment: .center, spacing: sizeClass == .compact ? 28 : 36) {
             ForEach(books) { book in
                 BookObjectView(
                     book: book,

@@ -364,7 +364,7 @@ struct ReaderView: View {
                         .foregroundStyle(palette.text)
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
-                        .glassEffect(.regular, in: .capsule)
+                        .chickenGlass(in: Capsule())
                         .padding(.horizontal, 20)
                         .padding(.bottom, 24)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -790,7 +790,7 @@ private struct ReaderTopBannerOverlay: View {
                 .padding(.leading, 18)
                 .padding(.trailing, 10)
                 .padding(.vertical, 8)
-                .glassEffect(.regular, in: .capsule)
+                .chickenGlass(in: Capsule())
                 .transition(.move(edge: .top).combined(with: .opacity))
             } else if let catchUpDate, !waitingForFirstPage, !showSearch {
                 PreviouslyCatchUpCard(

@@ -38,7 +38,7 @@ struct ReaderProgressBar: View {
         .padding(.horizontal, 18)
         .padding(.vertical, compact ? 8 : 10)
         .frame(maxWidth: 820)
-        .glassEffect(.regular, in: .capsule)
+        .chickenGlass(in: Capsule())
         .animation(reduceMotion || dragProgress != nil ? nil : ChickenMotion.micro, value: shown)
     }
 
@@ -67,6 +67,19 @@ struct ReaderProgressBar: View {
                     .fill(palette.ribbon)
                     .overlay(Circle().stroke(palette.background.opacity(0.85), lineWidth: 1.5))
                     .frame(width: thumbSize, height: thumbSize)
+                    .overlay(alignment: .top) {
+                        if isDragging {
+                            Text("\(Int((shown * 100).rounded()))%")
+                                .font(.chickenMono(11.5, weight: .semibold))
+                                .foregroundStyle(palette.text)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
+                                .chickenGlass(in: Capsule())
+                                .fixedSize()
+                                .offset(y: -36)
+                                .allowsHitTesting(false)
+                        }
+                    }
                     .offset(x: trackOffset)
             }
             .frame(maxHeight: .infinity)
@@ -161,7 +174,7 @@ struct HighlightPicker: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
-        .glassEffect(.regular.interactive(), in: .capsule)
+        .chickenGlass(in: Capsule(), interactive: true)
     }
 }
 
@@ -211,7 +224,7 @@ struct ReaderSearchBar: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
         .frame(maxWidth: 460)
-        .glassEffect(.regular, in: .capsule)
+        .chickenGlass(in: Capsule())
         .padding(.horizontal, 16)
         .onAppear { focused = true }
     }

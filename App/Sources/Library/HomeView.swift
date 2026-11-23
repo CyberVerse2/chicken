@@ -216,9 +216,6 @@ struct HomeView: View {
                                             chapterIndex: featured.highlight.chapterIndex
                                         )
                                     )
-                                },
-                                onDetails: {
-                                    router.showDetails(featured.book.id, in: [featured.book.id])
                                 }
                             )
                             .padding(.horizontal, gutter)
@@ -228,7 +225,7 @@ struct HomeView: View {
                 }
             }
             .padding(.top, isCompact ? 6 : 20)
-            .padding(.bottom, 112)
+            .padding(.bottom, isCompact ? 128 : 88)
             .frame(maxWidth: 1180, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -398,7 +395,7 @@ private struct ReadingDeskHero: View {
     private func compactDeskCard(for book: Book) -> some View {
         VStack(spacing: 0) {
             sculptedCover(book: book, width: 184)
-                .padding(.bottom, 18)
+                .padding(.bottom, isContinuing ? 28 : 18)
 
             if showsTitleText {
                 VStack(spacing: 4) {
@@ -625,7 +622,7 @@ private struct DeskSculptedCover: View {
                 .coverTransitionSource(book.id)
                 .shadow(color: .black.opacity(palette.isDark ? 0.55 : 0.22), radius: 3, x: 0, y: 2)
                 .shadow(color: palette.shadow, radius: hovering ? 28 : 18, x: 0, y: hovering ? 18 : 12)
-                .coverRibbon(isContinuing, length: width * 0.18, width: max(11, width * 0.08))
+                .coverRibbon(isContinuing, length: width * 0.145, width: max(10, width * 0.068))
                 #if os(macOS)
                 .rotation3DEffect(
                     .degrees(hovering && !reduceMotion ? -6 : 0),
@@ -647,17 +644,40 @@ private struct DeskSculptedCover: View {
 
 private struct HomePassageCard: View {
     @Environment(\.palette) private var palette
+    @Environment(\.horizontalSizeClass) private var sizeClass
     let highlight: Highlight
     let book: Book
     let onOpen: () -> Void
-    let onDetails: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ShelfSectionHeader(title: "From Your Notebook", actionLabel: "Book", action: onDetails)
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("From Your Notebook")
+                    .font(.chickenDisplay(sizeClass == .compact ? 20 : 22))
+                    .tracking(-0.3)
+                    .foregroundStyle(palette.text)
+                Spacer(minLength: 8)
+                NavigationLink {
+                    NotebookView()
+                } label: {
+                    HStack(spacing: 3) {
+                        Text("Notebook")
+                            .font(.chickenUI(12.5, weight: .semibold))
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                    }
+                    .foregroundStyle(palette.muted)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(TactilePressStyle(scale: 0.96))
+            }
 
             Button(action: onOpen) {
-                HStack(alignment: .top, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    Capsule()
+                        .fill(highlight.color.bar)
+                        .frame(width: 3)
+
                     BookCover(book: book, style: .mini)
                         .frame(width: 44, height: (44 / book.resolvedAspectRatio).rounded())
                         .shadow(color: palette.shadow, radius: 4, y: 2)
@@ -693,6 +713,7 @@ private struct HomePassageCard: View {
 private struct ReadingPulseStrip: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let finishedCount: Int
     let annualGoal: Int
 
@@ -707,11 +728,14 @@ private struct ReadingPulseStrip: View {
             ZStack {
                 Circle()
                     .stroke(palette.surfaceAlt, lineWidth: 4.5)
+                Circle()
+                    .stroke(palette.border, lineWidth: 0.5)
                 if library.readingSecondsToday > 0 {
                     Circle()
                         .trim(from: 0, to: max(0.04, dailyFraction))
                         .stroke(palette.ribbon, style: StrokeStyle(lineWidth: 4.5, lineCap: .round))
                         .rotationEffect(.degrees(-90))
+                        .animation(reduceMotion ? nil : ChickenMotion.standard, value: dailyFraction)
                 }
                 Text("\(minutesToday)")
                     .font(.chickenMono(13, weight: .semibold))
@@ -720,10 +744,17 @@ private struct ReadingPulseStrip: View {
             .frame(width: 44, height: 44)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Today · \(minutesToday) of \(dailyGoal) min")
-                    .font(.chickenUI(14, weight: .semibold))
-                    .foregroundStyle(palette.text)
-                    .monospacedDigit()
+                HStack(spacing: 6) {
+                    Text("Today · \(minutesToday) of \(dailyGoal) min")
+                        .font(.chickenUI(14, weight: .semibold))
+                        .foregroundStyle(palette.text)
+                        .monospacedDigit()
+                    if dailyFraction >= 1 {
+                        Text("Goal reached")
+                            .font(.chickenUI(11.5, weight: .semibold))
+                            .foregroundStyle(palette.ribbon)
+                    }
+                }
                 Text("\(finishedCount) of \(annualGoal) books this year")
                     .font(.chickenUI(12))
                     .foregroundStyle(palette.muted)
@@ -822,6 +853,7 @@ struct BookShelf: View {
             }
             .contentMargins(.horizontal, gutter, for: .scrollContent)
             .contentMargins(.top, headroom, for: .scrollContent)
+            .contentMargins(.bottom, 16, for: .scrollContent)
             .scrollClipDisabled(!Platform.isMac)
             #if os(macOS)
             .overlay { pageButtons }
@@ -920,6 +952,7 @@ struct ActivityToast: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var bottomClearance: CGFloat = 96
     @State private var showingErrors = false
     @State private var dismissedMessage: String?
     @State private var dragOffset: CGFloat = 0
@@ -952,7 +985,7 @@ struct ActivityToast: View {
                 .foregroundStyle(palette.text)
                 .padding(.horizontal, 18)
                 .padding(.vertical, 11)
-                .glassEffect(.regular, in: .capsule)
+                .chickenGlass(in: Capsule())
                 .offset(y: max(0, dragOffset))
                 .gesture(
                     DragGesture(minimumDistance: 6)
@@ -971,7 +1004,7 @@ struct ActivityToast: View {
                             }
                         }
                 )
-                .padding(.bottom, 92)
+                .padding(.bottom, bottomClearance)
                 .transition(.move(edge: .bottom).combined(with: .opacity).combined(with: .scale(scale: 0.96)))
             }
         }

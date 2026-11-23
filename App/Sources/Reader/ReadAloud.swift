@@ -456,7 +456,7 @@ struct ReadAloudBar: View {
         .padding(.leading, 8)
         .padding(.trailing, 4)
         .padding(.vertical, 2)
-        .glassEffect(.regular, in: Capsule())
+        .chickenGlass(in: Capsule())
     }
 
     private func control(_ title: String, _ symbol: String, size: CGFloat = 14, color: Color? = nil, action: @escaping () -> Void) -> some View {

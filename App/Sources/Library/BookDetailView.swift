@@ -87,7 +87,7 @@ struct BookDossierView: View {
                     }
                     if let summary = book.summary, !summary.isEmpty {
                         summarySection(summary)
-                            .padding(.horizontal, isCompact ? 20 : 32)
+                            .padding(.horizontal, gutter)
                     } else {
                         Button {
                             showingMetadataMatch = true
@@ -100,19 +100,19 @@ struct BookDossierView: View {
                                 .chickenGlass(in: Capsule(), interactive: true)
                         }
                         .buttonStyle(.plain)
-                        .padding(.horizontal, isCompact ? 20 : 32)
+                        .padding(.horizontal, gutter)
                     }
                     if ReadingCompanion.isAvailable && (book.progress > 0.05 || (book.summary ?? "").isEmpty) {
                         companionSection(for: book)
-                            .padding(.horizontal, isCompact ? 20 : 32)
+                            .padding(.horizontal, gutter)
                     }
                     if book.highlightCount > 0 {
                         highlightsSection(for: book)
-                            .padding(.horizontal, isCompact ? 20 : 32)
+                            .padding(.horizontal, gutter)
                     }
                     relatedShelves(for: book)
                     detailsSection(for: book)
-                        .padding(.horizontal, isCompact ? 20 : 32)
+                        .padding(.horizontal, gutter)
                 }
                 .padding(.top, 24)
                 .padding(.bottom, 48)
@@ -196,6 +196,7 @@ struct BookDossierView: View {
                         .coverRibbon(book.progress > 0 && !book.isFinished, length: 26, width: 12)
                 }
                 .buttonStyle(TactilePressStyle())
+                .padding(.bottom, book.progress > 0 && !book.isFinished ? 10 : 0)
                 .accessibilityLabel("Read \(book.displayTitle)")
 
                 VStack(spacing: 6) {
@@ -260,7 +261,7 @@ struct BookDossierView: View {
                     HStack(spacing: 10) {
                         PrimaryHeroButton(
                             title: actionTitle(for: book),
-                            systemImage: "arrow.right",
+                            systemImage: book.isPhysical ? "book.closed" : "arrow.right",
                             height: 50,
                             action: { read(book) }
                         )
@@ -539,16 +540,18 @@ struct BookDossierView: View {
                         Button {
                             read(book, jumpTo: JumpTarget(location: highlight.location, chapterIndex: highlight.chapterIndex))
                         } label: {
-                            Text({
-                                var text = AttributedString(highlight.text)
-                                text.backgroundColor = highlight.color.fill
-                                return text
-                            }())
-                            .font(.chickenSerif(15.5))
-                            .foregroundStyle(palette.text)
-                            .lineSpacing(5)
-                            .lineLimit(5)
-                            .multilineTextAlignment(.leading)
+                            HStack(alignment: .top, spacing: 12) {
+                                Capsule()
+                                    .fill(highlight.color.bar)
+                                    .frame(width: 3)
+                                Text(highlight.text)
+                                    .font(.chickenSerif(15.5))
+                                    .foregroundStyle(palette.text)
+                                    .lineSpacing(5)
+                                    .lineLimit(5)
+                                    .multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                         }
@@ -602,16 +605,24 @@ struct BookDossierView: View {
         return Group {
             if !rows.isEmpty || hasExtraRows {
                 ChickenSection("Edition", accessory: {
-                    HStack(spacing: 12) {
-                        Button("Change Cover") { showingChangeCover = true }
-                            .font(.chickenUI(12.5, weight: .medium))
-                            .foregroundStyle(palette.ribbon)
-                            .buttonStyle(.plain)
-                        Button("Match Metadata") { showingMetadataMatch = true }
-                            .font(.chickenUI(12.5, weight: .medium))
-                            .foregroundStyle(palette.ribbon)
-                            .buttonStyle(.plain)
+                    Menu {
+                        Button("Change Cover…", systemImage: "photo.on.rectangle.angled") {
+                            showingChangeCover = true
+                        }
+                        Button("Match Metadata…", systemImage: "text.magnifyingglass") {
+                            showingMetadataMatch = true
+                        }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("Edit")
+                                .font(.chickenUI(12.5, weight: .semibold))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9.5, weight: .semibold))
+                        }
+                        .foregroundStyle(palette.muted)
                     }
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.plain)
                 }) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                         ChickenRow(isLast: index == rows.count - 1 && !hasExtraRows) {
@@ -705,7 +716,7 @@ struct BookDossierView: View {
         }
         .menuIndicator(.hidden)
         .buttonStyle(.plain)
-        .glassEffect(.regular.interactive(), in: .circle)
+        .chickenGlass(in: Circle(), interactive: true)
         .accessibilityLabel("More")
     }
 

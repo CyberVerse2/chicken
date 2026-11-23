@@ -51,7 +51,7 @@ struct PullRibbonOverlay: View {
                     .foregroundStyle(crossedThreshold ? palette.ribbon : palette.muted)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
-                    .glassEffect(.regular, in: .capsule)
+                    .chickenGlass(in: Capsule())
                     .fixedSize()
                     .offset(x: -54, y: max(28, displayedHeight - 10))
                     .transition(.opacity.combined(with: .scale(scale: 0.94)))
@@ -118,6 +118,11 @@ struct FootnotePopoverCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Capsule()
+                .fill(palette.faint.opacity(0.45))
+                .frame(width: 34, height: 4)
+                .frame(maxWidth: .infinity)
+                .padding(.top, -4)
             HStack(alignment: .center, spacing: 10) {
                 Text("Note \(footnote.label)")
                     .chickenEyebrow(palette, color: palette.ribbon)
@@ -151,7 +156,7 @@ struct FootnotePopoverCard: View {
         }
         .padding(18)
         .frame(maxWidth: 460)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .chickenGlass(in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .shadow(color: palette.shadow, radius: 18, x: 0, y: 8)
         .offset(y: max(0, dragOffset))
         .gesture(
@@ -186,6 +191,11 @@ struct PreviouslyCatchUpCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            Capsule()
+                .fill(palette.faint.opacity(0.45))
+                .frame(width: 34, height: 4)
+                .frame(maxWidth: .infinity)
+                .padding(.top, -2)
             HStack(alignment: .center, spacing: 8) {
                 Text("Previously · \(lastOpened.formatted(.relative(presentation: .named)))")
                     .chickenEyebrow(palette, color: palette.ribbon)
@@ -239,7 +249,7 @@ struct PreviouslyCatchUpCard: View {
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
         .frame(maxWidth: 460, alignment: .leading)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .chickenGlass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         .shadow(color: palette.shadow, radius: 14, x: 0, y: 6)
         .offset(y: min(0, dragOffset))
         .gesture(

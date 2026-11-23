@@ -10,6 +10,7 @@ struct LibrarySearchView: View {
     @Environment(\.openBook) private var openBook
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var books: [Book]
     @Query(sort: \Highlight.createdAt, order: .reverse) private var allHighlights: [Highlight]
+    @Query private var collections: [BookCollection]
 
     @State private var searchQuery = ""
 
@@ -122,16 +123,26 @@ struct LibrarySearchView: View {
                                     Button {
                                         openBook(item.book.id, jumpTo: JumpTarget(location: item.highlight.location, chapterIndex: item.highlight.chapterIndex))
                                     } label: {
-                                        VStack(alignment: .leading, spacing: 6) {
-                                            Text(item.highlight.text)
-                                                .font(.chickenSerif(15))
-                                                .foregroundStyle(palette.text)
-                                                .lineLimit(3)
-                                                .multilineTextAlignment(.leading)
-                                            Text(item.book.displayTitle)
-                                                .font(.chickenUI(12, weight: .medium))
-                                                .foregroundStyle(palette.muted)
-                                                .lineLimit(1)
+                                        let coverHeight = min(44, max(36, (28 / item.book.resolvedAspectRatio).rounded()))
+                                        HStack(alignment: .top, spacing: 12) {
+                                            Capsule()
+                                                .fill(item.highlight.color.bar)
+                                                .frame(width: 3)
+                                            BookCover(book: item.book, style: .mini)
+                                                .frame(width: 28, height: coverHeight)
+                                                .shadow(color: palette.shadow, radius: 2, y: 1)
+                                            VStack(alignment: .leading, spacing: 6) {
+                                                Text(item.highlight.text)
+                                                    .font(.chickenSerif(15))
+                                                    .foregroundStyle(palette.text)
+                                                    .lineLimit(3)
+                                                    .multilineTextAlignment(.leading)
+                                                Text(item.book.displayTitle)
+                                                    .font(.chickenUI(12, weight: .medium))
+                                                    .foregroundStyle(palette.muted)
+                                                    .lineLimit(1)
+                                            }
+                                            Spacer(minLength: 0)
                                         }
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                         .padding(14)
@@ -150,7 +161,7 @@ struct LibrarySearchView: View {
                 }
             }
             .padding(.top, sizeClass == .compact ? 6 : 20)
-            .padding(.bottom, 96)
+            .padding(.bottom, sizeClass == .compact ? 128 : 88)
             .frame(maxWidth: 1180, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -167,19 +178,34 @@ struct LibrarySearchView: View {
             ShelfSectionHeader(title: "Browse by Shelf")
                 .padding(.horizontal, gutter)
 
-            let items: [(title: String, icon: String, action: () -> Void)] = [
-                ("Reading Now", "book", { router.openLibrary(scope: .reading) }),
-                ("Unread", "books.vertical", { router.openLibrary(scope: .unread) }),
-                ("Finished", "checkmark.circle", { router.openLibrary(scope: .finished) }),
-                ("Collections", "rectangle.stack", { router.openLibrary(scope: .collections) }),
-                ("Quick Reads", "bolt", { router.openLibrary(scope: .all, secondaryFilter: .quickReads) }),
-                ("EPUBs", "doc.richtext", { router.openLibrary(scope: .all, secondaryFilter: .epub) }),
-                ("PDFs", "doc.text", { router.openLibrary(scope: .all, secondaryFilter: .pdf) }),
-                ("Print", "book.closed", { router.openLibrary(scope: .all, secondaryFilter: .physical) }),
+            let readingCount = books.filter { $0.progress > 0 && !$0.isFinished }.count
+            let unreadCount = books.filter { $0.progress == 0 && !$0.isFinished }.count
+            let finishedCount = books.filter(\.isFinished).count
+            let collectionsCount = collections.count
+            let quickReadsCount = books.filter(\.isQuickRead).count
+            let epubCount = books.filter { $0.format == .epub }.count
+            let pdfCount = books.filter { $0.format == .pdf }.count
+            let printCount = books.filter(\.isPhysical).count
+
+            let coreItems: [(title: String, icon: String, count: Int, action: () -> Void)] = [
+                ("Reading Now", "book", readingCount, { router.openLibrary(scope: .reading) }),
+                ("Unread", "books.vertical", unreadCount, { router.openLibrary(scope: .unread) }),
+                ("Finished", "checkmark.circle", finishedCount, { router.openLibrary(scope: .finished) }),
+                ("Collections", "rectangle.stack", collectionsCount, { router.openLibrary(scope: .collections) }),
             ]
+            let extraItems: [(title: String, icon: String, count: Int, action: () -> Void)] = [
+                ("Quick Reads", "bolt", quickReadsCount, { router.openLibrary(scope: .all, secondaryFilter: .quickReads) }),
+                ("EPUBs", "doc.richtext", epubCount, { router.openLibrary(scope: .all, secondaryFilter: .epub) }),
+                ("PDFs", "doc.text", pdfCount, { router.openLibrary(scope: .all, secondaryFilter: .pdf) }),
+                ("Print", "book.closed", printCount, { router.openLibrary(scope: .all, secondaryFilter: .physical) }),
+            ].filter { $0.count > 0 }
+            let items = coreItems + extraItems
 
             LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 146, maximum: 220), spacing: 10)],
+                columns: sizeClass == .compact
+                    ? Array(repeating: GridItem(.flexible(), spacing: 10), count: 2)
+                    : [GridItem(.adaptive(minimum: 168, maximum: .infinity), spacing: 12)],
+                alignment: .center,
                 spacing: 10
             ) {
                 ForEach(items, id: \.title) { item in
@@ -191,14 +217,17 @@ struct LibrarySearchView: View {
                             Image(systemName: item.icon)
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundStyle(palette.ribbon)
-                                .frame(width: 24)
+                                .frame(width: 22)
                             Text(item.title)
                                 .font(.chickenUI(14, weight: .semibold))
                                 .foregroundStyle(palette.text)
                                 .lineLimit(1)
                             Spacer(minLength: 4)
+                            Text("\(item.count)")
+                                .font(.chickenMono(12, weight: .medium))
+                                .foregroundStyle(palette.muted)
                             Image(systemName: "chevron.right")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: 10.5, weight: .semibold))
                                 .foregroundStyle(palette.faint)
                         }
                         .padding(.horizontal, 14)

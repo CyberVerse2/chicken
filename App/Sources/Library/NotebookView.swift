@@ -117,7 +117,7 @@ struct NotebookView: View {
                 }
             }
             .padding(.top, sizeClass == .compact ? 6 : 24)
-            .padding(.bottom, 96)
+            .padding(.bottom, sizeClass == .compact ? 128 : 88)
             .frame(maxWidth: 820, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
@@ -345,22 +345,24 @@ private struct NotebookHighlightCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Button(action: openAtHighlight) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(marked)
-                        .font(.chickenSerif(16.5))
-                        .foregroundStyle(palette.text)
-                        .lineSpacing(6)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                    if !highlight.note.isEmpty {
-                        HStack(alignment: .firstTextBaseline, spacing: 8) {
-                            Rectangle().fill(highlight.color.bar).frame(width: 10, height: 1.5)
-                                .alignmentGuide(.firstTextBaseline) { $0[.bottom] + 5 }
+                HStack(alignment: .top, spacing: 12) {
+                    Capsule()
+                        .fill(highlight.color.bar)
+                        .frame(width: 3)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(highlight.text)
+                            .font(.chickenSerif(16.5))
+                            .foregroundStyle(palette.text)
+                            .lineSpacing(6)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !highlight.note.isEmpty {
                             Text(highlight.note)
                                 .font(.chickenSerif(14, italic: true))
                                 .foregroundStyle(palette.muted)
                         }
                     }
+                    Spacer(minLength: 0)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -402,12 +404,6 @@ private struct NotebookHighlightCard: View {
             Divider()
             Button("Remove Highlight", systemImage: "trash", role: .destructive) { library.removeHighlight(highlight) }
         }
-    }
-
-    private var marked: AttributedString {
-        var text = AttributedString(highlight.text)
-        text.backgroundColor = highlight.color.fill
-        return text
     }
 
     private func openAtHighlight() {

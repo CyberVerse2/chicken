@@ -8,6 +8,7 @@ import PhotosUI
 struct ChangeCoverSheet: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.palette) private var palette
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dismiss) private var dismiss
 
     let book: Book
@@ -152,24 +153,46 @@ struct ChangeCoverSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             ChickenSection("Search Editions") {
                 ChickenRow {
-                    HStack(spacing: 10) {
-                        TextField("Title", text: $queryText)
+                    HStack(spacing: 12) {
+                        Text("Title")
+                            .font(.chickenUI(13.5, weight: .medium))
+                            .foregroundStyle(palette.muted)
+                            .frame(width: 56, alignment: .leading)
+                        TextField("Book title", text: $queryText)
                             .font(.chickenUI(14.5))
                             .textFieldStyle(.plain)
                             .foregroundStyle(palette.text)
-                        TextField("Author", text: $authorText)
-                            .font(.chickenUI(14))
-                            .textFieldStyle(.plain)
+                            .onSubmit { Task { await searchCovers() } }
+                    }
+                }
+                ChickenRow {
+                    HStack(spacing: 12) {
+                        Text("Author")
+                            .font(.chickenUI(13.5, weight: .medium))
                             .foregroundStyle(palette.muted)
+                            .frame(width: 56, alignment: .leading)
+                        TextField("Author name", text: $authorText)
+                            .font(.chickenUI(14.5))
+                            .textFieldStyle(.plain)
+                            .foregroundStyle(palette.text)
+                            .onSubmit { Task { await searchCovers() } }
+                    }
+                }
+                ChickenRow(isLast: true) {
+                    HStack {
+                        Spacer()
                         Button {
                             Task { await searchCovers() }
                         } label: {
-                            if isSearching {
-                                ProgressView().controlSize(.small)
-                            } else {
-                                Text("Search")
-                                    .font(.chickenUI(13, weight: .semibold))
+                            HStack(spacing: 6) {
+                                if isSearching {
+                                    ProgressView().controlSize(.small)
+                                } else {
+                                    Image(systemName: "magnifyingglass")
+                                }
+                                Text(isSearching ? "Searching…" : "Search")
                             }
+                            .font(.chickenUI(13.5, weight: .semibold))
                         }
                         .inkProminentButton()
                         .disabled(isSearching || queryText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
@@ -189,7 +212,10 @@ struct ChangeCoverSheet: View {
             } else if !editionCovers.isEmpty {
                 SectionLabel(text: "Edition Covers", count: editionCovers.count)
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 96, maximum: 130), spacing: 16, alignment: .bottom)],
+                    columns: sizeClass == .compact
+                        ? Array(repeating: GridItem(.flexible(), spacing: 14, alignment: .bottom), count: 3)
+                        : [GridItem(.adaptive(minimum: 110, maximum: .infinity), spacing: 16, alignment: .bottom)],
+                    alignment: .center,
                     spacing: 18
                 ) {
                     ForEach(editionCovers) { match in

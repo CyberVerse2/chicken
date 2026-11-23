@@ -81,8 +81,11 @@ struct PhysicalBookLogSheet: View {
         ChickenSection("Print Edition") {
             ChickenRow(isLast: true) {
                 HStack(alignment: .top, spacing: 14) {
+                    let coverHeight: CGFloat = 96
+                    let coverWidth = (coverHeight * book.resolvedAspectRatio).rounded()
                     BookCover(book: book, style: .tile)
-                        .frame(width: 64, height: 96)
+                        .frame(width: coverWidth, height: coverHeight)
+                        .shadow(color: palette.shadow, radius: 6, y: 3)
                     VStack(alignment: .leading, spacing: 5) {
                         Text(book.displayTitle)
                             .font(.chickenDisplay(19, weight: .bold))
@@ -214,14 +217,24 @@ struct PhysicalBookLogSheet: View {
                                 .foregroundStyle(palette.text)
                         }
                         Spacer()
-                        Button {
-                            toggleTimer()
-                        } label: {
-                            Label(timerRunning ? "Pause" : "Start Timer", systemImage: timerRunning ? "pause.fill" : "play.fill")
-                                .font(.chickenUI(13, weight: .semibold))
+                        if timerRunning {
+                            Button {
+                                toggleTimer()
+                            } label: {
+                                Label("Pause", systemImage: "pause.fill")
+                                    .font(.chickenUI(13, weight: .semibold))
+                                    .foregroundStyle(palette.text)
+                            }
+                            .buttonStyle(.glass)
+                        } else {
+                            Button {
+                                toggleTimer()
+                            } label: {
+                                Label("Start Timer", systemImage: "play.fill")
+                                    .font(.chickenUI(13, weight: .semibold))
+                            }
+                            .inkProminentButton()
                         }
-                        .buttonStyle(.borderedProminent)
-                        .tint(timerRunning ? palette.muted : palette.ribbon)
                     }
                 }
             }
@@ -229,11 +242,12 @@ struct PhysicalBookLogSheet: View {
                 HStack(spacing: 8) {
                     ForEach([15, 30, 45, 60], id: \.self) { mins in
                         Button("+\(mins)m") {
+                            Haptics.selection()
                             addedMinutes += mins
                         }
                         .font(.chickenMono(12.5, weight: .semibold))
-                        .buttonStyle(.bordered)
-                        .tint(palette.ribbon)
+                        .foregroundStyle(palette.text)
+                        .buttonStyle(.glass)
                     }
                     Spacer()
                     if addedMinutes > 0 || accumulatedTimerSeconds > 0 || timerRunning {
@@ -301,30 +315,22 @@ struct PhysicalBookLogSheet: View {
     private var actionButtons: some View {
         HStack(spacing: 12) {
             if !book.isFinished {
-                Button {
+                SecondaryActionButton(title: "Mark Finished", systemImage: "checkmark.circle") {
                     saveProgress(markFinished: true)
-                } label: {
-                    Label("Mark Finished", systemImage: "checkmark.circle")
-                        .font(.chickenUI(14, weight: .semibold))
                 }
-                .buttonStyle(.bordered)
-                .tint(palette.ribbon)
             }
 
             Spacer()
 
-            Button {
+            PrimaryActionButton(title: "Save Progress", systemImage: "checkmark") {
                 saveProgress(markFinished: false)
-            } label: {
-                Label("Save Progress", systemImage: "checkmark")
-                    .font(.chickenUI(14, weight: .semibold))
             }
-            .inkProminentButton()
         }
     }
 
     private func pageDeltaButton(_ label: String, delta: Int) -> some View {
         Button(label) {
+            Haptics.selection()
             let current = parsedCurrentPage ?? 0
             let upperBound = effectiveTotalPages ?? Int.max
             let next = min(upperBound, max(0, current + delta))
@@ -332,8 +338,8 @@ struct PhysicalBookLogSheet: View {
             syncPercentFromPage()
         }
         .font(.chickenMono(12, weight: .semibold))
-        .buttonStyle(.bordered)
-        .tint(palette.ribbon)
+        .foregroundStyle(palette.text)
+        .buttonStyle(.glass)
     }
 
     private func syncPercentFromPage() {

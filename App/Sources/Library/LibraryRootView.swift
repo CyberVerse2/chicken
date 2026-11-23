@@ -36,6 +36,14 @@ struct LibraryRootView: View {
         Array(books.lazy.filter { $0.progress > 0 && !$0.isFinished }.prefix(8))
     }
 
+    private var toastBottomClearance: CGFloat {
+        #if os(macOS)
+        24
+        #else
+        (sizeClass == .compact && tab != .search && router.presentedReader == nil && reading.first != nil) ? 152 : 96
+        #endif
+    }
+
     private static var initialTab: AppTab {
         #if DEBUG
         switch ProcessInfo.processInfo.environment["CHICKEN_DEBUG_TAB"] {
@@ -92,7 +100,7 @@ struct LibraryRootView: View {
                 receive(files)
                 return true
             }
-            .overlay(alignment: .bottom) { ActivityToast() }
+            .overlay(alignment: .bottom) { ActivityToast(bottomClearance: toastBottomClearance) }
             .onChange(of: router.pendingLibraryPlace, initial: true) {
                 guard let place = router.pendingLibraryPlace else { return }
                 router.pendingLibraryPlace = nil
@@ -482,7 +490,7 @@ private struct NowReadingTabBarAccessory: View {
         Button(action: onOpen) {
             HStack(spacing: 10) {
                 BookCover(book: book, style: .mini)
-                    .frame(width: 20, height: 30)
+                    .frame(width: max(18, (30 * book.resolvedAspectRatio).rounded()), height: 30)
                     .clipShape(RoundedRectangle(cornerRadius: 3.5, style: .continuous))
                     .shadow(color: palette.shadow, radius: 1.5, x: 0, y: 1)
 

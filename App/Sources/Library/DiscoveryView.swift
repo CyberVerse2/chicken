@@ -100,7 +100,7 @@ struct DiscoveryView: View {
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 11)
-            .glassEffect(.regular, in: .capsule)
+            .chickenGlass(in: Capsule())
         case .enriching(let found):
             HStack(spacing: 12) {
                 ProgressView().controlSize(.small)
@@ -110,7 +110,7 @@ struct DiscoveryView: View {
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 11)
-            .glassEffect(.regular, in: .capsule)
+            .chickenGlass(in: Capsule())
         case .finished(let found):
             HStack(spacing: 10) {
                 Image(systemName: found == 0 ? "checkmark.circle" : "sparkles")

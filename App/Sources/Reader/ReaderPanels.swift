@@ -221,13 +221,19 @@ private struct HighlightCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Button { model.jump(toHighlight: highlight) } label: {
-                Text(marked)
-                    .font(.chickenSerif(15.5))
-                    .foregroundStyle(palette.text)
-                    .lineSpacing(5)
-                    .multilineTextAlignment(.leading)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                HStack(alignment: .top, spacing: 10) {
+                    Capsule()
+                        .fill(highlight.color.bar)
+                        .frame(width: 3)
+                    Text(highlight.text)
+                        .font(.chickenSerif(15.5))
+                        .foregroundStyle(palette.text)
+                        .lineSpacing(5)
+                        .multilineTextAlignment(.leading)
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(TactilePressStyle(scale: 0.99))
 
@@ -302,12 +308,6 @@ private struct HighlightCard: View {
 
     private var draftBinding: Binding<String> {
         Binding(get: { draft ?? "" }, set: { draft = $0 })
-    }
-
-    private var marked: AttributedString {
-        var text = AttributedString(highlight.text)
-        text.backgroundColor = highlight.color.fill
-        return text
     }
 
     private var chapterTitle: String {

@@ -205,14 +205,7 @@ struct BookFinishedSheet: View {
                     }
 
                     VStack(spacing: 10) {
-                        Button(action: onCloseReader) {
-                            Text("Back to Library")
-                                .font(.chickenUI(15, weight: .semibold))
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 28)
-                        }
-                        .inkProminentButton()
-                        .controlSize(.large)
+                        PrimaryHeroButton(title: "Back to Library", height: 50, action: onCloseReader)
 
                         Button("Keep Reading", action: onKeepReading)
                             .font(.chickenUI(14, weight: .medium))
