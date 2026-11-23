@@ -355,17 +355,7 @@ struct LibraryToolbar: ToolbarContent {
         #endif
         ToolbarItemGroup(placement: Self.placement) {
             Menu {
-                Button("Import Files…", systemImage: "doc.badge.plus") { router.showingImporter = true }
-                Button("Add Physical Book…", systemImage: "book.closed") {
-                    router.presentSheet(.addPhysicalBook(scanImmediately: false))
-                }
-                #if os(iOS)
-                Button("Scan Book Barcode…", systemImage: "barcode.viewfinder") {
-                    router.presentSheet(.addPhysicalBook(scanImmediately: true))
-                }
-                #endif
-                Divider()
-                Button("Find Books in Folders…", systemImage: "folder.badge.gearshape") { router.presentSheet(.discovery) }
+                AddBooksMenuItems()
             } label: {
                 Label("Add Books", systemImage: "plus")
             }

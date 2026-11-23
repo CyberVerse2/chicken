@@ -14,6 +14,8 @@ struct HomeView: View {
     var onOpenProfile: (() -> Void)? = nil
 
     @State private var heroHue: CoverHue?
+    @State private var headerState = ScrollHeaderState()
+    @State private var headerHeight: CGFloat = 52
 
     private var isCompact: Bool { sizeClass == .compact }
     private var gutter: CGFloat { isCompact ? 20 : 40 }
@@ -144,16 +146,27 @@ struct HomeView: View {
                             BookShelf(title: "Quick reads", books: s.quickReads, gutter: gutter)
                         }
 
-                        NavigationLink {
-                            ProfileView()
-                        } label: {
-                            ReadingPulseStrip(
-                                finishedCount: s.finishedThisYearCount,
-                                annualGoal: library.preferences.annualBookGoal
-                            )
+                        if let onOpenProfile {
+                            Button(action: onOpenProfile) {
+                                ReadingPulseStrip(
+                                    finishedCount: s.finishedThisYearCount,
+                                    annualGoal: library.preferences.annualBookGoal
+                                )
+                            }
+                            .buttonStyle(TactilePressStyle())
+                            .padding(.horizontal, gutter)
+                        } else {
+                            NavigationLink {
+                                ProfileView(isPushed: true)
+                            } label: {
+                                ReadingPulseStrip(
+                                    finishedCount: s.finishedThisYearCount,
+                                    annualGoal: library.preferences.annualBookGoal
+                                )
+                            }
+                            .buttonStyle(TactilePressStyle())
+                            .padding(.horizontal, gutter)
                         }
-                        .buttonStyle(TactilePressStyle())
-                        .padding(.horizontal, gutter)
                     }
                     .padding(.top, isCompact ? 48 : 36)
                 }
@@ -162,6 +175,12 @@ struct HomeView: View {
             .frame(maxWidth: 1180, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
+        #if !os(macOS)
+        .trackScrollHeader(headerState)
+        .safeAreaBar(edge: .top, spacing: 0) {
+            iosHeader
+        }
+        #endif
         .scrollContentBackground(.hidden)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(alignment: .top) {
@@ -175,6 +194,9 @@ struct HomeView: View {
             }
         }
         .pageTitle("Home")
+        #if !os(macOS)
+        .toolbar(isCompact ? .hidden : .automatic, for: .navigationBar)
+        #endif
         .task(id: "\(hero?.id.uuidString ?? "none")-\(hero?.coverImageName ?? "")-\(hero?.coverDominantHex ?? -1)") {
             guard let hero else {
                 heroHue = nil
@@ -182,10 +204,46 @@ struct HomeView: View {
             }
             heroHue = await CoverTintModifier.hue(for: hero, library: library)
         }
+        #if os(macOS)
         .toolbar {
             LibraryToolbar(onOpenProfile: onOpenProfile)
         }
+        #endif
     }
+
+    #if !os(macOS)
+    private var iosHeader: some View {
+        HStack(spacing: 12) {
+            BrandLockup(size: 17)
+            Spacer(minLength: 8)
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    CircularGlassMenu(title: "Add Books", systemImage: "plus") {
+                        AddBooksMenuItems()
+                    }
+                    if let onOpenProfile {
+                        CircularGlassButton(
+                            title: "Profile",
+                            systemImage: "person.crop.circle",
+                            diameter: 38,
+                            iconSize: 16,
+                            action: onOpenProfile
+                        )
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, gutter)
+        .padding(.vertical, 6)
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+            if height > 0 { headerHeight = height }
+        }
+        .offset(y: headerState.isCollapsed ? -headerHeight - 16 : 0)
+        .opacity(headerState.isCollapsed ? 0 : 1)
+        .allowsHitTesting(!headerState.isCollapsed)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: headerState.isCollapsed)
+    }
+    #endif
 }
 
 private struct HomeAtmosphereBackdrop: View {

@@ -11,6 +11,7 @@ struct ProfileView: View {
     private var finished: [Book]
     @Query(sort: \Book.lastActivityAt, order: .reverse) private var allBooks: [Book]
     @Query(sort: \Highlight.createdAt, order: .reverse) private var highlights: [Highlight]
+    var isPushed = false
     @State private var year = ReadingLog.Year()
 
     private var gutter: CGFloat { sizeClass == .compact ? 20 : 40 }
@@ -27,12 +28,41 @@ struct ProfileView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                PageHeader(
-                    title: "Profile",
-                    subtitle: physicalCount > 0
-                        ? "\(allBooks.count) books · \(physicalCount) print · \(highlights.count) highlights"
-                        : "\(allBooks.count) books · \(highlights.count) highlights"
-                )
+                HStack(alignment: .top, spacing: 10) {
+                    PageHeader(
+                        title: "Profile",
+                        subtitle: physicalCount > 0
+                            ? "\(allBooks.count) books · \(physicalCount) print · \(highlights.count) highlights"
+                            : "\(allBooks.count) books · \(highlights.count) highlights"
+                    )
+                    #if !os(macOS)
+                    Spacer(minLength: 8)
+                    GlassEffectContainer(spacing: 8) {
+                        HStack(spacing: 8) {
+                            CircularGlassMenu(title: "Theme", systemImage: library.preferences.theme.systemImage) {
+                                Picker("Theme", selection: Binding(
+                                    get: { library.preferences.theme },
+                                    set: { library.preferences.theme = $0 }
+                                )) {
+                                    ForEach(ReadingTheme.allCases) { theme in
+                                        Label(theme.label, systemImage: theme.systemImage).tag(theme)
+                                    }
+                                }
+                                .pickerStyle(.inline)
+                            }
+                            CircularGlassButton(
+                                title: "Settings",
+                                systemImage: "gearshape",
+                                diameter: 38,
+                                iconSize: 16
+                            ) {
+                                router.presentSheet(.settings)
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                    #endif
+                }
                 .padding(.horizontal, gutter)
 
                 timeRead
@@ -62,10 +92,12 @@ struct ProfileView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollContentBackground(.hidden)
-        .scrollEdgeEffectStyle(.hard, for: .top)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(palette.background.ignoresSafeArea())
         .pageTitle("Profile")
+        #if !os(macOS)
+        .toolbar(!isPushed && sizeClass == .compact ? .hidden : .automatic, for: .navigationBar)
+        #else
         .toolbar {
             ToolbarItemGroup(placement: LibraryToolbar.placement) {
                 Menu {
@@ -82,17 +114,12 @@ struct ProfileView: View {
                     Label("Theme", systemImage: library.preferences.theme.systemImage)
                 }
 
-                #if os(macOS)
                 SettingsLink {
                     Label("Settings", systemImage: "gearshape")
                 }
-                #else
-                Button("Settings", systemImage: "gearshape") {
-                    router.presentSheet(.settings)
-                }
-                #endif
             }
         }
+        #endif
         .task(id: library.readingSecondsToday / 60) { year = library.readingYear() }
     }
 

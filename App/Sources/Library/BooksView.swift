@@ -347,12 +347,56 @@ struct BooksView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                HStack(alignment: .center, spacing: 12) {
-                    PageHeader(title: "Library")
-                    Spacer(minLength: 8)
-                    if !books.isEmpty {
-                        viewModeSwitcher
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .center, spacing: 10) {
+                        PageHeader(title: "Library")
+                        Spacer(minLength: 8)
+                        #if os(macOS)
+                        if !books.isEmpty {
+                            viewModeSwitcher
+                        }
+                        #else
+                        if sizeClass != .compact && !books.isEmpty {
+                            viewModeSwitcher
+                        }
+                        if isSelecting {
+                            Button("Done") {
+                                selection = nil
+                            }
+                            .font(.chickenUI(14, weight: .semibold))
+                            .foregroundStyle(palette.text)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 8)
+                            .chickenGlass(in: Capsule(), interactive: true)
+                            .buttonStyle(.plain)
+                        } else {
+                            GlassEffectContainer(spacing: 8) {
+                                HStack(spacing: 8) {
+                                    CircularGlassMenu(title: "Add Books", systemImage: "plus") {
+                                        AddBooksMenuItems()
+                                    }
+                                    if !books.isEmpty {
+                                        CircularGlassMenu(title: "Library Options", systemImage: "ellipsis") {
+                                            optionsMenuItems
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        #endif
                     }
+                    #if !os(macOS)
+                    if sizeClass == .compact && !books.isEmpty {
+                        HStack(alignment: .center, spacing: 8) {
+                            Text("\(visible.count) \(visible.count == 1 ? "book" : "books")")
+                                .font(.chickenMono(12, weight: .medium))
+                                .foregroundStyle(palette.muted)
+                                .monospacedDigit()
+                            Spacer(minLength: 8)
+                            viewModeSwitcher
+                        }
+                    }
+                    #endif
                 }
                 .padding(.horizontal, gutter)
 
@@ -490,9 +534,16 @@ struct BooksView: View {
             .frame(maxWidth: 1240, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }
+        #if os(macOS)
         .searchable(text: $searchQuery, prompt: "Search books, series, genres, or highlights")
+        #else
+        .searchable(
+            text: $searchQuery,
+            placement: .navigationBarDrawer(displayMode: .automatic),
+            prompt: "Search books, series, genres, or highlights"
+        )
+        #endif
         .scrollContentBackground(.hidden)
-        .scrollEdgeEffectStyle(.hard, for: .top)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(palette.background.ignoresSafeArea())
         .pageTitle("Library")
@@ -539,6 +590,7 @@ struct BooksView: View {
         } message: {
             Text("The books stay in your library.")
         }
+        #if os(macOS)
         .toolbar {
             if isSelecting {
                 ToolbarItem(placement: LibraryToolbar.placement) {
@@ -552,22 +604,7 @@ struct BooksView: View {
                 if !books.isEmpty {
                     ToolbarItem(placement: LibraryToolbar.placement) {
                         Menu {
-                            Button("Select Books", systemImage: "checkmark.circle") {
-                                selection = []
-                            }
-                            Toggle(
-                                "Show Cover Titles",
-                                systemImage: "textformat",
-                                isOn: Binding(
-                                    get: { library.preferences.showCoverTitles },
-                                    set: { library.preferences.showCoverTitles = $0 }
-                                )
-                            )
-                            Divider()
-                            Picker("Sort By", selection: $sort) {
-                                ForEach(LibrarySort.allCases) { Text($0.label).tag($0) }
-                            }
-                            .pickerStyle(.inline)
+                            optionsMenuItems
                         } label: {
                             Label("Library Options", systemImage: "ellipsis")
                         }
@@ -575,6 +612,27 @@ struct BooksView: View {
                 }
             }
         }
+        #endif
+    }
+
+    @ViewBuilder
+    private var optionsMenuItems: some View {
+        Button("Select Books", systemImage: "checkmark.circle") {
+            selection = []
+        }
+        Toggle(
+            "Show Cover Titles",
+            systemImage: "textformat",
+            isOn: Binding(
+                get: { library.preferences.showCoverTitles },
+                set: { library.preferences.showCoverTitles = $0 }
+            )
+        )
+        Divider()
+        Picker("Sort By", selection: $sort) {
+            ForEach(LibrarySort.allCases) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.inline)
     }
 
     private var viewModeSwitcher: some View {

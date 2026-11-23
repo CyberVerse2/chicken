@@ -122,12 +122,13 @@ struct NotebookView: View {
             .frame(maxWidth: .infinity, alignment: .top)
         }
         .scrollContentBackground(.hidden)
-        .scrollEdgeEffectStyle(.hard, for: .top)
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(palette.background.ignoresSafeArea())
         .pageTitle("Notebook")
         .searchable(text: $query, prompt: "Filter quotes, notes, or books")
+        #if os(macOS)
         .toolbar { LibraryToolbar() }
+        #endif
     }
 
     private var colorFilter: some View {
