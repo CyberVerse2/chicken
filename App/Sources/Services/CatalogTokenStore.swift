@@ -9,7 +9,24 @@ enum CatalogTokenStore {
         !(loadHardcoverToken() ?? "").isEmpty
     }
 
+    static var hasKeychainToken: Bool {
+        loadKeychainToken() != nil
+    }
+
+    static func bundledHardcoverToken() -> String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "HardcoverAPIToken") as? String else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, !trimmed.contains("$(") else { return nil }
+        return trimmed
+    }
+
     static func loadHardcoverToken() -> String? {
+        loadKeychainToken() ?? bundledHardcoverToken()
+    }
+
+    private static func loadKeychainToken() -> String? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,

@@ -243,7 +243,13 @@ public final class BookCatalogClient: Sendable {
             warnings.append(error.localizedDescription)
         }
 
-        return BookCatalogSearchResult(matches: Self.deduplicate(combined), warnings: warnings)
+        let ranked = Self.deduplicate(combined).sorted { lhs, rhs in
+            let lScore = Self.matchConfidence(query: query, match: lhs) + Self.popularityBonus(lhs)
+            let rScore = Self.matchConfidence(query: query, match: rhs) + Self.popularityBonus(rhs)
+            if lScore != rScore { return lScore > rScore }
+            return lhs.richnessScore > rhs.richnessScore
+        }
+        return BookCatalogSearchResult(matches: ranked, warnings: warnings)
     }
 
     public func bestMatch(for query: BookCatalogQuery, hardcoverToken: String?) async -> BookCatalogMatch? {
@@ -888,31 +894,55 @@ public final class BookCatalogClient: Sendable {
         }
         guard titleScore > 0 else { return 0 }
 
+        var finalScore: Double
         if let qAuthor = query.author, !match.authors.isEmpty {
             let qAuthWords = normalizedWords(qAuthor)
             let mAuthWords = normalizedWords(match.authors.joined(separator: " "))
             let authMatch = !qAuthWords.isDisjoint(with: mAuthWords)
             if authMatch {
-                return min(1.0, titleScore * 0.8 + 0.2)
+                finalScore = min(1.0, titleScore * 0.8 + 0.2)
+            } else {
+                finalScore = titleScore * 0.65
             }
-            return titleScore * 0.65
+        } else {
+            finalScore = titleScore * 0.82
         }
-        return titleScore * 0.82
+
+        let mLower = match.title.lowercased()
+        let qLower = query.title.lowercased()
+        if !qLower.contains("summary") && !qLower.contains("study guide") {
+            if mLower.hasPrefix("summary ") || mLower.hasPrefix("summary:") || mLower.contains("summary and analysis") || mLower.contains("study guide") {
+                finalScore *= 0.35
+            }
+        }
+        return finalScore
+    }
+
+    private static func popularityBonus(_ match: BookCatalogMatch) -> Double {
+        let countBonus = min(0.18, log10(Double(max(1, match.ratingsCount ?? 0))) / 25.0)
+        return countBonus + (match.source == .hardcover ? 0.04 : 0.0)
     }
 
     private static func pickBest(from items: [BookCatalogMatch], query: BookCatalogQuery) -> BookCatalogMatch? {
-        var best: (match: BookCatalogMatch, score: Double)?
+        var best: (match: BookCatalogMatch, confidence: Double, rank: Double)?
         for item in items {
-            let score = matchConfidence(query: query, match: item)
+            let confidence = matchConfidence(query: query, match: item)
+            let rank = confidence + popularityBonus(item)
             if let existing = best {
-                if score > existing.score + 0.02 || (abs(score - existing.score) <= 0.02 && item.richnessScore > existing.match.richnessScore) {
-                    best = (item, score)
+                if confidence >= 0.72 && existing.confidence < 0.72 {
+                    best = (item, confidence, rank)
+                } else if abs(confidence - existing.confidence) <= 0.04 {
+                    if rank > existing.rank || (abs(rank - existing.rank) <= 0.01 && item.richnessScore > existing.match.richnessScore) {
+                        best = (item, confidence, rank)
+                    }
+                } else if confidence > existing.confidence {
+                    best = (item, confidence, rank)
                 }
             } else {
-                best = (item, score)
+                best = (item, confidence, rank)
             }
         }
-        guard let best, best.score >= 0.72 else { return nil }
+        guard let best, best.confidence >= 0.72 else { return nil }
         return best.match
     }
 

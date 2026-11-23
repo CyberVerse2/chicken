@@ -3,7 +3,7 @@ import Foundation
 import SwiftData
 
 extension LibraryStore {
-    static let currentCatalogEnrichVersion = 1
+    static let currentCatalogEnrichVersion = 2
 
     func applyCatalogMatch(
         _ rawMatch: BookCatalogMatch,
@@ -53,6 +53,7 @@ extension LibraryStore {
                 await CloudFolders.removeAll(staleCoverFiles)
             }
             book.coverImageName = downloadedCoverName
+            book.hasCatalogCover = true
             CoverImageCache.shared.invalidate()
             coversGeneration += 1
         }
@@ -176,7 +177,8 @@ extension LibraryStore {
             return EnrichmentWork(
                 id: book.id,
                 query: BookCatalogQuery(title: book.displayTitle, author: book.author, isbn: book.isbn),
-                needsCover: book.coverImageName == nil,
+                needsCover: !book.hasCatalogCover || book.coverImageName == nil,
+                hadExistingCover: book.coverImageName != nil,
                 fileURL: localURL,
                 format: book.format
             )
@@ -199,6 +201,7 @@ extension LibraryStore {
                 let result = await Self.fetchEnrichment(item: item, token: token, coversDirectory: coversDirectory)
                 guard !Task.isCancelled, let self else { return }
                 completed += 1
+                var staleFilesToRemove: [URL] = []
                 if let book = self.book(id: item.id) {
                     var didUpdate = false
                     if let extractedISBN = result.extractedISBN, (book.isbn ?? "").isEmpty {
@@ -209,8 +212,12 @@ extension LibraryStore {
                         if self.applyMissingCatalogFields(match, to: book) {
                             didUpdate = true
                         }
-                        if let coverName = result.coverImageName, book.coverImageName == nil {
+                        if let coverName = result.coverImageName {
+                            if let existingName = book.coverImageName, existingName != coverName {
+                                staleFilesToRemove = self.storedFiles(of: book).filter { $0.lastPathComponent == existingName }
+                            }
                             book.coverImageName = coverName
+                            book.hasCatalogCover = true
                             CoverImageCache.shared.invalidate()
                             self.coversGeneration += 1
                             didUpdate = true
@@ -228,6 +235,9 @@ extension LibraryStore {
                             self.save()
                         }
                     }
+                }
+                if !staleFilesToRemove.isEmpty {
+                    await CloudFolders.removeAll(staleFilesToRemove)
                 }
                 self.catalogEnrichState = .enriching(completed: completed, total: items.count)
             }
@@ -317,6 +327,7 @@ extension LibraryStore {
             || (book.publisher ?? "").isEmpty
             || (book.pageCount ?? 0) <= 0
             || book.coverImageName == nil
+            || !book.hasCatalogCover
             || book.releaseYear == nil
             || book.genres.isEmpty
     }
@@ -344,7 +355,13 @@ extension LibraryStore {
         var coverName: String?
         if item.needsCover, let coverURL = match.coverURL,
            let data = await BookCatalogClient.shared.downloadCoverData(from: coverURL) {
-            coverName = CoverRenderer.saveCover(from: data, id: item.id, in: coversDirectory)
+            coverName = CoverRenderer.saveCover(
+                from: data,
+                id: item.id,
+                in: coversDirectory,
+                minWidth: item.hadExistingCover ? 200 : 80,
+                minHeight: item.hadExistingCover ? 260 : 80
+            )
         }
         return (match, coverName, extractedISBN)
     }
@@ -354,6 +371,7 @@ nonisolated private struct EnrichmentWork: Sendable {
     let id: UUID
     let query: BookCatalogQuery
     let needsCover: Bool
+    let hadExistingCover: Bool
     let fileURL: URL?
     let format: BookFormat
 }

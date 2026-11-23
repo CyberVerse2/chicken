@@ -79,7 +79,7 @@ private struct BookTile: View {
                         .foregroundStyle(palette.text)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    if let author = book.author, !author.isEmpty {
+                    if book.coverImageName == nil, let author = book.author, !author.isEmpty {
                         Text(author)
                             .font(.chickenUI(sizeClass == .compact ? 12 : 13))
                             .foregroundStyle(palette.muted)

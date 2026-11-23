@@ -23,7 +23,7 @@ struct BookMetadataMatchSheet: View {
         _titleQuery = State(initialValue: book.displayTitle)
         _authorQuery = State(initialValue: book.author ?? "")
         _isbnQuery = State(initialValue: book.isbn ?? "")
-        _replaceCover = State(initialValue: book.coverImageName == nil)
+        _replaceCover = State(initialValue: true)
     }
 
     var body: some View {

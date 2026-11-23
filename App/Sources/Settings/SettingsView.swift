@@ -282,11 +282,11 @@ private struct HardcoverTokenSheet: View {
     @Environment(\.palette) private var palette
     @Environment(\.dismiss) private var dismiss
 
-    @State private var token = CatalogTokenStore.loadHardcoverToken() ?? ""
+    @State private var token = CatalogTokenStore.hasKeychainToken ? (CatalogTokenStore.loadHardcoverToken() ?? "") : ""
     @State private var isTesting = false
     @State private var statusMessage: String?
     @State private var isError = false
-    @State private var hasStoredToken = CatalogTokenStore.hasHardcoverToken
+    @State private var hasStoredToken = CatalogTokenStore.hasKeychainToken
 
     var body: some View {
         ChickenPage(
@@ -336,6 +336,10 @@ private struct HardcoverTokenSheet: View {
                 Text(statusMessage)
                     .font(.chickenUI(13))
                     .foregroundStyle(isError ? .red : palette.ribbon)
+            } else if !hasStoredToken && CatalogTokenStore.hasHardcoverToken {
+                Text("Using built-in Hardcover token. Paste another token above to override.")
+                    .font(.chickenUI(13))
+                    .foregroundStyle(palette.muted)
             }
         }
         .pageTitle("Hardcover API")

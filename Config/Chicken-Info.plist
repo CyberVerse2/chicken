@@ -56,5 +56,7 @@
 	</array>
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<key>HardcoverAPIToken</key>
+	<string>$(HARDCOVER_API_TOKEN)</string>
 </dict>
 </plist>

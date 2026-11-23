@@ -653,7 +653,7 @@ private struct ShelfItem: View {
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let author = book.author, !author.isEmpty {
+                    if book.coverImageName == nil, let author = book.author, !author.isEmpty {
                         Text(author)
                             .font(.chickenUI(12))
                             .foregroundStyle(palette.muted)

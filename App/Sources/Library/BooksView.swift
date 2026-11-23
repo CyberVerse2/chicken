@@ -744,17 +744,10 @@ private struct BookEditorialList: View {
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
 
-                        if let author = book.author, !author.isEmpty {
+                        if book.coverImageName == nil, let author = book.author, !author.isEmpty {
                             Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
                                 .font(.chickenUI(13))
                                 .foregroundStyle(palette.muted)
-                                .lineLimit(1)
-                        }
-
-                        if !inProgress, let summary = book.summary, !summary.isEmpty {
-                            Text(summary)
-                                .font(.chickenUI(12))
-                                .foregroundStyle(palette.faint)
                                 .lineLimit(1)
                         }
 

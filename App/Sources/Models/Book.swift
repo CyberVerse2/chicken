@@ -40,6 +40,7 @@ final class Book {
     var derivedDataChecked: Bool = false
     var catalogChecked: Bool = false
     var catalogEnrichVersion: Int = 0
+    var hasCatalogCover: Bool = false
     var lastLocation: String?
     /// Title of the chapter at `lastLocation`, recorded by the reader so
     /// Home can say where you are without opening the book.

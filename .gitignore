@@ -6,3 +6,4 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 dist/
+Config/Secrets.xcconfig
