@@ -14,26 +14,30 @@ struct ReaderProgressBar: View {
     var body: some View {
         HStack(spacing: 14) {
             Text("\(Int((shown * 100).rounded()))%")
-                .font(.chickenMono(11, weight: .medium))
-                .foregroundStyle(palette.muted)
-                .frame(width: 38, alignment: .leading)
+                .font(.chickenMono(11.5, weight: .semibold))
+                .foregroundStyle(palette.text)
+                .frame(minWidth: 32, alignment: .leading)
                 .contentTransition(.numericText())
 
             scrubber
 
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(model.pageReadout)
-                    .font(model.isOnLastPage ? .chickenSerif(12, italic: true) : .chickenMono(11))
-                    .foregroundStyle(palette.muted)
-                if !compact, !model.timeReadout.isEmpty {
-                    Text(model.timeReadout)
-                        .font(.chickenMono(10))
-                        .foregroundStyle(palette.faint)
-                        .lineLimit(1)
+            if !model.pageReadout.isEmpty || !model.timeReadout.isEmpty {
+                VStack(alignment: .trailing, spacing: 1.5) {
+                    if !model.pageReadout.isEmpty {
+                        Text(model.pageReadout)
+                            .font(model.isOnLastPage ? .chickenSerif(12, italic: true) : .chickenMono(11, weight: .medium))
+                            .foregroundStyle(palette.muted)
+                    }
+                    if !model.timeReadout.isEmpty {
+                        Text(model.timeReadout)
+                            .font(.chickenMono(10))
+                            .foregroundStyle(palette.faint)
+                            .lineLimit(1)
+                    }
                 }
+                .monospacedDigit()
+                .fixedSize()
             }
-            .monospacedDigit()
-            .fixedSize()
         }
         .padding(.horizontal, 18)
         .padding(.vertical, compact ? 8 : 10)
@@ -54,11 +58,11 @@ struct ReaderProgressBar: View {
                         let fraction = Double(index) / 17.0
                         Rectangle()
                             .fill(fraction <= shown ? palette.ribbon.opacity(0.45) : palette.text.opacity(0.12))
-                            .frame(width: 1, height: index % 3 == 0 ? 7 : 4)
+                            .frame(width: 1, height: index % 3 == 0 ? 5 : 3)
                         if index < 17 { Spacer(minLength: 0) }
                     }
                 }
-                .offset(y: 7)
+                .offset(y: 6)
                 .allowsHitTesting(false)
 
                 Capsule().fill(palette.text.opacity(0.14)).frame(height: 3)
@@ -104,7 +108,7 @@ struct ReaderProgressBar: View {
                     }
             )
         }
-        .frame(height: 36)
+        .frame(height: 32)
         .accessibilityElement()
         .accessibilityLabel("Reading position")
         .accessibilityValue("\(Int((shown * 100).rounded())) percent")
@@ -137,7 +141,10 @@ struct HighlightPicker: View {
                 .buttonStyle(TactilePressStyle())
                 .accessibilityLabel("Highlight \(color.label)")
             }
-            Divider().frame(height: 18).padding(.horizontal, 2)
+            Rectangle()
+                .fill(palette.borderStrong)
+                .frame(width: 0.5, height: 18)
+                .padding(.horizontal, 2)
             Button {
                 if let text = model.selection?.text {
                     Clipboard.copy(text)
@@ -208,7 +215,18 @@ struct ReaderSearchBar: View {
                 .font(.chickenUI(14))
                 .focused($focused)
                 .onSubmit { onSearch(false) }
-                .frame(minWidth: 140)
+                .frame(minWidth: 120)
+            if !text.isEmpty {
+                Button {
+                    text = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 14))
+                        .foregroundStyle(palette.faint)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
             if let matchSummary {
                 Text(matchSummary)
                     .font(.chickenMono(11))
@@ -346,10 +364,11 @@ struct TypographyPanel: View {
             }
             .padding(.vertical, 20)
         }
+        .scrollContentBackground(.hidden)
         .scrollBounceBehavior(.basedOnSize)
         .frame(width: isCompact ? nil : 340)
         .frame(maxWidth: isCompact ? .infinity : nil, minHeight: isCompact ? nil : 440)
-        .background(palette.background.opacity(isCompact ? 1 : 0))
+        .background(isCompact ? palette.background.ignoresSafeArea() : Color.clear.ignoresSafeArea())
     }
 
     private var typefacePicker: some View {

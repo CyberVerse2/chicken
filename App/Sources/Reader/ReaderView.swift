@@ -132,6 +132,7 @@ struct ReaderView: View {
                 AnnotationsList(model: model, onShareQuote: presentQuoteCard)
                     .inspectorColumnWidth(min: 260, ideal: 310, max: 400)
                     .presentationDetents([.medium, .large])
+                    .presentationDragIndicator(.visible)
             }
             .sheet(isPresented: compactChapters) {
                 NavigationStack {
@@ -141,12 +142,11 @@ struct ReaderView: View {
                         .navigationBarTitleDisplayMode(.inline)
                         #endif
                         .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") { showChapters = false }
-                            }
+                            SheetDoneButton { showChapters = false }
                         }
                 }
                 .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
                 .readingTheme(library.preferences.theme)
             }
             .sheet(isPresented: $model.showingFinishedRitual) {
@@ -590,18 +590,23 @@ struct ReaderView: View {
         }
         #endif
 
-        ToolbarItem(placement: .navigation) {
-            Button("Contents", systemImage: isCompact ? "list.bullet" : "sidebar.left") { showChapters.toggle() }
-                .keyboardShortcut("s", modifiers: [.command, .control])
-                .help("Show contents")
+        if !isCompact || model.chapters.count > 1 || model.loadStatus != .ready {
+            ToolbarItem(placement: .navigation) {
+                Button("Contents", systemImage: isCompact ? "list.bullet" : "sidebar.left") { showChapters.toggle() }
+                    .keyboardShortcut("s", modifiers: [.command, .control])
+                    .help("Show contents")
+            }
         }
 
         #if os(iOS)
         ToolbarItem(placement: .principal) {
             VStack(spacing: 1) {
                 Text(book.displayTitle)
-                    .font(.chickenUI(isCompact ? 14 : 15, weight: .semibold))
+                    .font(.chickenUI(isCompact ? 13.5 : 15, weight: .semibold))
+                    .foregroundStyle(palette.text)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    .allowsTightening(true)
                 if !model.chapters.isEmpty && model.chapterTitle != book.displayTitle {
                     Text(model.chapterTitle)
                         .font(.chickenUI(11))
@@ -609,7 +614,7 @@ struct ReaderView: View {
                         .lineLimit(1)
                 }
             }
-            .frame(maxWidth: isCompact ? 180 : 360)
+            .frame(maxWidth: isCompact ? 200 : 360)
         }
         #endif
 
@@ -626,7 +631,8 @@ struct ReaderView: View {
                 .popover(isPresented: $showTypography, arrowEdge: .bottom) {
                     TypographyPanel(model: model, isCompact: isCompact)
                         .presentationCompactAdaptation(.sheet)
-                        .presentationDetents([.medium])
+                        .presentationDetents([.medium, .large])
+                        .presentationDragIndicator(.visible)
                         .readingTheme(library.preferences.theme)
                 }
 

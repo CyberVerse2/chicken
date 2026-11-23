@@ -58,6 +58,8 @@ struct EPUBStyle: Equatable {
           font-size: \(size)px !important;
           line-height: \(lineHeight) !important;
           overflow-wrap: break-word;
+          text-rendering: optimizeLegibility;
+          -webkit-font-smoothing: antialiased;
         }
         body::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: \(horizontal ? "none" : "initial"); }
         \(layout)
@@ -96,7 +98,7 @@ struct EPUBStyle: Equatable {
         .chicken-spine-section th, .chicken-spine-section td {
           color: var(--ch-text) !important; padding: 0.28em 0.7em 0.28em 0 !important; vertical-align: top !important;
         }
-        .chicken-spine-section a { color: var(--ch-muted) !important; }
+        .chicken-spine-section a { color: var(--ch-muted) !important; text-underline-offset: 2px; text-decoration-thickness: 0.75px; }
         .chicken-spine-section img, .chicken-spine-section svg, .chicken-spine-section video {
           max-width: 100% !important; height: auto !important; \(horizontal ? "max-height: calc(100dvh - 180px) !important; object-fit: contain;" : "")
         }
@@ -140,7 +142,7 @@ struct EPUBStyle: Equatable {
         body {
           height: 100dvh !important;
           margin: 0 !important;
-          padding: calc(32px + env(safe-area-inset-top)) 0 calc(\(Self.pagedBottomPadding)px + env(safe-area-inset-bottom)) !important;
+          padding: calc(44px + env(safe-area-inset-top)) 0 calc(\(Self.pagedBottomPadding)px + env(safe-area-inset-bottom)) !important;
           \(count == 1 ? "column-width: 100vw !important; column-count: auto !important;" : "column-count: \(count) !important;")
           column-gap: 0 !important;
           column-fill: auto !important;

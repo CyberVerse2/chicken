@@ -390,10 +390,10 @@ final class ReaderModel {
 
     var pageReadout: String {
         if let totalPages = position.totalPages, totalPages > 0, let currentPage = position.currentPage {
-            return currentPage >= totalPages ? "Last page" : "Page \(currentPage) of \(totalPages)"
+            return currentPage >= totalPages ? "Last page" : "\(currentPage) of \(totalPages)"
         }
-        guard !chapters.isEmpty else { return "" }
-        return "Section \(chapterIndex + 1) of \(chapters.count)"
+        guard chapters.count > 1 else { return "" }
+        return "Ch. \(chapterIndex + 1) of \(chapters.count)"
     }
 
     var timeReadout: String {

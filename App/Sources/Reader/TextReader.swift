@@ -659,6 +659,8 @@ enum TextDocumentLoader {
             style.lineHeightMultiple = 1.4
             style.headIndent = 14
             style.firstLineHeadIndent = 14
+            style.tailIndent = -14
+            style.paragraphSpacingBefore = (size * 0.4).rounded()
             style.paragraphSpacing = (size * 0.9).rounded()
             let joined = codeLines.joined(separator: "\n") + "\n"
             codeLines.removeAll()
@@ -701,7 +703,17 @@ enum TextDocumentLoader {
             if let heading = parseHeading(trimmed) {
                 flushParagraph()
                 let scale: CGFloat = heading.level == 1 ? 1.65 : (heading.level == 2 ? 1.35 : 1.15)
-                let headingFont = PlatformFont.systemFont(ofSize: (size * scale).rounded(), weight: .semibold)
+                let headingSize = (size * scale).rounded()
+                let baseHeading = PlatformFont.systemFont(ofSize: headingSize, weight: .semibold)
+                let headingFont: PlatformFont = if let descriptor = baseHeading.fontDescriptor.withDesign(.serif) {
+                    #if os(macOS)
+                    PlatformFont(descriptor: descriptor, size: headingSize) ?? baseHeading
+                    #else
+                    PlatformFont(descriptor: descriptor, size: headingSize)
+                    #endif
+                } else {
+                    baseHeading
+                }
                 let style = NSMutableParagraphStyle()
                 style.lineHeightMultiple = 1.25
                 style.paragraphSpacingBefore = output.length == 0 ? 0 : (size * 1.1).rounded()

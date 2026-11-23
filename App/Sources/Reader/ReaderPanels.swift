@@ -29,6 +29,7 @@ struct ChaptersList: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .background(palette.background.ignoresSafeArea())
             .onAppear { proxy.scrollTo(model.chapterIndex, anchor: .center) }
             .onChange(of: model.chapters.count) { proxy.scrollTo(model.chapterIndex, anchor: .center) }
             .onChange(of: model.chapterIndex) { _, index in
@@ -51,10 +52,10 @@ private struct ChapterRow: View {
             Haptics.selection()
             action()
         } label: {
-            HStack(spacing: 0) {
-                Rectangle()
+            HStack(spacing: 10) {
+                Capsule()
                     .fill(isActive ? palette.ribbon : .clear)
-                    .frame(width: 3)
+                    .frame(width: 3, height: 20)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(chapter.title)
                         .font(.chickenUI(14, weight: isActive ? .semibold : .regular))
@@ -67,11 +68,16 @@ private struct ChapterRow: View {
                             .foregroundStyle(palette.faint)
                     }
                 }
-                .padding(.leading, 16 + CGFloat(min(chapter.level, 3)) * 14)
-                .padding(.trailing, 16)
-                .padding(.vertical, 11)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, CGFloat(min(chapter.level, 3)) * 14)
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isActive ? palette.surface : .clear)
+            )
+            .padding(.horizontal, 12)
             .contentShape(Rectangle())
         }
         .buttonStyle(TactilePressStyle(scale: 0.99))
@@ -98,6 +104,7 @@ struct AnnotationsList: View {
     var onShareQuote: (Highlight) -> Void = { _ in }
     @State private var tab: Tab = .highlights
     @State private var scope: Scope = .all
+    @Namespace private var tabNamespace
     @Namespace private var scopeNamespace
 
     private var allHighlights: [Highlight] { model.book.sortedHighlights }
@@ -111,13 +118,17 @@ struct AnnotationsList: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 10) {
-                Picker("Show", selection: $tab) {
-                    Text("Highlights · \(allHighlights.count)").tag(Tab.highlights)
-                    Text("Bookmarks · \(bookmarks.count)").tag(Tab.bookmarks)
+            VStack(spacing: 12) {
+                HStack(spacing: 22) {
+                    annotationTabButton(.highlights, count: allHighlights.count)
+                    annotationTabButton(.bookmarks, count: bookmarks.count)
+                    Spacer(minLength: 0)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(palette.border)
+                        .frame(height: 0.5)
+                }
 
                 if tab == .highlights && model.chapters.count > 1 && !allHighlights.isEmpty {
                     HStack(spacing: 6) {
@@ -183,7 +194,38 @@ struct AnnotationsList: View {
                 .animation(reduceMotion ? nil : ChickenMotion.standard, value: bookmarks.map(\.id))
             }
         }
-        .background(palette.background)
+        .background(palette.background.ignoresSafeArea())
+    }
+
+    private func annotationTabButton(_ option: Tab, count: Int) -> some View {
+        let selected = tab == option
+        return Button {
+            Haptics.selection()
+            withAnimation(reduceMotion ? nil : ChickenMotion.snappy) { tab = option }
+        } label: {
+            VStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(option.rawValue)
+                        .font(.chickenUI(14.5, weight: selected ? .semibold : .medium))
+                        .foregroundStyle(selected ? palette.text : palette.muted)
+                    Text("\(count)")
+                        .font(.chickenMono(11.5, weight: .medium))
+                        .foregroundStyle(selected ? palette.muted : palette.faint)
+                }
+                ZStack {
+                    Color.clear.frame(height: 2)
+                    if selected {
+                        Capsule()
+                            .fill(palette.text)
+                            .frame(height: 2)
+                            .matchedGeometryEffect(id: "annotationTab", in: tabNamespace)
+                    }
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     private func hint(icon: String, title: String, text: String) -> some View {
