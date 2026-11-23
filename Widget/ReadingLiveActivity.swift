@@ -41,23 +41,18 @@ struct ReadingLiveActivity: Widget {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    VStack(spacing: 8) {
+                    VStack(spacing: 6) {
                         ProgressBar(progress: context.state.progress)
                         HStack {
                             if context.state.isReadingAloud {
                                 Label("Reading aloud", systemImage: "waveform")
                                     .symbolEffect(.variableColor.iterative)
+                                Spacer()
+                                Text("\(Int((context.state.progress * 100).rounded()))%")
                             } else {
                                 Text("\(Int((context.state.progress * 100).rounded()))% read")
+                                Spacer()
                             }
-                            Spacer()
-                            Label("Continue", systemImage: "arrow.right")
-                                .labelStyle(.titleAndIcon)
-                                .font(.system(size: 13, weight: .semibold))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Capsule().fill(LiveColors.text))
-                                .foregroundStyle(Color.black.opacity(0.85))
                         }
                         .font(.system(size: 12, weight: .medium).monospacedDigit())
                         .foregroundStyle(LiveColors.text.opacity(0.75))
