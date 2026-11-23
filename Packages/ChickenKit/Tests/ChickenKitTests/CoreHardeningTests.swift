@@ -113,4 +113,14 @@ struct CoreHardeningTests {
         #expect(ignoredOutlier == 1.25)
         #expect(ReadingEstimate.duration(forPages: 10, minutesPerPage: 2.0) == "20 min")
     }
+
+    @Test func provisioningProfileDetectsDevelopmentAndProductionEnvironments() {
+        let devProfile = Data("binary-prefix<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Entitlements</key><dict><key>aps-environment</key><string>development</string></dict></dict></plist>trailing".utf8)
+        let prodProfile = Data("binary-prefix<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Entitlements</key><dict><key>aps-environment</key><string>production</string><key>get-task-allow</key><false/></dict></dict></plist>trailing".utf8)
+        let fallbackDev = Data("<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict><key>Entitlements</key><dict><key>get-task-allow</key><true/></dict></dict></plist>".utf8)
+        #expect(LibraryPaths.isDevelopmentProvisioningProfile(devProfile) == true)
+        #expect(LibraryPaths.isDevelopmentProvisioningProfile(prodProfile) == false)
+        #expect(LibraryPaths.isDevelopmentProvisioningProfile(fallbackDev) == true)
+        #expect(LibraryPaths.isDevelopmentProvisioningProfile(Data("not-a-profile".utf8)) == nil)
+    }
 }

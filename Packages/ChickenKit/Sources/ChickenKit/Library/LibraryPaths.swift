@@ -1,13 +1,10 @@
 import Foundation
+#if os(macOS)
+import Security
+#endif
 
-/// On-disk layout of the managed library. The folder name and structure match
-/// what earlier versions of Chicken wrote, so a migrated Mac library is read
-/// in place: `Application Support/Chicken/{Books,Covers,library.json,...}`.
 public struct LibraryPaths: Sendable {
     public let root: URL
-    /// Whether book files and covers live in iCloud and the database syncs
-    /// through CloudKit. Only the standard library syncs: test libraries and
-    /// `CHICKEN_LIBRARY_ROOT` clones stay on this device.
     public let syncsWithICloud: Bool
 
     public init(root: URL, syncsWithICloud: Bool = false) {
@@ -15,20 +12,65 @@ public struct LibraryPaths: Sendable {
         self.syncsWithICloud = syncsWithICloud
     }
 
+    public static let usesDevelopmentCloudEnvironment: Bool = {
+        #if os(macOS)
+        if let task = SecTaskCreateFromSelf(nil) {
+            if let env = SecTaskCopyValueForEntitlement(task, "com.apple.developer.icloud-container-environment" as CFString, nil) as? String {
+                return env.caseInsensitiveCompare("Production") != .orderedSame
+            }
+            if let aps = SecTaskCopyValueForEntitlement(task, "com.apple.developer.aps-environment" as CFString, nil) as? String {
+                return aps.caseInsensitiveCompare("development") == .orderedSame
+            }
+        }
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+        #elseif targetEnvironment(simulator)
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+        #else
+        if let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+           let data = try? Data(contentsOf: url),
+           let isDev = isDevelopmentProvisioningProfile(data) {
+            return isDev
+        }
+        return false
+        #endif
+    }()
+
+    public static func isDevelopmentProvisioningProfile(_ data: Data) -> Bool? {
+        let startMarker = Data("<?xml".utf8)
+        let endMarker = Data("</plist>".utf8)
+        guard let start = data.range(of: startMarker)?.lowerBound,
+              let end = data.range(of: endMarker, in: start..<data.endIndex)?.upperBound,
+              let plist = try? PropertyListSerialization.propertyList(from: data[start..<end], format: nil) as? [String: Any],
+              let entitlements = plist["Entitlements"] as? [String: Any] else {
+            return nil
+        }
+        if let aps = entitlements["aps-environment"] as? String {
+            return aps.caseInsensitiveCompare("development") == .orderedSame
+        }
+        if let getTaskAllow = entitlements["get-task-allow"] as? Bool {
+            return getTaskAllow
+        }
+        return false
+    }
+
     public static func standard(fileManager: FileManager = .default) -> LibraryPaths {
         let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fileManager.temporaryDirectory
         #if DEBUG
-        // Development builds never open the real library by accident: they
-        // use their own folder unless pointed at one (e.g. a scratch clone)
-        // with CHICKEN_LIBRARY_ROOT.
         if let override = ProcessInfo.processInfo.environment["CHICKEN_LIBRARY_ROOT"], !override.isEmpty {
             return LibraryPaths(root: URL(fileURLWithPath: override, isDirectory: true))
         }
-        return LibraryPaths(root: base.appendingPathComponent("Chicken Development", isDirectory: true), syncsWithICloud: true)
-        #else
-        return LibraryPaths(root: base.appendingPathComponent("Chicken", isDirectory: true), syncsWithICloud: true)
         #endif
+        let folder = usesDevelopmentCloudEnvironment ? "Chicken Development" : "Chicken"
+        return LibraryPaths(root: base.appendingPathComponent(folder, isDirectory: true), syncsWithICloud: true)
     }
 
     public var books: URL { root.appendingPathComponent("Books", isDirectory: true) }

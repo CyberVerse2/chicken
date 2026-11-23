@@ -39,14 +39,8 @@ nonisolated struct CloudFolders: Sendable, Equatable {
     static func resolve() -> CloudFolders? {
         let fileManager = FileManager.default
         guard let container = fileManager.url(forUbiquityContainerIdentifier: containerID) else { return nil }
-        // Development builds sync with CloudKit's development environment;
-        // their files get a folder of their own to match. Neither lives in
-        // Documents, so iCloud Drive doesn't show them as user files.
-        #if DEBUG
-        let folders = CloudFolders(root: container.appendingPathComponent("Development", isDirectory: true))
-        #else
-        let folders = CloudFolders(root: container.appendingPathComponent("Library", isDirectory: true))
-        #endif
+        let folderName = LibraryPaths.usesDevelopmentCloudEnvironment ? "Development" : "Library"
+        let folders = CloudFolders(root: container.appendingPathComponent(folderName, isDirectory: true))
         do {
             for directory in [folders.root, folders.books, folders.covers] {
                 try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
