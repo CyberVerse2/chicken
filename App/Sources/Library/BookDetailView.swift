@@ -72,6 +72,9 @@ struct BookDossierView: View {
                     statStrip(for: book)
                         .padding(.horizontal, gutter)
                     collectionsStrip(for: book)
+                    if !book.genres.isEmpty || !book.moods.isEmpty {
+                        genresAndMoodsStrip(for: book)
+                    }
                     if let summary = book.summary, !summary.isEmpty {
                         summarySection(summary)
                             .padding(.horizontal, isCompact ? 20 : 32)
@@ -97,6 +100,7 @@ struct BookDossierView: View {
                         highlightsSection(for: book)
                             .padding(.horizontal, isCompact ? 20 : 32)
                     }
+                    relatedShelves(for: book)
                     detailsSection(for: book)
                         .padding(.horizontal, isCompact ? 20 : 32)
                 }
@@ -182,6 +186,17 @@ struct BookDossierView: View {
                 .accessibilityLabel("Read \(book.displayTitle)")
 
                 VStack(spacing: 6) {
+                    if let seriesBadge = book.seriesBadgeText, let seriesKey = book.seriesName {
+                        Button {
+                            Haptics.selection()
+                            router.filterLibrary(by: .series(seriesKey))
+                            if !isPage { dismiss() }
+                        } label: {
+                            Text(seriesBadge)
+                                .chickenEyebrow(palette, color: palette.ribbon)
+                        }
+                        .buttonStyle(.plain)
+                    }
                     Text(book.displayTitle)
                         .font(.chickenDisplay(isCompact ? 25 : 30))
                         .tracking(-0.6)
@@ -189,8 +204,19 @@ struct BookDossierView: View {
                         .multilineTextAlignment(.center)
                         .lineLimit(3)
                     if let author = book.author, !author.isEmpty {
-                        Text(author)
-                            .font(.chickenSerif(16.5, italic: true))
+                        Button {
+                            Haptics.selection()
+                            router.filterLibrary(by: .author(author))
+                            if !isPage { dismiss() }
+                        } label: {
+                            Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
+                                .font(.chickenSerif(16.5, italic: true))
+                                .foregroundStyle(palette.muted)
+                        }
+                        .buttonStyle(.plain)
+                    } else if let year = book.releaseYear {
+                        Text(String(year))
+                            .font(.chickenMono(12.5))
                             .foregroundStyle(palette.muted)
                     }
                 }
@@ -286,7 +312,55 @@ struct BookDossierView: View {
         if book.highlightCount > 0 {
             stats.append(ChickenStat(label: book.highlightCount == 1 ? "Note" : "Notes", value: "\(book.highlightCount)"))
         }
+        if let rating = book.formattedRating {
+            stats.append(ChickenStat(label: "Rating", value: "★ \(rating)"))
+        }
         return ChickenStatStrip(stats: stats)
+    }
+
+    private func genresAndMoodsStrip(for book: Book) -> some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 8) {
+                ForEach(book.genres, id: \.self) { genre in
+                    Button {
+                        Haptics.selection()
+                        router.filterLibrary(by: .genre(genre))
+                        if !isPage { dismiss() }
+                    } label: {
+                        Text(genre)
+                            .font(.chickenUI(12.5, weight: .medium))
+                            .foregroundStyle(palette.text)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(palette.surfaceAlt, in: Capsule())
+                            .overlay(Capsule().stroke(palette.border, lineWidth: 0.5))
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(book.moods, id: \.self) { mood in
+                    Text(mood)
+                        .font(.chickenSerif(12.5, italic: true))
+                        .foregroundStyle(palette.muted)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                }
+            }
+            .padding(.vertical, 2)
+        }
+        .scrollIndicators(.never)
+        .contentMargins(.horizontal, gutter, for: .scrollContent)
+    }
+
+    @ViewBuilder
+    private func relatedShelves(for book: Book) -> some View {
+        let inSeries = library.seriesBooks(for: book)
+        if inSeries.count > 1, let seriesName = book.seriesName {
+            BookShelf(title: "In \(seriesName)", books: inSeries, gutter: gutter)
+        }
+        let otherByAuthor = library.otherBooksByAuthor(of: book)
+        if !otherByAuthor.isEmpty, let author = book.author {
+            BookShelf(title: "More by \(author)", books: otherByAuthor, gutter: gutter)
+        }
     }
 
     private func collectionsStrip(for book: Book) -> some View {
@@ -499,6 +573,8 @@ struct BookDossierView: View {
 
     private func detailsSection(for book: Book) -> some View {
         let rows: [(String, String)] = [
+            ("Series", book.seriesBadgeText ?? ""),
+            ("Published", book.releaseYear.map(String.init) ?? ""),
             ("Publisher", book.publisher ?? ""),
             ("Language", book.language.flatMap { Locale.current.localizedString(forLanguageCode: $0) } ?? book.language ?? ""),
             ("ISBN", book.isbn ?? ""),
@@ -506,9 +582,12 @@ struct BookDossierView: View {
             ("Added", book.importedAt.formatted(date: .long, time: .omitted)),
             ("Finished", book.finishedAt?.formatted(date: .long, time: .omitted) ?? ""),
         ].filter { !$0.1.isEmpty }
+        let duplicate = library.duplicateEdition(of: book)
+        let catalogURL = book.catalogURL
+        let hasExtraRows = duplicate != nil || catalogURL != nil
 
         return Group {
-            if !rows.isEmpty {
+            if !rows.isEmpty || hasExtraRows {
                 ChickenSection("Edition", accessory: {
                     Button("Match Metadata") { showingMetadataMatch = true }
                         .font(.chickenUI(12.5, weight: .medium))
@@ -516,7 +595,7 @@ struct BookDossierView: View {
                         .buttonStyle(.plain)
                 }) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                        ChickenRow(isLast: index == rows.count - 1) {
+                        ChickenRow(isLast: index == rows.count - 1 && !hasExtraRows) {
                             HStack(alignment: .firstTextBaseline) {
                                 Text(row.0)
                                     .font(.chickenUI(13.5))
@@ -528,6 +607,43 @@ struct BookDossierView: View {
                                     .multilineTextAlignment(.trailing)
                                     .lineLimit(2)
                                     .truncationMode(.middle)
+                            }
+                        }
+                    }
+                    if let duplicate {
+                        ChickenRow(isLast: catalogURL == nil) {
+                            Button {
+                                router.updateDetailBook(duplicate.id)
+                            } label: {
+                                HStack {
+                                    Text("Also in library")
+                                        .font(.chickenUI(13.5))
+                                        .foregroundStyle(palette.muted)
+                                    Spacer(minLength: 16)
+                                    Text("\(duplicate.format.label) edition")
+                                        .font(.chickenUI(13.5, weight: .medium))
+                                        .foregroundStyle(palette.ribbon)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .semibold))
+                                        .foregroundStyle(palette.faint)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    if let catalogURL {
+                        ChickenRow(isLast: true) {
+                            Link(destination: catalogURL) {
+                                HStack {
+                                    Text(catalogURL.host()?.contains("hardcover") == true ? "View on Hardcover" : "View on Open Library")
+                                        .font(.chickenUI(13.5, weight: .medium))
+                                        .foregroundStyle(palette.ribbon)
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right")
+                                        .font(.system(size: 11.5, weight: .semibold))
+                                        .foregroundStyle(palette.ribbon)
+                                }
                             }
                         }
                     }

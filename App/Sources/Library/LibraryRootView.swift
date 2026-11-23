@@ -100,6 +100,9 @@ struct LibraryRootView: View {
                 router.pendingLibraryPlace = nil
                 showLibrary(place)
             }
+            .onChange(of: router.libraryFacet) { _, facet in
+                if facet != nil { tab = .library }
+            }
             .onOpenURL(perform: handle)
             .spotlightIndexing(library: library, bookCount: books.count, highlightCount: highlights.count) { target in
                 switch target {

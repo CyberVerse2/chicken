@@ -237,9 +237,13 @@ final class LibraryStore {
     // MARK: - Reading state
 
     func markOpened(_ book: Book) {
+        let wasOpened = book.lastOpenedAt != nil
         book.recordOpen()
         save()
         publishWidgetSnapshot()
+        if !wasOpened && !book.isFinished {
+            syncHardcoverStatusIfEnabled(for: book, statusID: 2)
+        }
     }
 
     /// Records where the reader is. Called on every page turn, so the book
@@ -286,6 +290,7 @@ final class LibraryStore {
         }
         if nowFinished && !wasFinished {
             book.finishedAt = now
+            syncHardcoverStatusIfEnabled(for: book, statusID: 3)
         } else if !nowFinished && wasFinished {
             book.finishedAt = nil
         }
@@ -304,6 +309,7 @@ final class LibraryStore {
     func setFinished(_ finished: Bool, for book: Book) {
         if finished {
             book.markFinished()
+            syncHardcoverStatusIfEnabled(for: book, statusID: 3)
         } else {
             book.markUnread()
         }

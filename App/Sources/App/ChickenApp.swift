@@ -127,6 +127,37 @@ enum ActiveSheet: Identifiable, Equatable {
     }
 }
 
+enum LibraryFacetFilter: Equatable, Hashable {
+    case genre(String)
+    case author(String)
+    case series(String)
+
+    var eyebrow: String {
+        switch self {
+        case .genre: "Genre"
+        case .author: "Author"
+        case .series: "Series"
+        }
+    }
+
+    var value: String {
+        switch self {
+        case .genre(let s), .author(let s), .series(let s): s
+        }
+    }
+
+    func matches(_ book: Book) -> Bool {
+        switch self {
+        case .genre(let name):
+            return book.genres.contains { $0.localizedCaseInsensitiveCompare(name) == .orderedSame }
+        case .author(let name):
+            return (book.author ?? "").localizedCaseInsensitiveCompare(name) == .orderedSame
+        case .series(let name):
+            return (book.seriesName ?? "").localizedCaseInsensitiveCompare(name) == .orderedSame
+        }
+    }
+}
+
 @Observable
 final class AppRouter {
     static let shared = AppRouter()
@@ -138,6 +169,7 @@ final class AppRouter {
     var showingImporter = false
     var pendingDestination: ChickenLink.Destination?
     var pendingLibraryPlace: ChickenNotifications.Place?
+    var libraryFacet: LibraryFacetFilter?
     var pendingJumps: [UUID: JumpTarget] = [:]
 
     func showDetails(_ id: UUID, in sequence: [UUID] = [], from source: CoverSource? = nil) {
@@ -151,6 +183,11 @@ final class AppRouter {
     }
 
     func dismissDetails() {
+        presentedDetails = nil
+    }
+
+    func filterLibrary(by facet: LibraryFacetFilter) {
+        libraryFacet = facet
         presentedDetails = nil
     }
 

@@ -38,9 +38,17 @@ struct BookCatalogTests {
                 "image": { "url": "https://assets.hardcover.app/cover.jpg" },
                 "book": {
                   "id": 77,
+                  "slug": "project-hail-mary",
                   "title": "Project Hail Mary",
                   "description": "<p>Ryland Grace is the sole survivor.</p>",
                   "release_year": 2021,
+                  "rating": 4.62,
+                  "ratings_count": 12450,
+                  "cached_tags": {
+                    "Genre": [{ "tag": "Science Fiction" }, { "tag": "Space Opera" }],
+                    "Mood": [{ "tag": "Hopeful" }, { "tag": "Tense" }]
+                  },
+                  "book_series": [{ "position": 1, "series": { "name": "Hail Mary" } }],
                   "contributions": [{ "author": { "name": "Andy Weir" } }]
                 }
               }
@@ -61,6 +69,16 @@ struct BookCatalogTests {
         #expect(first.releaseYear == 2021)
         #expect(first.summary == "Ryland Grace is the sole survivor.")
         #expect(first.coverURL?.absoluteString == "https://assets.hardcover.app/cover.jpg")
+        #expect(first.seriesName == "Hail Mary")
+        #expect(first.seriesPosition == 1)
+        #expect(first.seriesBadgeText == "Hail Mary · Book 1")
+        #expect(first.genres == ["Science Fiction", "Space Opera"])
+        #expect(first.moods == ["Hopeful", "Tense"])
+        #expect(first.rating == 4.62)
+        #expect(first.ratingsCount == 12450)
+        #expect(first.hardcoverBookID == 77)
+        #expect(first.catalogSlug == "project-hail-mary")
+        #expect(first.catalogURL?.absoluteString == "https://hardcover.app/books/project-hail-mary")
 
         let searchJSON = """
         {
@@ -71,12 +89,17 @@ struct BookCatalogTests {
                   {
                     "document": {
                       "id": 99,
+                      "slug": "dune",
                       "title": "Dune",
                       "author_names": ["Frank Herbert"],
                       "description": "A desert planet story.",
                       "pages": 688,
                       "isbns": ["9780441172719"],
                       "release_year": 1965,
+                      "rating": 4.35,
+                      "ratings_count": 50000,
+                      "genres": ["Science Fiction", "Classics"],
+                      "featured_series": { "position": 1, "series": { "name": "Dune Chronicles" } },
                       "image": { "url": "https://assets.hardcover.app/dune.jpg" }
                     }
                   }
@@ -91,6 +114,10 @@ struct BookCatalogTests {
         #expect(searchMatches[0].title == "Dune")
         #expect(searchMatches[0].authorLine == "Frank Herbert")
         #expect(searchMatches[0].isbn == "9780441172719")
+        #expect(searchMatches[0].seriesName == "Dune Chronicles")
+        #expect(searchMatches[0].seriesPosition == 1)
+        #expect(searchMatches[0].genres == ["Science Fiction", "Classics"])
+        #expect(searchMatches[0].catalogURL?.absoluteString == "https://hardcover.app/books/dune")
 
         let booksJSON = """
         {
@@ -98,10 +125,14 @@ struct BookCatalogTests {
             "books": [
               {
                 "id": 101,
+                "slug": "piranesi",
                 "title": "Piranesi",
                 "description": "The beauty of the House is immeasurable.",
                 "pages": 245,
                 "release_year": 2020,
+                "rating": 4.28,
+                "ratings_count": 9000,
+                "cached_tags": { "Genre": [{ "tag": "Fantasy" }] },
                 "contributions": [{ "author": { "name": "Susanna Clarke" } }],
                 "editions": [{
                   "isbn_13": "9781635575637",
@@ -118,9 +149,12 @@ struct BookCatalogTests {
         #expect(bookMatches.count == 1)
         #expect(bookMatches[0].publisher == "Bloomsbury")
         #expect(bookMatches[0].isbn == "9781635575637")
+        #expect(bookMatches[0].genres == ["Fantasy"])
+        #expect(bookMatches[0].rating == 4.28)
+        #expect(bookMatches[0].hardcoverBookID == 101)
     }
 
-    @Test func decodesOpenLibrarySearchAndWorkDescriptions() {
+    @Test func decodesOpenLibrarySearchWorkDetailsAndFiltersNoise() {
         let searchJSON = """
         {
           "docs": [
@@ -133,7 +167,17 @@ struct BookCatalogTests {
               "number_of_pages_median": 304,
               "isbn": ["0441478123", "9780441478125"],
               "cover_i": 8231990,
-              "first_publish_year": 1969
+              "first_publish_year": 1969,
+              "subject": [
+                "Protected DAISY",
+                "Accessible book",
+                "Science fiction",
+                "FICTION / Science Fiction / General",
+                "Hugo Award Winner",
+                "Feminist fiction"
+              ],
+              "ratings_average": 4.15,
+              "ratings_count": 320
             }
           ]
         }
@@ -147,11 +191,20 @@ struct BookCatalogTests {
         #expect(match.pageCount == 304)
         #expect(match.isbn == "9780441478125")
         #expect(match.coverURL?.absoluteString == "https://covers.openlibrary.org/b/id/8231990-L.jpg?default=false")
+        #expect(match.genres.contains("Science Fiction"))
+        #expect(!match.genres.contains(where: { $0.localizedCaseInsensitiveContains("DAISY") }))
+        #expect(!match.genres.contains(where: { $0.localizedCaseInsensitiveContains("Accessible") }))
+        #expect(!match.genres.contains(where: { $0.localizedCaseInsensitiveContains("Award") }))
+        #expect(match.rating == 4.15)
+        #expect(match.ratingsCount == 320)
+        #expect(match.catalogURL?.absoluteString == "https://openlibrary.org/works/OL45804W")
 
         let stringDesc = #"{"description": "Winter on Gethen."}"#
-        let objDesc = #"{"description": {"type": "/type/text", "value": "<p>Winter on Gethen.</p>"}}"#
+        let objDesc = #"{"description": {"type": "/type/text", "value": "<p>Winter on Gethen.</p>"}, "subjects": ["Accessible book", "Speculative Fiction"]}"#
         #expect(BookCatalogClient.parseOpenLibraryWorkDescription(Data(stringDesc.utf8)) == "Winter on Gethen.")
-        #expect(BookCatalogClient.parseOpenLibraryWorkDescription(Data(objDesc.utf8)) == "Winter on Gethen.")
+        let details = BookCatalogClient.parseOpenLibraryWorkDetails(Data(objDesc.utf8))
+        #expect(details.description == "Winter on Gethen.")
+        #expect(details.genres == ["Speculative Fiction"])
     }
 
     @Test func epubPackageExtractsISBNFromIdentifier() throws {

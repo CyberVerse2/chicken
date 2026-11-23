@@ -165,6 +165,14 @@ struct ReaderView: View {
                     },
                     onKeepReading: {
                         model.showingFinishedRitual = false
+                    },
+                    onOpenNext: { nextBook in
+                        model.showingFinishedRitual = false
+                        dismiss()
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(250))
+                            router.presentedReader = ReaderPresentation(id: nextBook.id, source: nil)
+                        }
                     }
                 )
                 .environment(library)

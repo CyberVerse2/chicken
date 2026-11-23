@@ -25,11 +25,21 @@ final class Book {
     var language: String?
     var summary: String?
     var isbn: String?
+    var releaseYear: Int?
+    var seriesName: String?
+    var seriesPosition: Double?
+    var genresCSV: String?
+    var moodsCSV: String?
+    var catalogRating: Double?
+    var catalogRatingsCount: Int?
+    var catalogURLString: String?
+    var hardcoverBookID: Int?
     var coverImageName: String?
     /// Set once cover/metadata extraction has been attempted, so launches
     /// don't keep re-parsing books that have no embedded cover.
     var derivedDataChecked: Bool = false
     var catalogChecked: Bool = false
+    var catalogEnrichVersion: Int = 0
     var lastLocation: String?
     /// Title of the chapter at `lastLocation`, recorded by the reader so
     /// Home can say where you are without opening the book.
@@ -134,6 +144,44 @@ final class Book {
     var estimatedPagesLeft: Int? {
         guard let pageCount, pageCount > 0 else { return nil }
         return max(0, pageCount - Int((Double(pageCount) * progress).rounded()))
+    }
+
+    var genres: [String] {
+        Self.splitCSV(genresCSV)
+    }
+
+    var moods: [String] {
+        Self.splitCSV(moodsCSV)
+    }
+
+    var seriesBadgeText: String? {
+        guard let series = seriesName?.trimmingCharacters(in: .whitespacesAndNewlines), !series.isEmpty else {
+            return nil
+        }
+        guard let pos = seriesPosition, pos > 0 else { return series }
+        let formatted = pos.rounded() == pos ? String(Int(pos)) : String(format: "%.1f", pos)
+        return "\(series) · Book \(formatted)"
+    }
+
+    var catalogURL: URL? {
+        guard let catalogURLString, !catalogURLString.isEmpty else { return nil }
+        return URL(string: catalogURLString)
+    }
+
+    var formattedRating: String? {
+        guard let catalogRating, catalogRating >= 0.1 else { return nil }
+        return String(format: "%.1f", catalogRating)
+    }
+
+    var isQuickRead: Bool {
+        if let pageCount, pageCount > 0, pageCount <= 240 { return true }
+        if !isFinished && progress > 0, let left = estimatedPagesLeft, left > 0, left <= 90 { return true }
+        return false
+    }
+
+    private static func splitCSV(_ raw: String?) -> [String] {
+        guard let raw, !raw.isEmpty else { return [] }
+        return raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
     }
 }
 

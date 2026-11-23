@@ -10,6 +10,7 @@ struct BookFinishedSheet: View {
     let onShareQuote: (Highlight) -> Void
     let onCloseReader: () -> Void
     let onKeepReading: () -> Void
+    var onOpenNext: ((Book) -> Void)?
 
     @State private var coverHue: CoverHue?
     @State private var revealed = false
@@ -25,6 +26,14 @@ struct BookFinishedSheet: View {
 
     private var favoriteHighlight: Highlight? {
         book.sortedHighlights.first
+    }
+
+    private var nextBookInSeries: Book? {
+        library.nextInSeries(after: book)
+    }
+
+    private var syncedToHardcover: Bool {
+        library.preferences.syncHardcoverStatus && CatalogTokenStore.hasHardcoverToken && book.hardcoverBookID != nil
     }
 
     private var currentYear: String {
@@ -100,6 +109,13 @@ struct BookFinishedSheet: View {
                             stat(value: "\(library.readingSecondsToday / 60)", label: "min today")
                         }
                         .padding(.top, 4)
+
+                        if syncedToHardcover {
+                            Label("Synced to Hardcover", systemImage: "checkmark.icloud")
+                                .font(.chickenUI(11.5, weight: .medium))
+                                .foregroundStyle(palette.ribbon)
+                                .padding(.top, 2)
+                        }
                     }
                     .padding(20)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -108,6 +124,55 @@ struct BookFinishedSheet: View {
                             .fill(palette.surface)
                             .stroke(palette.border, lineWidth: 0.5)
                     )
+
+                    if let next = nextBookInSeries {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Next in \(book.seriesName ?? "Series")")
+                                .chickenEyebrow(palette, color: palette.ribbon)
+                            HStack(spacing: 14) {
+                                BookCover(book: next, style: .mini)
+                                    .frame(width: 44, height: 66)
+                                    .shadow(color: palette.shadow, radius: 4, y: 2)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(next.displayTitle)
+                                        .font(.chickenUI(15, weight: .semibold))
+                                        .foregroundStyle(palette.text)
+                                        .lineLimit(2)
+                                    if let badge = next.seriesBadgeText {
+                                        Text(badge)
+                                            .font(.chickenUI(12))
+                                            .foregroundStyle(palette.muted)
+                                            .lineLimit(1)
+                                    }
+                                    if let pages = next.pageCount, pages > 0 {
+                                        Text("\(pages) pp. · \(ReadingEstimate.duration(forPages: pages, minutesPerPage: library.preferences.minutesPerPage))")
+                                            .font(.chickenMono(11))
+                                            .foregroundStyle(palette.faint)
+                                    }
+                                }
+                                Spacer(minLength: 4)
+                            }
+                            if let onOpenNext {
+                                Button {
+                                    onOpenNext(next)
+                                } label: {
+                                    Label("Start Reading", systemImage: "arrow.right")
+                                        .font(.chickenUI(13, weight: .semibold))
+                                        .foregroundStyle(palette.ribbon)
+                                }
+                                .buttonStyle(TactilePressStyle(scale: 0.96))
+                            }
+                        }
+                        .padding(20)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(palette.surface)
+                                .stroke(palette.border, lineWidth: 0.5)
+                        )
+                        .opacity(detailsRevealed ? 1 : 0)
+                        .offset(y: detailsRevealed || reduceMotion ? 0 : 8)
+                    }
 
                     if let highlight = favoriteHighlight {
                         VStack(alignment: .leading, spacing: 12) {

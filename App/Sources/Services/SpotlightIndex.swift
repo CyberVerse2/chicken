@@ -131,7 +131,13 @@ final class SpotlightIndex {
         }
         attributes.contentDescription = description
         attributes.textContent = book.summary
-        attributes.keywords = ["book", book.format.label] + (book.author.map { [$0] } ?? [])
+        var keywordList = ["book", book.format.label]
+        if let author = book.author, !author.isEmpty { keywordList.append(author) }
+        if let series = book.seriesName, !series.isEmpty { keywordList.append(series) }
+        if let isbn = book.isbn, !isbn.isEmpty { keywordList.append(isbn) }
+        if let year = book.releaseYear { keywordList.append(String(year)) }
+        keywordList.append(contentsOf: book.genres)
+        attributes.keywords = keywordList
         attributes.lastUsedDate = book.lastOpenedAt
 
         let item = CSSearchableItem(
@@ -168,6 +174,10 @@ final class SpotlightIndex {
             book.author ?? "",
             book.publisher ?? "",
             book.language ?? "",
+            book.isbn ?? "",
+            book.seriesName ?? "",
+            book.genresCSV ?? "",
+            book.releaseYear.map(String.init) ?? "",
             book.formatRaw,
             book.summary ?? "",
             String(Int((book.progress * 100).rounded())),

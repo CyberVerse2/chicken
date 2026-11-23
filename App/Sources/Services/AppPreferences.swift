@@ -72,6 +72,10 @@ final class AppPreferences {
         didSet { defaults.set(autoEnrichMetadata, forKey: Keys.autoEnrichMetadata) }
     }
 
+    var syncHardcoverStatus: Bool {
+        didSet { defaults.set(syncHardcoverStatus, forKey: Keys.syncHardcoverStatus) }
+    }
+
     var hasCalibratedPace: Bool {
         defaults.object(forKey: Keys.minutesPerPage) != nil
     }
@@ -106,6 +110,7 @@ final class AppPreferences {
             ? min(max(storedPace, ReadingEstimate.paceRange.lowerBound), ReadingEstimate.paceRange.upperBound)
             : ReadingEstimate.minutesPerPage
         autoEnrichMetadata = defaults.object(forKey: Keys.autoEnrichMetadata) as? Bool ?? true
+        syncHardcoverStatus = defaults.object(forKey: Keys.syncHardcoverStatus) as? Bool ?? true
         if let existing = defaults.string(forKey: Keys.deviceID) {
             deviceID = existing
         } else {
@@ -123,5 +128,6 @@ final class AppPreferences {
         static let keptBooks = "Chicken.keptBooks"
         static let minutesPerPage = "Chicken.minutesPerPage"
         static let autoEnrichMetadata = "Chicken.autoEnrichMetadata"
+        static let syncHardcoverStatus = "Chicken.syncHardcoverStatus"
     }
 }

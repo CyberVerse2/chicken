@@ -76,6 +76,36 @@ struct SettingsView: View {
                         button: "Configure"
                     ) { showingHardcoverToken = true }
                 }
+                if hasHardcoverToken {
+                    ChickenRow {
+                        HStack(spacing: 14) {
+                            Image(systemName: "arrow.trianglehead.2.clockwise")
+                                .font(.system(size: 17, weight: .light))
+                                .foregroundStyle(palette.muted)
+                                .frame(width: 26)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Sync reading status")
+                                    .font(.chickenUI(15, weight: .semibold))
+                                    .foregroundStyle(palette.text)
+                                Text("Update Currently Reading and Read status on Hardcover.")
+                                    .font(.chickenUI(12))
+                                    .foregroundStyle(palette.muted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 8)
+                            Toggle(
+                                "Sync reading status",
+                                isOn: Binding(
+                                    get: { library.preferences.syncHardcoverStatus },
+                                    set: { library.preferences.syncHardcoverStatus = $0 }
+                                )
+                            )
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .tint(palette.ribbon)
+                        }
+                    }
+                }
                 ChickenRow(isLast: true) {
                     actionRow(
                         icon: "text.magnifyingglass",

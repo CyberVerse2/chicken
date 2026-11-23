@@ -22,6 +22,7 @@ struct HomeView: View {
         let featuredBook: Book?
         let deskBooks: [Book]
         let upNext: [Book]
+        let quickReads: [Book]
         let finishedThisYearCount: Int
     }
 
@@ -30,10 +31,12 @@ struct HomeView: View {
         let calendar = Calendar.current
         var active: Book?
         var unfinished: [Book] = []
+        var finishedRecent: [Book] = []
         var finishedCount = 0
 
         for book in books {
             if book.isFinished {
+                finishedRecent.append(book)
                 if let finishedAt = book.finishedAt, calendar.isDate(finishedAt, equalTo: now, toGranularity: .year) {
                     finishedCount += 1
                 }
@@ -53,23 +56,45 @@ struct HomeView: View {
         let featuredID = featured?.id
         var desk: [Book] = []
         var nextCandidates: [Book] = []
+        var quickCandidates: [Book] = []
         for book in unfinished where book.id != featuredID {
             if book.progress > 0 {
                 desk.append(book)
             } else {
                 nextCandidates.append(book)
+                if let pages = book.pageCount, pages > 0, pages <= 250 {
+                    quickCandidates.append(book)
+                }
+            }
+        }
+        var sequelIDs: Set<UUID> = []
+        var sequels: [Book] = []
+        for doneBook in finishedRecent.prefix(8) {
+            if let sequel = library.nextInSeries(after: doneBook),
+               sequel.id != featuredID,
+               sequel.progress == 0,
+               sequelIDs.insert(sequel.id).inserted {
+                sequels.append(sequel)
             }
         }
         nextCandidates.sort { lhs, rhs in
             if lhs.importedAt != rhs.importedAt { return lhs.importedAt > rhs.importedAt }
             return lhs.title < rhs.title
         }
+        let orderedNext = sequels + nextCandidates.filter { !sequelIDs.contains($0.id) }
+        quickCandidates.sort { lhs, rhs in
+            let lr = lhs.catalogRating ?? 0
+            let rr = rhs.catalogRating ?? 0
+            if lr != rr { return lr > rr }
+            return lhs.importedAt > rhs.importedAt
+        }
 
         return DerivedSections(
             activeBook: active,
             featuredBook: featured,
             deskBooks: desk,
-            upNext: Array(nextCandidates.prefix(16)),
+            upNext: Array(orderedNext.prefix(16)),
+            quickReads: Array(quickCandidates.prefix(12)),
             finishedThisYearCount: finishedCount
         )
     }
@@ -112,6 +137,10 @@ struct HomeView: View {
 
                         if !s.upNext.isEmpty {
                             BookShelf(title: "Up next", books: s.upNext, gutter: gutter)
+                        }
+
+                        if s.quickReads.count >= 2 {
+                            BookShelf(title: "Quick reads", books: s.quickReads, gutter: gutter)
                         }
 
                         NavigationLink {
@@ -225,6 +254,11 @@ private struct ReadingDeskStage: View {
                 .padding(.bottom, 22)
 
             VStack(spacing: 5) {
+                if let seriesBadge = book.seriesBadgeText {
+                    Text(seriesBadge)
+                        .chickenEyebrow(palette, color: palette.ribbon)
+                        .lineLimit(1)
+                }
                 Text(book.displayTitle)
                     .font(.chickenDisplay(24))
                     .tracking(-0.5)
@@ -235,7 +269,7 @@ private struct ReadingDeskStage: View {
                     .fixedSize(horizontal: false, vertical: true)
 
                 if let author = book.author, !author.isEmpty {
-                    Text(author)
+                    Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
                         .font(.chickenSerif(15.5, italic: true))
                         .foregroundStyle(palette.muted)
                         .lineLimit(1)
@@ -297,6 +331,11 @@ private struct ReadingDeskStage: View {
             sculptedCover(width: 196)
 
             VStack(alignment: .leading, spacing: 0) {
+                if let seriesBadge = book.seriesBadgeText {
+                    Text(seriesBadge)
+                        .chickenEyebrow(palette, color: palette.ribbon)
+                        .padding(.bottom, 6)
+                }
                 Text(book.displayTitle)
                     .font(.chickenDisplay(38))
                     .tracking(-0.9)
@@ -307,7 +346,7 @@ private struct ReadingDeskStage: View {
                     .padding(.bottom, 6)
 
                 if let author = book.author, !author.isEmpty {
-                    Text(author)
+                    Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
                         .font(.chickenSerif(18, italic: true))
                         .foregroundStyle(palette.muted)
                         .lineLimit(1)

@@ -18,9 +18,34 @@ struct SearchView: View {
             $0.displayTitle.localizedStandardContains(term)
                 || $0.title.localizedStandardContains(term)
                 || $0.displayAuthor.localizedStandardContains(term)
+                || ($0.seriesName?.localizedStandardContains(term) ?? false)
+                || $0.genres.contains { $0.localizedStandardContains(term) }
+                || $0.moods.contains { $0.localizedStandardContains(term) }
+                || ($0.summary?.localizedStandardContains(term) ?? false)
+                || ($0.isbn?.localizedStandardContains(term) ?? false)
                 || ($0.publisher?.localizedStandardContains(term) ?? false)
+                || ($0.language?.localizedStandardContains(term) ?? false)
+                || ($0.releaseYear.map(String.init) == term)
                 || $0.originalFileName.localizedStandardContains(term)
         }
+    }
+
+    private var suggestedTags: [String] {
+        var counts: [String: (label: String, count: Int)] = [:]
+        for book in books {
+            for tag in book.genres + book.moods {
+                let key = tag.lowercased()
+                let existing = counts[key]
+                counts[key] = (existing?.label ?? tag, (existing?.count ?? 0) + 1)
+            }
+        }
+        return counts.values
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count > rhs.count }
+                return lhs.label < rhs.label
+            }
+            .prefix(8)
+            .map(\.label)
     }
 
     private func matchingHighlights(for term: String) -> [Highlight] {
@@ -89,12 +114,36 @@ struct SearchView: View {
         .scrollEdgeEffectStyle(.soft, for: .bottom)
         .background(palette.background.ignoresSafeArea())
         .pageTitle("Search")
-        .searchable(text: $query, prompt: "Titles, authors, highlights")
+        .searchable(text: $query, prompt: "Titles, authors, genres, highlights")
     }
 
     private var suggestions: some View {
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(title: "Search")
+            let tags = suggestedTags
+            if !tags.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(tags, id: \.self) { tag in
+                            Button {
+                                Haptics.selection()
+                                query = tag
+                            } label: {
+                                Text(tag)
+                                    .font(.chickenUI(13, weight: .medium))
+                                    .foregroundStyle(palette.text)
+                                    .padding(.horizontal, 13)
+                                    .padding(.vertical, 7)
+                                    .background(palette.surface, in: Capsule())
+                                    .overlay(Capsule().stroke(palette.border, lineWidth: 0.5))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .scrollIndicators(.never)
+            }
             let recent = books.filter { $0.lastOpenedAt != nil }.prefix(6)
             if !recent.isEmpty {
                 SectionLabel(text: "Recently opened")
@@ -160,12 +209,15 @@ private struct SearchBookRow: View {
 
     private var meta: String {
         var parts: [String] = []
+        if let series = book.seriesBadgeText { parts.append(series) }
         if book.isFinished {
             parts.append("Finished")
         } else if book.progress > 0 {
             parts.append("\(Int((book.progress * 100).rounded()))% read")
         }
-        if let pages = book.pageCount { parts.append("\(pages) pages") }
+        if let year = book.releaseYear { parts.append(String(year)) }
+        if let rating = book.formattedRating { parts.append("★ \(rating)") }
+        if let pages = book.pageCount, pages > 0 { parts.append("\(pages) pages") }
         return parts.joined(separator: " · ")
     }
 }

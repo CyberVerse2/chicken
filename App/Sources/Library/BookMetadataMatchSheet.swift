@@ -150,6 +150,13 @@ struct BookMetadataMatchSheet: View {
                             .background(palette.ribbon.opacity(0.12), in: Capsule())
                     }
 
+                    if let seriesBadge = match.seriesBadgeText {
+                        Text(seriesBadge)
+                            .font(.chickenUI(11.5, weight: .medium))
+                            .foregroundStyle(palette.ribbon)
+                            .lineLimit(1)
+                    }
+
                     if let author = match.authorLine {
                         Text(author)
                             .font(.chickenSerif(13.5, italic: true))
@@ -161,11 +168,19 @@ struct BookMetadataMatchSheet: View {
                         match.releaseYear.map(String.init),
                         match.pageCount.map { "\($0) pp." },
                         match.publisher,
+                        match.rating.map { String(format: "★ %.1f", $0) },
                     ].compactMap { $0 }
                     if !metadataParts.isEmpty {
                         Text(metadataParts.joined(separator: " · "))
                             .font(.chickenUI(12))
                             .foregroundStyle(palette.faint)
+                            .lineLimit(1)
+                    }
+
+                    if !match.genres.isEmpty {
+                        Text(match.genres.prefix(2).joined(separator: " · "))
+                            .font(.chickenUI(11.5))
+                            .foregroundStyle(palette.muted)
                             .lineLimit(1)
                     }
 

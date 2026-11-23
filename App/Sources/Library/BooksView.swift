@@ -7,6 +7,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
     case reading
     case unread
     case finished
+    case quickReads
     case pdf
     case epub
     case onDevice
@@ -19,6 +20,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .reading: return "Reading"
         case .unread: return "Unread"
         case .finished: return "Finished"
+        case .quickReads: return "Quick Reads"
         case .pdf: return "PDFs"
         case .epub: return "EPUBs"
         case .onDevice: return "On Device"
@@ -31,6 +33,7 @@ enum LibraryFilter: String, CaseIterable, Identifiable {
         case .reading: return book.progress > 0 && !book.isFinished
         case .unread: return book.progress == 0
         case .finished: return book.isFinished
+        case .quickReads: return book.isQuickRead
         case .pdf: return book.format == .pdf
         case .epub: return book.format == .epub
         case .onDevice: return library.isOnDevice(book)
@@ -43,6 +46,10 @@ enum LibrarySort: String, CaseIterable, Identifiable {
     case added
     case title
     case author
+    case series
+    case rating
+    case year
+    case length
 
     var id: String { rawValue }
 
@@ -52,6 +59,10 @@ enum LibrarySort: String, CaseIterable, Identifiable {
         case .added: return "Recently Added"
         case .title: return "Title"
         case .author: return "Author"
+        case .series: return "Series"
+        case .rating: return "Highest Rated"
+        case .year: return "Release Year"
+        case .length: return "Shortest"
         }
     }
 
@@ -69,6 +80,39 @@ enum LibrarySort: String, CaseIterable, Identifiable {
         case .added: return books.sorted { $0.importedAt > $1.importedAt }
         case .title: return books.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         case .author: return books.sorted { $0.displayAuthor.localizedStandardCompare($1.displayAuthor) == .orderedAscending }
+        case .series:
+            return books.sorted { lhs, rhs in
+                let ls = lhs.seriesName ?? "\u{FFFF}"
+                let rs = rhs.seriesName ?? "\u{FFFF}"
+                if ls.localizedCaseInsensitiveCompare(rs) != .orderedSame {
+                    return ls.localizedStandardCompare(rs) == .orderedAscending
+                }
+                let lp = lhs.seriesPosition ?? .greatestFiniteMagnitude
+                let rp = rhs.seriesPosition ?? .greatestFiniteMagnitude
+                if lp != rp { return lp < rp }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        case .rating:
+            return books.sorted { lhs, rhs in
+                let lr = lhs.catalogRating ?? -1
+                let rr = rhs.catalogRating ?? -1
+                if lr != rr { return lr > rr }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        case .year:
+            return books.sorted { lhs, rhs in
+                let ly = lhs.releaseYear ?? Int.min
+                let ry = rhs.releaseYear ?? Int.min
+                if ly != ry { return ly > ry }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        case .length:
+            return books.sorted { lhs, rhs in
+                let lp = (lhs.pageCount ?? 0) > 0 ? lhs.pageCount! : Int.max
+                let rp = (rhs.pageCount ?? 0) > 0 ? rhs.pageCount! : Int.max
+                if lp != rp { return lp < rp }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
         }
     }
 }
@@ -133,6 +177,13 @@ struct BooksView: View {
     }
 
     private var visible: [Book] {
+        if let facet = router.libraryFacet {
+            let matched = books.filter { facet.matches($0) }
+            if case .series = facet {
+                return LibrarySort.series.sorted(matched)
+            }
+            return sort.sorted(matched)
+        }
         if let activeCollection {
             let ids = Set((activeCollection.books ?? []).map(\.id))
             return sort.sorted(books.filter { ids.contains($0.id) })
@@ -141,7 +192,31 @@ struct BooksView: View {
     }
 
     private var filters: [LibraryFilter] {
-        LibraryFilter.allCases.filter { $0 != .onDevice || library.cloud != nil }
+        let hasQuick = books.contains(where: \.isQuickRead)
+        return LibraryFilter.allCases.filter {
+            if $0 == .onDevice { return library.cloud != nil }
+            if $0 == .quickReads { return hasQuick }
+            return true
+        }
+    }
+
+    private var topGenres: [(name: String, count: Int)] {
+        var counts: [String: (name: String, count: Int)] = [:]
+        for book in books {
+            for genre in book.genres {
+                let key = genre.lowercased()
+                let existing = counts[key]
+                counts[key] = (existing?.name ?? genre, (existing?.count ?? 0) + 1)
+            }
+        }
+        return counts.values
+            .filter { $0.count >= 2 }
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count > rhs.count }
+                return lhs.name < rhs.name
+            }
+            .prefix(6)
+            .map { $0 }
     }
 
     private var canSelectDownloads: Bool { library.cloud != nil && !library.preferences.downloadsAllBooks }
@@ -164,7 +239,19 @@ struct BooksView: View {
                     counts: counts,
                     collections: sortedCollections,
                     collectionID: $collectionID,
+                    genres: topGenres,
+                    activeFacet: router.libraryFacet,
                     gutter: gutter,
+                    selectGenre: { genre in
+                        collectionID = ""
+                        if case .genre(let active) = router.libraryFacet,
+                           active.localizedCaseInsensitiveCompare(genre) == .orderedSame {
+                            router.libraryFacet = nil
+                        } else {
+                            router.libraryFacet = .genre(genre)
+                        }
+                    },
+                    clearFacet: { router.libraryFacet = nil },
                     newCollection: {
                         draftName = ""
                         dialog = .creating
@@ -175,6 +262,31 @@ struct BooksView: View {
                     },
                     delete: { dialog = .deleting($0) }
                 )
+
+                if let facet = router.libraryFacet {
+                    HStack(spacing: 8) {
+                        Button {
+                            Haptics.selection()
+                            withAnimation(reduceMotion ? nil : ChickenMotion.snappy) {
+                                router.libraryFacet = nil
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("\(facet.eyebrow): \(facet.value)")
+                                    .font(.chickenUI(12.5, weight: .semibold))
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 10.5, weight: .bold))
+                            }
+                            .foregroundStyle(palette.ribbon)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(palette.ribbon.opacity(0.12), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        Spacer()
+                    }
+                    .padding(.horizontal, gutter)
+                }
 
                 if books.isEmpty {
                     EmptyLibraryView()
@@ -357,6 +469,7 @@ struct BooksView: View {
         var reading = 0
         var unread = 0
         var finished = 0
+        var quickReads = 0
         var pdf = 0
         var epub = 0
         var onDevice = 0
@@ -369,6 +482,7 @@ struct BooksView: View {
             } else {
                 unread += 1
             }
+            if book.isQuickRead { quickReads += 1 }
             if book.format == .pdf { pdf += 1 }
             else if book.format == .epub { epub += 1 }
             if checkOnDevice && library.isOnDevice(book) { onDevice += 1 }
@@ -378,6 +492,7 @@ struct BooksView: View {
             .reading: reading,
             .unread: unread,
             .finished: finished,
+            .quickReads: quickReads,
             .pdf: pdf,
             .epub: epub,
         ]
@@ -424,13 +539,18 @@ private struct LibraryFilterPills: View {
     let counts: [LibraryFilter: Int]
     var collections: [BookCollection] = []
     @Binding var collectionID: String
+    var genres: [(name: String, count: Int)] = []
+    var activeFacet: LibraryFacetFilter?
     let gutter: CGFloat
+    var selectGenre: (String) -> Void = { _ in }
+    var clearFacet: () -> Void = {}
     var newCollection: () -> Void = {}
     var rename: (BookCollection) -> Void = { _ in }
     var delete: (BookCollection) -> Void = { _ in }
 
     private var selectedTabID: String {
-        collectionID.isEmpty ? "filter-\(selection.rawValue)" : collectionID
+        if case .genre(let name) = activeFacet { return "genre-\(name)" }
+        return collectionID.isEmpty ? "filter-\(selection.rawValue)" : collectionID
     }
 
     var body: some View {
@@ -442,8 +562,9 @@ private struct LibraryFilterPills: View {
                             pill(
                                 filter.label,
                                 count: counts[filter] ?? 0,
-                                selected: collectionID.isEmpty && filter == selection
+                                selected: activeFacet == nil && collectionID.isEmpty && filter == selection
                             ) {
+                                clearFacet()
                                 selection = filter
                                 collectionID = ""
                             }
@@ -459,14 +580,37 @@ private struct LibraryFilterPills: View {
                             pill(
                                 collection.name,
                                 count: collection.books?.count ?? 0,
-                                selected: collectionID == collection.id.uuidString
+                                selected: activeFacet == nil && collectionID == collection.id.uuidString
                             ) {
+                                clearFacet()
                                 collectionID = collection.id.uuidString
                             }
                             .id(collection.id.uuidString)
                             .contextMenu {
                                 Button("Rename…", systemImage: "pencil") { rename(collection) }
                                 Button("Delete Collection", systemImage: "trash", role: .destructive) { delete(collection) }
+                            }
+                        }
+                        if !genres.isEmpty {
+                            Rectangle()
+                                .fill(palette.borderStrong)
+                                .frame(width: 1, height: 18)
+                                .padding(.horizontal, 4)
+                            ForEach(genres, id: \.name) { genre in
+                                let isGenreSelected: Bool = {
+                                    if case .genre(let active) = activeFacet {
+                                        return active.localizedCaseInsensitiveCompare(genre.name) == .orderedSame
+                                    }
+                                    return false
+                                }()
+                                pill(
+                                    genre.name,
+                                    count: genre.count,
+                                    selected: isGenreSelected
+                                ) {
+                                    selectGenre(genre.name)
+                                }
+                                .id("genre-\(genre.name)")
                             }
                         }
                         Button(action: newCollection) {
@@ -588,6 +732,12 @@ private struct BookEditorialList: View {
                         .shadow(color: palette.shadow, radius: 3, x: 0, y: 2)
 
                     VStack(alignment: .leading, spacing: 3) {
+                        if let seriesBadge = book.seriesBadgeText {
+                            Text(seriesBadge)
+                                .font(.chickenUI(10.5, weight: .semibold))
+                                .foregroundStyle(palette.ribbon)
+                                .lineLimit(1)
+                        }
                         Text(book.displayTitle)
                             .font(.chickenUI(15, weight: .semibold))
                             .foregroundStyle(palette.text)
@@ -595,9 +745,16 @@ private struct BookEditorialList: View {
                             .multilineTextAlignment(.leading)
 
                         if let author = book.author, !author.isEmpty {
-                            Text(author)
+                            Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
                                 .font(.chickenUI(13))
                                 .foregroundStyle(palette.muted)
+                                .lineLimit(1)
+                        }
+
+                        if !inProgress, let summary = book.summary, !summary.isEmpty {
+                            Text(summary)
+                                .font(.chickenUI(12))
+                                .foregroundStyle(palette.faint)
                                 .lineLimit(1)
                         }
 
@@ -619,15 +776,24 @@ private struct BookEditorialList: View {
                             }
                             .padding(.top, 3)
                         } else if book.isFinished {
-                            Label("Finished", systemImage: "checkmark")
+                            let ratingSuffix = book.formattedRating.map { " · ★ \($0)" } ?? ""
+                            Label("Finished\(ratingSuffix)", systemImage: "checkmark")
                                 .font(.chickenMono(11, weight: .medium))
                                 .foregroundStyle(palette.muted)
                                 .padding(.top, 2)
-                        } else if let pages = book.pageCount, pages > 0 {
-                            Text("\(pages) pages · \(book.format.label)")
-                                .font(.chickenMono(11))
-                                .foregroundStyle(palette.faint)
-                                .padding(.top, 2)
+                        } else {
+                            let parts = [
+                                book.pageCount.flatMap { $0 > 0 ? "\($0) pp." : nil },
+                                book.formattedRating.map { "★ \($0)" },
+                                book.genres.first,
+                            ].compactMap { $0 }
+                            if !parts.isEmpty {
+                                Text(parts.joined(separator: " · "))
+                                    .font(.chickenMono(11))
+                                    .foregroundStyle(palette.faint)
+                                    .lineLimit(1)
+                                    .padding(.top, 2)
+                            }
                         }
                     }
                     Spacer(minLength: 8)

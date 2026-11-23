@@ -37,6 +37,15 @@ public struct BookCatalogMatch: Identifiable, Hashable, Sendable {
     public let releaseYear: Int?
     public let coverURL: URL?
     public let workKey: String?
+    public let seriesName: String?
+    public let seriesPosition: Double?
+    public let genres: [String]
+    public let moods: [String]
+    public let rating: Double?
+    public let ratingsCount: Int?
+    public let catalogSlug: String?
+    public let hardcoverBookID: Int?
+    public let catalogURL: URL?
 
     public init(
         id: String,
@@ -50,7 +59,16 @@ public struct BookCatalogMatch: Identifiable, Hashable, Sendable {
         isbn: String? = nil,
         releaseYear: Int? = nil,
         coverURL: URL? = nil,
-        workKey: String? = nil
+        workKey: String? = nil,
+        seriesName: String? = nil,
+        seriesPosition: Double? = nil,
+        genres: [String] = [],
+        moods: [String] = [],
+        rating: Double? = nil,
+        ratingsCount: Int? = nil,
+        catalogSlug: String? = nil,
+        hardcoverBookID: Int? = nil,
+        catalogURL: URL? = nil
     ) {
         self.id = id
         self.source = source
@@ -64,12 +82,30 @@ public struct BookCatalogMatch: Identifiable, Hashable, Sendable {
         self.releaseYear = releaseYear
         self.coverURL = coverURL
         self.workKey = workKey
+        self.seriesName = seriesName
+        self.seriesPosition = seriesPosition
+        self.genres = genres
+        self.moods = moods
+        self.rating = rating
+        self.ratingsCount = ratingsCount
+        self.catalogSlug = catalogSlug
+        self.hardcoverBookID = hardcoverBookID
+        self.catalogURL = catalogURL
     }
 
     public var authorLine: String? {
         let cleaned = authors.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !cleaned.isEmpty else { return nil }
         return cleaned.joined(separator: ", ")
+    }
+
+    public var seriesBadgeText: String? {
+        guard let series = seriesName?.trimmingCharacters(in: .whitespacesAndNewlines), !series.isEmpty else {
+            return nil
+        }
+        guard let pos = seriesPosition, pos > 0 else { return series }
+        let formatted = pos.rounded() == pos ? String(Int(pos)) : String(format: "%.1f", pos)
+        return "\(series) · Book \(formatted)"
     }
 
     var richnessScore: Int {
@@ -81,6 +117,9 @@ public struct BookCatalogMatch: Identifiable, Hashable, Sendable {
         if pageCount != nil { score += 1 }
         if isbn != nil { score += 1 }
         if language != nil { score += 1 }
+        if seriesName != nil { score += 1 }
+        if !genres.isEmpty { score += 1 }
+        if rating != nil { score += 1 }
         return score
     }
 }
@@ -151,6 +190,29 @@ public final class BookCatalogClient: Sendable {
         throw BookCatalogError.invalidHardcoverToken
     }
 
+    public func syncHardcoverStatus(bookID: Int, statusID: Int, token rawToken: String) async -> Bool {
+        let token = Self.cleanToken(rawToken)
+        guard !token.isEmpty, bookID > 0 else { return false }
+        let mutation = """
+        mutation SyncStatus($bookId: Int!, $statusId: Int!) {
+          insert_user_book(object: { book_id: $bookId, status_id: $statusId }) {
+            id
+          }
+        }
+        """
+        guard let data = try? await postHardcover(
+            query: mutation,
+            variables: ["bookId": bookID, "statusId": statusID],
+            token: token
+        ),
+        let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        root["errors"] == nil
+        else {
+            return false
+        }
+        return true
+    }
+
     public func search(_ query: BookCatalogQuery, hardcoverToken: String?) async -> BookCatalogSearchResult {
         let cleanToken = hardcoverToken.map(Self.cleanToken) ?? ""
         async let openLibraryOutcome = searchOpenLibraryCatching(query)
@@ -186,20 +248,89 @@ public final class BookCatalogClient: Sendable {
 
     public func bestMatch(for query: BookCatalogQuery, hardcoverToken: String?) async -> BookCatalogMatch? {
         let cleanToken = hardcoverToken.map(Self.cleanToken) ?? ""
-        if !cleanToken.isEmpty, let items = try? await searchHardcover(query, token: cleanToken) {
-            if let winner = Self.pickBest(from: items, query: query) {
-                return winner
-            }
+        if !cleanToken.isEmpty, let items = try? await searchHardcover(query, token: cleanToken),
+           let winner = Self.pickBest(from: items, query: query) {
+            return await hydrateDetails(for: winner, hardcoverToken: cleanToken)
         }
         if let items = try? await searchOpenLibrary(query),
            let winner = Self.pickBest(from: items, query: query) {
-            return await hydrateDetails(for: winner)
+            return await hydrateDetails(for: winner, hardcoverToken: nil)
         }
         return nil
     }
 
-    public func hydrateDetails(for match: BookCatalogMatch) async -> BookCatalogMatch {
-        guard match.source == .openLibrary, match.summary == nil, let workKey = match.workKey else {
+    public func hydrateDetails(for match: BookCatalogMatch, hardcoverToken: String? = nil) async -> BookCatalogMatch {
+        if match.source == .hardcover {
+            let token = hardcoverToken.map(Self.cleanToken) ?? ""
+            guard !token.isEmpty,
+                  let hcID = match.hardcoverBookID,
+                  (match.seriesName == nil || match.genres.isEmpty || match.publisher == nil || match.catalogURL == nil || match.summary == nil)
+            else {
+                return match
+            }
+            let gql = """
+            query HydrateBook($id: Int!) {
+              books(where: { id: { _eq: $id } }, limit: 1) {
+                id
+                slug
+                title
+                description
+                pages
+                release_year
+                rating
+                ratings_count
+                cached_tags
+                image { url }
+                contributions { author { name } }
+                book_series {
+                  position
+                  series { name }
+                }
+                editions(limit: 3) {
+                  isbn_13
+                  isbn_10
+                  pages
+                  publisher { name }
+                  language { code2 }
+                  image { url }
+                }
+              }
+            }
+            """
+            guard let data = try? await postHardcover(query: gql, variables: ["id": hcID], token: token),
+                  let hydrated = Self.parseHardcoverBooksJSON(data).first
+            else {
+                return match
+            }
+            return BookCatalogMatch(
+                id: match.id,
+                source: match.source,
+                title: match.title,
+                authors: match.authors.isEmpty ? hydrated.authors : match.authors,
+                publisher: match.publisher ?? hydrated.publisher,
+                language: match.language ?? hydrated.language,
+                pageCount: match.pageCount ?? hydrated.pageCount,
+                summary: match.summary ?? hydrated.summary,
+                isbn: match.isbn ?? hydrated.isbn,
+                releaseYear: match.releaseYear ?? hydrated.releaseYear,
+                coverURL: match.coverURL ?? hydrated.coverURL,
+                workKey: match.workKey ?? hydrated.workKey,
+                seriesName: match.seriesName ?? hydrated.seriesName,
+                seriesPosition: match.seriesPosition ?? hydrated.seriesPosition,
+                genres: match.genres.isEmpty ? hydrated.genres : match.genres,
+                moods: match.moods.isEmpty ? hydrated.moods : match.moods,
+                rating: match.rating ?? hydrated.rating,
+                ratingsCount: match.ratingsCount ?? hydrated.ratingsCount,
+                catalogSlug: match.catalogSlug ?? hydrated.catalogSlug,
+                hardcoverBookID: match.hardcoverBookID ?? hydrated.hardcoverBookID,
+                catalogURL: match.catalogURL ?? hydrated.catalogURL
+            )
+        }
+
+        guard match.source == .openLibrary,
+              (match.summary == nil || match.genres.isEmpty),
+              let workKey = match.workKey
+        else {
             return match
         }
         let normalizedKey = workKey.hasPrefix("/") ? workKey : "/\(workKey)"
@@ -212,11 +343,11 @@ public final class BookCatalogClient: Sendable {
         guard
             let (data, response) = try? await session.data(for: request),
             let http = response as? HTTPURLResponse,
-            http.statusCode == 200,
-            let summary = Self.parseOpenLibraryWorkDescription(data)
+            http.statusCode == 200
         else {
             return match
         }
+        let details = Self.parseOpenLibraryWorkDetails(data)
         return BookCatalogMatch(
             id: match.id,
             source: match.source,
@@ -225,11 +356,20 @@ public final class BookCatalogClient: Sendable {
             publisher: match.publisher,
             language: match.language,
             pageCount: match.pageCount,
-            summary: summary,
+            summary: match.summary ?? details.description,
             isbn: match.isbn,
             releaseYear: match.releaseYear,
             coverURL: match.coverURL,
-            workKey: match.workKey
+            workKey: match.workKey,
+            seriesName: match.seriesName,
+            seriesPosition: match.seriesPosition,
+            genres: match.genres.isEmpty ? details.genres : match.genres,
+            moods: match.moods,
+            rating: match.rating,
+            ratingsCount: match.ratingsCount,
+            catalogSlug: match.catalogSlug,
+            hardcoverBookID: match.hardcoverBookID,
+            catalogURL: match.catalogURL
         )
     }
 
@@ -284,12 +424,20 @@ public final class BookCatalogClient: Sendable {
                 image { url }
                 book {
                   id
+                  slug
                   title
                   description
                   pages
                   release_year
+                  rating
+                  ratings_count
+                  cached_tags
                   image { url }
                   contributions { author { name } }
+                  book_series {
+                    position
+                    series { name }
+                  }
                 }
               }
             }
@@ -319,12 +467,20 @@ public final class BookCatalogClient: Sendable {
         query FallbackBooks($pattern: String!) {
           books(where: { title: { _ilike: $pattern } }, limit: 8) {
             id
+            slug
             title
             description
             pages
             release_year
+            rating
+            ratings_count
+            cached_tags
             image { url }
             contributions { author { name } }
+            book_series {
+              position
+              series { name }
+            }
             editions(limit: 3) {
               isbn_13
               isbn_10
@@ -373,7 +529,7 @@ public final class BookCatalogClient: Sendable {
     }
 
     private func searchOpenLibrary(_ query: BookCatalogQuery) async throws -> [BookCatalogMatch] {
-        let fields = "key,title,author_name,publisher,language,number_of_pages_median,isbn,cover_i,first_publish_year"
+        let fields = "key,title,author_name,publisher,language,number_of_pages_median,isbn,cover_i,first_publish_year,subject,ratings_average,ratings_count"
         if let isbn = query.isbn {
             var comps = URLComponents(string: "https://openlibrary.org/search.json")!
             comps.queryItems = [
@@ -440,7 +596,9 @@ public final class BookCatalogClient: Sendable {
         return editions.compactMap { ed -> BookCatalogMatch? in
             let bookObj = ed["book"] as? [String: Any] ?? [:]
             guard let rawTitle = cleanString(ed["title"]) ?? cleanString(bookObj["title"]) else { return nil }
+            let bookID = intValue(bookObj["id"])
             let id = stringID(bookObj["id"]) ?? stringID(ed["id"]) ?? UUID().uuidString
+            let slug = cleanString(bookObj["slug"])
             let authors = extractAuthors(from: bookObj["contributions"])
             let publisher = cleanString((ed["publisher"] as? [String: Any])?["name"])
             let language = normalizeLanguage(cleanString((ed["language"] as? [String: Any])?["code2"]))
@@ -449,6 +607,11 @@ public final class BookCatalogClient: Sendable {
             let isbn = cleanString(ed["isbn_13"]) ?? cleanString(ed["isbn_10"])
             let releaseYear = intValue(bookObj["release_year"]) ?? yearPrefix(cleanString(ed["release_date"]))
             let coverURL = extractImageURL(ed["image"]) ?? extractImageURL(bookObj["image"])
+            let series = extractHardcoverSeries(from: bookObj["book_series"])
+            let tags = extractHardcoverTags(from: bookObj["cached_tags"])
+            let rating = clampRating(doubleValue(bookObj["rating"]))
+            let ratingsCount = intValue(bookObj["ratings_count"])
+            let catalogURL = slug.flatMap { URL(string: "https://hardcover.app/books/\($0)") }
             return BookCatalogMatch(
                 id: "hc:\(id)",
                 source: .hardcover,
@@ -460,7 +623,16 @@ public final class BookCatalogClient: Sendable {
                 summary: summary,
                 isbn: isbn,
                 releaseYear: releaseYear,
-                coverURL: coverURL
+                coverURL: coverURL,
+                seriesName: series.name,
+                seriesPosition: series.position,
+                genres: tags.genres,
+                moods: tags.moods,
+                rating: rating,
+                ratingsCount: ratingsCount,
+                catalogSlug: slug,
+                hardcoverBookID: bookID,
+                catalogURL: catalogURL
             )
         }
     }
@@ -488,7 +660,9 @@ public final class BookCatalogClient: Sendable {
             guard let doc = hit["document"] as? [String: Any],
                   let title = cleanString(doc["title"])
             else { return nil }
+            let bookID = intValue(doc["id"])
             let id = stringID(doc["id"]) ?? UUID().uuidString
+            let slug = cleanString(doc["slug"])
             let authors = (doc["author_names"] as? [Any])?.compactMap(cleanString)
                 ?? extractAuthors(from: doc["contributions"])
             let pageCount = intValue(doc["pages"])
@@ -498,6 +672,15 @@ public final class BookCatalogClient: Sendable {
                 ?? (doc["isbns"] as? [Any])?.compactMap(cleanString).first
                 ?? cleanString(doc["isbn_13"])
             let coverURL = extractImageURL(doc["image"])
+            let featuredSeries = doc["featured_series"] as? [String: Any]
+            let seriesName = cleanString((featuredSeries?["series"] as? [String: Any])?["name"])
+                ?? (doc["series_names"] as? [Any])?.compactMap(cleanString).first
+            let seriesPosition = doubleValue(featuredSeries?["position"])
+            let genres = cleanGenres(from: (doc["genres"] as? [Any])?.compactMap(cleanString) ?? [], limit: 4)
+            let moods = cleanGenres(from: (doc["moods"] as? [Any])?.compactMap(cleanString) ?? [], limit: 3)
+            let rating = clampRating(doubleValue(doc["rating"]))
+            let ratingsCount = intValue(doc["ratings_count"])
+            let catalogURL = slug.flatMap { URL(string: "https://hardcover.app/books/\($0)") }
             return BookCatalogMatch(
                 id: "hc:\(id)",
                 source: .hardcover,
@@ -509,7 +692,16 @@ public final class BookCatalogClient: Sendable {
                 summary: summary,
                 isbn: isbn,
                 releaseYear: releaseYear,
-                coverURL: coverURL
+                coverURL: coverURL,
+                seriesName: seriesName,
+                seriesPosition: seriesPosition,
+                genres: genres,
+                moods: moods,
+                rating: rating,
+                ratingsCount: ratingsCount,
+                catalogSlug: slug,
+                hardcoverBookID: bookID,
+                catalogURL: catalogURL
             )
         }
     }
@@ -523,7 +715,9 @@ public final class BookCatalogClient: Sendable {
 
         return books.compactMap { book -> BookCatalogMatch? in
             guard let title = cleanString(book["title"]) else { return nil }
+            let bookID = intValue(book["id"])
             let id = stringID(book["id"]) ?? UUID().uuidString
+            let slug = cleanString(book["slug"])
             let authors = extractAuthors(from: book["contributions"])
             let editions = book["editions"] as? [[String: Any]] ?? []
             let firstEdition = editions.first { $0["isbn_13"] != nil || $0["image"] != nil } ?? editions.first
@@ -534,6 +728,11 @@ public final class BookCatalogClient: Sendable {
             let isbn = firstEdition.flatMap { cleanString($0["isbn_13"]) ?? cleanString($0["isbn_10"]) }
             let releaseYear = intValue(book["release_year"])
             let coverURL = extractImageURL(book["image"]) ?? firstEdition.flatMap { extractImageURL($0["image"]) }
+            let series = extractHardcoverSeries(from: book["book_series"])
+            let tags = extractHardcoverTags(from: book["cached_tags"])
+            let rating = clampRating(doubleValue(book["rating"]))
+            let ratingsCount = intValue(book["ratings_count"])
+            let catalogURL = slug.flatMap { URL(string: "https://hardcover.app/books/\($0)") }
             return BookCatalogMatch(
                 id: "hc:\(id)",
                 source: .hardcover,
@@ -545,7 +744,16 @@ public final class BookCatalogClient: Sendable {
                 summary: summary,
                 isbn: isbn,
                 releaseYear: releaseYear,
-                coverURL: coverURL
+                coverURL: coverURL,
+                seriesName: series.name,
+                seriesPosition: series.position,
+                genres: tags.genres,
+                moods: tags.moods,
+                rating: rating,
+                ratingsCount: ratingsCount,
+                catalogSlug: slug,
+                hardcoverBookID: bookID,
+                catalogURL: catalogURL
             )
         }
     }
@@ -568,6 +776,13 @@ public final class BookCatalogClient: Sendable {
             let isbns = (doc["isbn"] as? [Any])?.compactMap { cleanString($0).flatMap(ISBNExtractor.normalize) } ?? []
             let isbn = isbns.first { $0.count == 13 } ?? isbns.first
             let releaseYear = intValue(doc["first_publish_year"])
+            let genres = cleanGenres(from: (doc["subject"] as? [Any])?.compactMap(cleanString) ?? [], limit: 4)
+            let rating = clampRating(doubleValue(doc["ratings_average"]))
+            let ratingsCount = intValue(doc["ratings_count"])
+            let catalogURL = workKey.flatMap {
+                let normalized = $0.hasPrefix("/") ? $0 : "/\($0)"
+                return URL(string: "https://openlibrary.org\(normalized)")
+            }
             let coverURL: URL?
             if let coverID = intValue(doc["cover_i"]), coverID > 0 {
                 coverURL = URL(string: "https://covers.openlibrary.org/b/id/\(coverID)-L.jpg?default=false")
@@ -588,22 +803,66 @@ public final class BookCatalogClient: Sendable {
                 isbn: isbn,
                 releaseYear: releaseYear,
                 coverURL: coverURL,
-                workKey: workKey
+                workKey: workKey,
+                genres: genres,
+                rating: rating,
+                ratingsCount: ratingsCount,
+                catalogURL: catalogURL
             )
         }
     }
 
     public static func parseOpenLibraryWorkDescription(_ data: Data) -> String? {
+        parseOpenLibraryWorkDetails(data).description
+    }
+
+    public static func parseOpenLibraryWorkDetails(_ data: Data) -> (description: String?, genres: [String]) {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
+            return (nil, [])
         }
+        let description: String?
         if let str = root["description"] as? String {
-            return cleanDescription(str)
+            description = cleanDescription(str)
+        } else if let dict = root["description"] as? [String: Any], let value = dict["value"] as? String {
+            description = cleanDescription(value)
+        } else {
+            description = nil
         }
-        if let dict = root["description"] as? [String: Any], let value = dict["value"] as? String {
-            return cleanDescription(value)
+        let rawSubjects = (root["subjects"] as? [Any])?.compactMap(cleanString) ?? []
+        return (description, cleanGenres(from: rawSubjects, limit: 4))
+    }
+
+    public static func cleanGenres(from rawSubjects: [String], limit: Int = 4) -> [String] {
+        let noisyFragments = [
+            "accessible book",
+            "protected daisy",
+            "in library",
+            "overdrive",
+            "lending library",
+            "large type",
+            "open library staff picks",
+            "reading level",
+            "nyt:",
+            "new york times",
+            "award",
+            "bestseller",
+            "internet archive",
+        ]
+        var seen: Set<String> = []
+        var result: [String] = []
+        for raw in rawSubjects {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, trimmed.count <= 26, !trimmed.contains("--"), !trimmed.contains("(") else { continue }
+            if trimmed.rangeOfCharacter(from: .decimalDigits) != nil { continue }
+            let lower = trimmed.lowercased()
+            if noisyFragments.contains(where: { lower.contains($0) }) { continue }
+            if lower == "fiction" && result.contains(where: { $0.lowercased().contains("fiction") }) { continue }
+            if seen.insert(lower).inserted {
+                result.append(trimmed.readableTitle)
+                if result.count >= limit { break }
+            }
         }
-        return nil
+        return result
     }
 
     public static func matchConfidence(query: BookCatalogQuery, match: BookCatalogMatch) -> Double {
@@ -676,6 +935,32 @@ public final class BookCatalogClient: Sendable {
         return order.compactMap { byKey[$0] }
     }
 
+    private static func extractHardcoverSeries(from value: Any?) -> (name: String?, position: Double?) {
+        guard let entries = value as? [[String: Any]] else { return (nil, nil) }
+        for entry in entries {
+            if let series = entry["series"] as? [String: Any], let name = cleanString(series["name"]) {
+                return (name, doubleValue(entry["position"]))
+            }
+        }
+        return (nil, nil)
+    }
+
+    private static func extractHardcoverTags(from value: Any?) -> (genres: [String], moods: [String]) {
+        guard let dict = value as? [String: Any] else { return ([], []) }
+        func tagNames(_ key: String, limit: Int) -> [String] {
+            let rawList: [String]
+            if let objs = dict[key] as? [[String: Any]] {
+                rawList = objs.compactMap { cleanString($0["tag"]) ?? cleanString($0["name"]) }
+            } else if let strs = dict[key] as? [Any] {
+                rawList = strs.compactMap(cleanString)
+            } else {
+                rawList = []
+            }
+            return cleanGenres(from: rawList, limit: limit)
+        }
+        return (tagNames("Genre", limit: 4), tagNames("Mood", limit: 3))
+    }
+
     private static func cleanToken(_ raw: String) -> String {
         var trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.lowercased().hasPrefix("bearer ") {
@@ -702,6 +987,19 @@ public final class BookCatalogClient: Sendable {
         if let d = value as? Double, d > 0 { return Int(d) }
         if let s = value as? String, let n = Int(s.trimmingCharacters(in: .whitespacesAndNewlines)), n > 0 { return n }
         return nil
+    }
+
+    private static func doubleValue(_ value: Any?) -> Double? {
+        if let d = value as? Double { return d }
+        if let n = value as? Int { return Double(n) }
+        if let num = value as? NSNumber { return num.doubleValue }
+        if let s = value as? String { return Double(s.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        return nil
+    }
+
+    private static func clampRating(_ value: Double?) -> Double? {
+        guard let value, value >= 0.1, value <= 5.0 else { return nil }
+        return value
     }
 
     private static func yearPrefix(_ raw: String?) -> Int? {

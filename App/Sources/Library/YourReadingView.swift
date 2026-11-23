@@ -9,6 +9,7 @@ struct YourReadingView: View {
     @Environment(\.openBook) private var openBook
     @Query(filter: #Predicate<Book> { $0.finishedAt != nil }, sort: \Book.finishedAt, order: .reverse)
     private var finished: [Book]
+    @Query(sort: \Book.lastActivityAt, order: .reverse) private var allBooks: [Book]
     @Query(sort: \Highlight.createdAt, order: .reverse) private var highlights: [Highlight]
     @State private var year = ReadingLog.Year()
 
@@ -33,6 +34,11 @@ struct YourReadingView: View {
 
                 if !finishedThisYear.isEmpty {
                     BookShelf(title: "Finished in \(String(currentYear))", books: finishedThisYear, gutter: gutter)
+                }
+
+                if hasTasteData {
+                    ReadingTasteCard(books: allBooks)
+                        .padding(.horizontal, gutter)
                 }
 
                 if let highlight = highlights.first, let book = highlight.book {
@@ -82,6 +88,10 @@ struct YourReadingView: View {
         figure("This week", week)
         figure(String(currentYear), year.totalSeconds)
         days
+    }
+
+    private var hasTasteData: Bool {
+        allBooks.contains { !$0.genres.isEmpty || $0.releaseYear != nil }
     }
 
     private var week: Int { library.lastSevenDays.reduce(0) { $0 + $1.seconds } }
@@ -185,11 +195,20 @@ struct YearGoalCard: View {
 
     private var year: String { String(Calendar.current.component(.year, from: Date())) }
 
+    private var pagesFinishedThisYear: Int {
+        finished.compactMap(\.pageCount).filter { $0 > 0 }.reduce(0, +)
+    }
+
     var body: some View {
         GoalCard {
             VStack(alignment: .leading, spacing: 10) {
                 Text("\(year) reading goal").chickenEyebrow(palette)
                 GoalFigure(value: "\(finished.count)", unit: "of \(goal) books")
+                if pagesFinishedThisYear > 0 {
+                    Text("\(pagesFinishedThisYear.formatted()) pages read")
+                        .font(.chickenMono(11.5))
+                        .foregroundStyle(palette.muted)
+                }
             }
 
             if goal <= 24 {
@@ -199,6 +218,89 @@ struct YearGoalCard: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct ReadingTasteCard: View {
+    @Environment(\.palette) private var palette
+    let books: [Book]
+
+    private var topGenres: [(name: String, count: Int)] {
+        let active = books.filter { $0.isFinished || $0.progress > 0 }
+        let pool = active.contains(where: { !$0.genres.isEmpty }) ? active : books
+        var map: [String: (name: String, count: Int)] = [:]
+        for book in pool {
+            for genre in book.genres {
+                let key = genre.lowercased()
+                let prev = map[key]
+                map[key] = (prev?.name ?? genre, (prev?.count ?? 0) + 1)
+            }
+        }
+        return map.values
+            .sorted { lhs, rhs in
+                if lhs.count != rhs.count { return lhs.count > rhs.count }
+                return lhs.name < rhs.name
+            }
+            .prefix(5)
+            .map { $0 }
+    }
+
+    private var eraAndLengthSummary: String? {
+        let years = books.compactMap(\.releaseYear).sorted()
+        let pages = books.compactMap(\.pageCount).filter { $0 > 0 }
+        var parts: [String] = []
+        if let minYear = years.first, let maxYear = years.last {
+            let minDecade = (minYear / 10) * 10
+            let maxDecade = (maxYear / 10) * 10
+            parts.append(minDecade == maxDecade ? "\(minDecade)s" : "\(minDecade)s – \(maxDecade)s")
+        }
+        if !pages.isEmpty {
+            let avg = pages.reduce(0, +) / pages.count
+            parts.append("avg. \(avg) pages")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        let genres = topGenres
+        if !genres.isEmpty || eraAndLengthSummary != nil {
+            GoalCard {
+                Text("What you read").chickenEyebrow(palette)
+                if !genres.isEmpty {
+                    let maxCount = max(1, genres.first?.count ?? 1)
+                    VStack(spacing: 10) {
+                        ForEach(genres, id: \.name) { item in
+                            HStack(spacing: 12) {
+                                Text(item.name)
+                                    .font(.chickenUI(13.5, weight: .medium))
+                                    .foregroundStyle(palette.text)
+                                    .lineLimit(1)
+                                    .frame(width: 120, alignment: .leading)
+                                GeometryReader { geo in
+                                    ZStack(alignment: .leading) {
+                                        Capsule().fill(palette.surfaceAlt)
+                                        Capsule()
+                                            .fill(palette.ribbon)
+                                            .frame(width: max(6, geo.size.width * CGFloat(item.count) / CGFloat(maxCount)))
+                                    }
+                                }
+                                .frame(height: 6)
+                                Text("\(item.count)")
+                                    .font(.chickenMono(11.5, weight: .semibold))
+                                    .foregroundStyle(palette.muted)
+                                    .frame(width: 24, alignment: .trailing)
+                            }
+                        }
+                    }
+                }
+                if let summary = eraAndLengthSummary {
+                    Text(summary)
+                        .font(.chickenMono(11.5))
+                        .foregroundStyle(palette.faint)
+                        .padding(.top, 2)
+                }
+            }
+        }
     }
 }
 

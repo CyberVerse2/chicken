@@ -3,13 +3,16 @@ import Foundation
 import SwiftData
 
 extension LibraryStore {
+    static let currentCatalogEnrichVersion = 1
+
     func applyCatalogMatch(
         _ rawMatch: BookCatalogMatch,
         to book: Book,
         replaceCover: Bool,
         replaceExistingFields: Bool
     ) async {
-        let match = await BookCatalogClient.shared.hydrateDetails(for: rawMatch)
+        let token = CatalogTokenStore.loadHardcoverToken()
+        let match = await BookCatalogClient.shared.hydrateDetails(for: rawMatch, hardcoverToken: token)
         let coversDirectory = paths.covers
         let shouldReplaceCover = (replaceCover || book.coverImageName == nil) && match.coverURL != nil
 
@@ -32,13 +35,17 @@ extension LibraryStore {
             if let pageCount = match.pageCount { book.pageCount = pageCount }
             if let summary = match.summary { book.summary = summary }
             if let isbn = match.isbn { book.isbn = isbn }
+            if let year = match.releaseYear { book.releaseYear = year }
+            if let seriesName = match.seriesName { book.seriesName = seriesName }
+            if let seriesPosition = match.seriesPosition { book.seriesPosition = seriesPosition }
+            if !match.genres.isEmpty { book.genresCSV = match.genres.joined(separator: ",") }
+            if !match.moods.isEmpty { book.moodsCSV = match.moods.joined(separator: ",") }
+            if let rating = match.rating { book.catalogRating = rating }
+            if let ratingsCount = match.ratingsCount { book.catalogRatingsCount = ratingsCount }
+            if let url = match.catalogURL { book.catalogURLString = url.absoluteString }
+            if let hcID = match.hardcoverBookID { book.hardcoverBookID = hcID }
         } else {
-            if let author = match.authorLine, (book.author ?? "").isEmpty { book.author = author }
-            if let publisher = match.publisher, (book.publisher ?? "").isEmpty { book.publisher = publisher }
-            if let language = match.language, (book.language ?? "").isEmpty { book.language = language }
-            if let pageCount = match.pageCount, (book.pageCount ?? 0) <= 0 { book.pageCount = pageCount }
-            if let summary = match.summary, (book.summary ?? "").isEmpty { book.summary = summary }
-            if let isbn = match.isbn, (book.isbn ?? "").isEmpty { book.isbn = isbn }
+            _ = applyMissingCatalogFields(match, to: book)
         }
 
         if let downloadedCoverName {
@@ -51,6 +58,7 @@ extension LibraryStore {
         }
 
         book.catalogChecked = true
+        book.catalogEnrichVersion = Self.currentCatalogEnrichVersion
         save()
         moveFilesToICloud()
         publishWidgetSnapshot()
@@ -58,7 +66,10 @@ extension LibraryStore {
 
     func scheduleCatalogEnrichmentIfNeeded() {
         guard preferences.autoEnrichMetadata, !catalogEnrichState.isEnriching else { return }
-        let candidates = allBooks().filter { !$0.catalogChecked && Self.needsCatalogEnrichment($0) }
+        let candidates = allBooks().filter {
+            (!$0.catalogChecked || $0.catalogEnrichVersion < Self.currentCatalogEnrichVersion)
+                && Self.needsCatalogEnrichment($0)
+        }
         enqueueEnrichment(for: candidates, markChecked: true)
     }
 
@@ -72,6 +83,89 @@ extension LibraryStore {
         let idSet = Set(ids)
         let candidates = allBooks().filter { idSet.contains($0.id) && Self.needsCatalogEnrichment($0) }
         enqueueEnrichment(for: candidates, markChecked: true)
+    }
+
+    func nextInSeries(after book: Book) -> Book? {
+        guard let series = book.seriesName?.trimmingCharacters(in: .whitespacesAndNewlines), !series.isEmpty else {
+            return nil
+        }
+        let targetPos = book.seriesPosition ?? 0
+        let candidates = allBooks().filter {
+            $0.id != book.id
+                && !$0.isFinished
+                && ($0.seriesName ?? "").localizedCaseInsensitiveCompare(series) == .orderedSame
+        }
+        let ordered = candidates.sorted { lhs, rhs in
+            let lp = lhs.seriesPosition ?? .greatestFiniteMagnitude
+            let rp = rhs.seriesPosition ?? .greatestFiniteMagnitude
+            if lp != rp { return lp < rp }
+            return lhs.displayTitle.localizedStandardCompare(rhs.displayTitle) == .orderedAscending
+        }
+        if let afterCurrent = ordered.first(where: { ($0.seriesPosition ?? 0) > targetPos }) {
+            return afterCurrent
+        }
+        return ordered.first
+    }
+
+    func seriesBooks(for book: Book) -> [Book] {
+        guard let series = book.seriesName?.trimmingCharacters(in: .whitespacesAndNewlines), !series.isEmpty else {
+            return []
+        }
+        return allBooks()
+            .filter { ($0.seriesName ?? "").localizedCaseInsensitiveCompare(series) == .orderedSame }
+            .sorted { lhs, rhs in
+                let lp = lhs.seriesPosition ?? .greatestFiniteMagnitude
+                let rp = rhs.seriesPosition ?? .greatestFiniteMagnitude
+                if lp != rp { return lp < rp }
+                let ly = lhs.releaseYear ?? Int.max
+                let ry = rhs.releaseYear ?? Int.max
+                if ly != ry { return ly < ry }
+                return lhs.displayTitle.localizedStandardCompare(rhs.displayTitle) == .orderedAscending
+            }
+    }
+
+    func otherBooksByAuthor(of book: Book) -> [Book] {
+        guard let author = book.author?.trimmingCharacters(in: .whitespacesAndNewlines), !author.isEmpty else {
+            return []
+        }
+        let seriesIDs = Set(seriesBooks(for: book).map(\.id))
+        return allBooks()
+            .filter {
+                $0.id != book.id
+                    && !seriesIDs.contains($0.id)
+                    && ($0.author ?? "").localizedCaseInsensitiveCompare(author) == .orderedSame
+            }
+            .sorted { lhs, rhs in
+                let ly = lhs.releaseYear ?? Int.max
+                let ry = rhs.releaseYear ?? Int.max
+                if ly != ry { return ly < ry }
+                return lhs.displayTitle.localizedStandardCompare(rhs.displayTitle) == .orderedAscending
+            }
+    }
+
+    func duplicateEdition(of book: Book) -> Book? {
+        let isbn = (book.isbn ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hcID = book.hardcoverBookID
+        let catalogURL = (book.catalogURLString ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isbn.isEmpty || hcID != nil || !catalogURL.isEmpty else { return nil }
+        return allBooks().first { other in
+            guard other.id != book.id else { return false }
+            if !isbn.isEmpty, other.isbn == isbn { return true }
+            if let hcID, other.hardcoverBookID == hcID { return true }
+            if !catalogURL.isEmpty, other.catalogURLString == catalogURL { return true }
+            return false
+        }
+    }
+
+    func syncHardcoverStatusIfEnabled(for book: Book, statusID: Int) {
+        guard preferences.syncHardcoverStatus,
+              let hcID = book.hardcoverBookID,
+              hcID > 0,
+              let token = CatalogTokenStore.loadHardcoverToken()
+        else { return }
+        Task.detached(priority: .utility) {
+            _ = await BookCatalogClient.shared.syncHardcoverStatus(bookID: hcID, statusID: statusID, token: token)
+        }
     }
 
     private func enqueueEnrichment(for candidates: [Book], markChecked: Bool) {
@@ -112,28 +206,7 @@ extension LibraryStore {
                         didUpdate = true
                     }
                     if let match = result.match {
-                        if let author = match.authorLine, (book.author ?? "").isEmpty {
-                            book.author = author
-                            didUpdate = true
-                        }
-                        if let publisher = match.publisher, (book.publisher ?? "").isEmpty {
-                            book.publisher = publisher
-                            didUpdate = true
-                        }
-                        if let language = match.language, (book.language ?? "").isEmpty {
-                            book.language = language
-                            didUpdate = true
-                        }
-                        if let pageCount = match.pageCount, (book.pageCount ?? 0) <= 0 {
-                            book.pageCount = pageCount
-                            didUpdate = true
-                        }
-                        if let summary = match.summary, (book.summary ?? "").isEmpty {
-                            book.summary = summary
-                            didUpdate = true
-                        }
-                        if let isbn = match.isbn, (book.isbn ?? "").isEmpty {
-                            book.isbn = isbn
+                        if self.applyMissingCatalogFields(match, to: book) {
                             didUpdate = true
                         }
                         if let coverName = result.coverImageName, book.coverImageName == nil {
@@ -145,6 +218,7 @@ extension LibraryStore {
                     }
                     if markChecked {
                         book.catalogChecked = true
+                        book.catalogEnrichVersion = Self.currentCatalogEnrichVersion
                     }
                     if didUpdate {
                         updated += 1
@@ -172,12 +246,79 @@ extension LibraryStore {
         }
     }
 
+    private func applyMissingCatalogFields(_ match: BookCatalogMatch, to book: Book) -> Bool {
+        var didUpdate = false
+        if let author = match.authorLine, (book.author ?? "").isEmpty {
+            book.author = author
+            didUpdate = true
+        }
+        if let publisher = match.publisher, (book.publisher ?? "").isEmpty {
+            book.publisher = publisher
+            didUpdate = true
+        }
+        if let language = match.language, (book.language ?? "").isEmpty {
+            book.language = language
+            didUpdate = true
+        }
+        if let pageCount = match.pageCount, (book.pageCount ?? 0) <= 0 {
+            book.pageCount = pageCount
+            didUpdate = true
+        }
+        if let summary = match.summary, (book.summary ?? "").isEmpty {
+            book.summary = summary
+            didUpdate = true
+        }
+        if let isbn = match.isbn, (book.isbn ?? "").isEmpty {
+            book.isbn = isbn
+            didUpdate = true
+        }
+        if let year = match.releaseYear, book.releaseYear == nil {
+            book.releaseYear = year
+            didUpdate = true
+        }
+        if let seriesName = match.seriesName, (book.seriesName ?? "").isEmpty {
+            book.seriesName = seriesName
+            didUpdate = true
+        }
+        if let seriesPosition = match.seriesPosition, book.seriesPosition == nil {
+            book.seriesPosition = seriesPosition
+            didUpdate = true
+        }
+        if !match.genres.isEmpty, (book.genresCSV ?? "").isEmpty {
+            book.genresCSV = match.genres.joined(separator: ",")
+            didUpdate = true
+        }
+        if !match.moods.isEmpty, (book.moodsCSV ?? "").isEmpty {
+            book.moodsCSV = match.moods.joined(separator: ",")
+            didUpdate = true
+        }
+        if let rating = match.rating, book.catalogRating == nil {
+            book.catalogRating = rating
+            didUpdate = true
+        }
+        if let ratingsCount = match.ratingsCount, book.catalogRatingsCount == nil {
+            book.catalogRatingsCount = ratingsCount
+            didUpdate = true
+        }
+        if let url = match.catalogURL, (book.catalogURLString ?? "").isEmpty {
+            book.catalogURLString = url.absoluteString
+            didUpdate = true
+        }
+        if let hcID = match.hardcoverBookID, book.hardcoverBookID == nil {
+            book.hardcoverBookID = hcID
+            didUpdate = true
+        }
+        return didUpdate
+    }
+
     private static func needsCatalogEnrichment(_ book: Book) -> Bool {
         (book.summary ?? "").isEmpty
             || (book.author ?? "").isEmpty
             || (book.publisher ?? "").isEmpty
             || (book.pageCount ?? 0) <= 0
             || book.coverImageName == nil
+            || book.releaseYear == nil
+            || book.genres.isEmpty
     }
 
     @concurrent
