@@ -266,8 +266,13 @@ struct BooksView: View {
                         .chickenGlass(in: Capsule(), interactive: true)
                         .buttonStyle(.plain)
                     } else {
-                        CircularGlassMenu(title: "Add Books", systemImage: "plus") {
-                            AddBooksMenuItems()
+                        GlassEffectContainer(spacing: 8) {
+                            HStack(spacing: 8) {
+                                shelfOptionsMenu
+                                CircularGlassMenu(title: "Add Books", systemImage: "plus") {
+                                    AddBooksMenuItems()
+                                }
+                            }
                         }
                     }
                     #endif
@@ -297,7 +302,7 @@ struct BooksView: View {
                     EmptyLibraryView()
                         .padding(.horizontal, gutter)
                 } else {
-                    shelfControlsRow
+                    shelfMetaRow
                         .padding(.horizontal, gutter)
 
                     if visible.isEmpty && matchingHighlights.isEmpty {
@@ -330,6 +335,10 @@ struct BooksView: View {
                                     BookEditorialList(books: visible, selection: selectionBinding)
                                 }
                             }
+                            .environment(\.beginBookSelection, BeginBookSelectionAction { bookID in
+                                Haptics.selection()
+                                selection = [bookID]
+                            })
                             .padding(.horizontal, gutter)
                             .animation(reduceMotion ? nil : ChickenMotion.standard, value: visible.map(\.id))
                             .animation(reduceMotion ? nil : ChickenMotion.standard, value: viewMode)
@@ -366,6 +375,9 @@ struct BooksView: View {
                     .fontWeight(.semibold)
                 }
             } else {
+                ToolbarItem(placement: LibraryToolbar.placement) {
+                    shelfOptionsMenu
+                }
                 LibraryToolbar()
             }
         }
@@ -418,19 +430,125 @@ struct BooksView: View {
         }
     }
 
-    private var shelfControlsRow: some View {
+    private var shelfOptionsMenu: some View {
+        Menu {
+            Picker("View", selection: $viewMode) {
+                ForEach(LibraryViewMode.allCases) { mode in
+                    Label(mode.label, systemImage: mode.systemImage).tag(mode)
+                }
+            }
+            .pickerStyle(.inline)
+
+            Menu("Filter") {
+                Section("Format & Status") {
+                    ForEach(availableSecondaryFilters) { item in
+                        Button {
+                            Haptics.selection()
+                            secondaryFilter = item
+                        } label: {
+                            if secondaryFilter == item {
+                                Label(item.label, systemImage: "checkmark")
+                            } else {
+                                Text(item.label)
+                            }
+                        }
+                    }
+                }
+                if !topGenres.isEmpty {
+                    Section("Genres") {
+                        ForEach(topGenres, id: \.name) { genre in
+                            let isSelected: Bool = {
+                                if case .genre(let active) = router.libraryFacet {
+                                    return active.localizedCaseInsensitiveCompare(genre.name) == .orderedSame
+                                }
+                                return false
+                            }()
+                            Button {
+                                Haptics.selection()
+                                router.libraryFacet = isSelected ? nil : .genre(genre.name)
+                            } label: {
+                                if isSelected {
+                                    Label("\(genre.name) (\(genre.count))", systemImage: "checkmark")
+                                } else {
+                                    Text("\(genre.name) (\(genre.count))")
+                                }
+                            }
+                        }
+                    }
+                }
+                if hasActiveFilter {
+                    Divider()
+                    Button("Clear Filters", role: .destructive) {
+                        secondaryFilter = .none
+                        router.libraryFacet = nil
+                    }
+                }
+            }
+
+            Menu("Sort By") {
+                Picker("Sort By", selection: $sort) {
+                    ForEach(LibrarySort.allCases) { Text($0.label).tag($0) }
+                }
+                .pickerStyle(.inline)
+            }
+
+            Divider()
+
+            Toggle(
+                "Show Cover Titles",
+                systemImage: "textformat",
+                isOn: Binding(
+                    get: { library.preferences.showCoverTitles },
+                    set: { library.preferences.showCoverTitles = $0 }
+                )
+            )
+
+            if scope != .collections && !visible.isEmpty {
+                Button("Select Books", systemImage: "checkmark.circle") {
+                    Haptics.selection()
+                    selection = []
+                }
+            }
+        } label: {
+            #if os(macOS)
+            Label("Library Options", systemImage: "ellipsis.circle")
+            #else
+            Image(systemName: "ellipsis")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(palette.text)
+                .frame(width: 38, height: 38)
+                .contentShape(Circle())
+                .overlay(alignment: .topTrailing) {
+                    if hasActiveFilter {
+                        Circle()
+                            .fill(palette.ribbon)
+                            .frame(width: 6, height: 6)
+                            .padding(7)
+                    }
+                }
+            #endif
+        }
+        .menuIndicator(.hidden)
+        #if !os(macOS)
+        .buttonStyle(.plain)
+        .chickenGlass(in: Circle(), interactive: true)
+        #endif
+        .accessibilityLabel("Library Options")
+    }
+
+    private var shelfMetaRow: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center, spacing: 12) {
-                Text("\(visible.count) \(visible.count == 1 ? "book" : "books")")
-                    .font(.chickenMono(12, weight: .medium))
-                    .foregroundStyle(palette.muted)
-                    .monospacedDigit()
-
-                Spacer(minLength: 8)
-
+            HStack(alignment: .center, spacing: 10) {
                 if let picked = selection {
                     let allVisibleIDs = Set(visible.map(\.id))
                     let allPicked = !allVisibleIDs.isEmpty && allVisibleIDs.isSubset(of: picked)
+                    Text("\(picked.count) selected")
+                        .font(.chickenMono(12, weight: .medium))
+                        .foregroundStyle(palette.muted)
+                        .monospacedDigit()
+
+                    Spacer(minLength: 8)
+
                     Button(allPicked ? "Deselect All" : "Select All") {
                         Haptics.selection()
                         selection = allPicked ? [] : allVisibleIDs
@@ -438,14 +556,14 @@ struct BooksView: View {
                     .font(.chickenUI(13, weight: .semibold))
                     .foregroundStyle(palette.text)
                     .buttonStyle(.plain)
-
-                    Button("Cancel") {
-                        selection = nil
-                    }
-                    .font(.chickenUI(13, weight: .medium))
-                    .foregroundStyle(palette.muted)
-                    .buttonStyle(.plain)
                 } else {
+                    Text("\(visible.count) \(visible.count == 1 ? "book" : "books")")
+                        .font(.chickenMono(12, weight: .medium))
+                        .foregroundStyle(palette.faint)
+                        .monospacedDigit()
+
+                    Spacer(minLength: 8)
+
                     Menu {
                         Picker("Sort By", selection: $sort) {
                             ForEach(LibrarySort.allCases) { Text($0.label).tag($0) }
@@ -455,103 +573,13 @@ struct BooksView: View {
                         HStack(spacing: 4) {
                             Text(sort.label)
                                 .font(.chickenUI(12.5, weight: .medium))
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 10, weight: .semibold))
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 9.5, weight: .semibold))
                         }
                         .foregroundStyle(palette.muted)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(palette.surface, in: Capsule())
-                        .overlay(Capsule().stroke(palette.border, lineWidth: 0.5))
+                        .contentShape(Rectangle())
                     }
                     .menuIndicator(.hidden)
-
-                    Menu {
-                        Section("Format & Status") {
-                            ForEach(availableSecondaryFilters) { item in
-                                Button {
-                                    Haptics.selection()
-                                    secondaryFilter = item
-                                } label: {
-                                    if secondaryFilter == item {
-                                        Label(item.label, systemImage: "checkmark")
-                                    } else {
-                                        Text(item.label)
-                                    }
-                                }
-                            }
-                        }
-                        if !topGenres.isEmpty {
-                            Section("Genres") {
-                                ForEach(topGenres, id: \.name) { genre in
-                                    let isSelected: Bool = {
-                                        if case .genre(let active) = router.libraryFacet {
-                                            return active.localizedCaseInsensitiveCompare(genre.name) == .orderedSame
-                                        }
-                                        return false
-                                    }()
-                                    Button {
-                                        Haptics.selection()
-                                        router.libraryFacet = isSelected ? nil : .genre(genre.name)
-                                    } label: {
-                                        if isSelected {
-                                            Label("\(genre.name) (\(genre.count))", systemImage: "checkmark")
-                                        } else {
-                                            Text("\(genre.name) (\(genre.count))")
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if hasActiveFilter {
-                            Divider()
-                            Button("Clear Filters", role: .destructive) {
-                                secondaryFilter = .none
-                                router.libraryFacet = nil
-                            }
-                        }
-                    } label: {
-                        Image(systemName: hasActiveFilter ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(hasActiveFilter ? palette.ribbon : palette.muted)
-                            .frame(width: 30, height: 30)
-                            .contentShape(Circle())
-                    }
-                    .menuIndicator(.hidden)
-                    .accessibilityLabel("Filter")
-
-                    Menu {
-                        Picker("Layout", selection: $viewMode) {
-                            ForEach(LibraryViewMode.allCases) { mode in
-                                Label(mode.label, systemImage: mode.systemImage).tag(mode)
-                            }
-                        }
-                        .pickerStyle(.inline)
-                        Divider()
-                        Toggle(
-                            "Show Cover Titles",
-                            systemImage: "textformat",
-                            isOn: Binding(
-                                get: { library.preferences.showCoverTitles },
-                                set: { library.preferences.showCoverTitles = $0 }
-                            )
-                        )
-                    } label: {
-                        Image(systemName: viewMode.systemImage)
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundStyle(palette.muted)
-                            .frame(width: 30, height: 30)
-                            .contentShape(Circle())
-                    }
-                    .menuIndicator(.hidden)
-                    .accessibilityLabel("View Options")
-
-                    Button("Select") {
-                        Haptics.selection()
-                        selection = []
-                    }
-                    .font(.chickenUI(13, weight: .semibold))
-                    .foregroundStyle(palette.text)
                     .buttonStyle(.plain)
                 }
             }
@@ -595,22 +623,20 @@ struct BooksView: View {
 
     private var collectionsGrid: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HStack {
+            HStack(alignment: .center, spacing: 10) {
                 Text("\(sortedCollections.count) \(sortedCollections.count == 1 ? "collection" : "collections")")
                     .font(.chickenMono(12, weight: .medium))
-                    .foregroundStyle(palette.muted)
-                Spacer()
+                    .foregroundStyle(palette.faint)
+                    .monospacedDigit()
+                Spacer(minLength: 8)
                 Button {
                     draftName = ""
                     dialog = .creating
                 } label: {
-                    Label("New Collection", systemImage: "plus")
+                    Label("New", systemImage: "plus")
                         .font(.chickenUI(13, weight: .semibold))
                         .foregroundStyle(palette.text)
-                        .padding(.horizontal, 13)
-                        .padding(.vertical, 7)
-                        .background(palette.surface, in: Capsule())
-                        .overlay(Capsule().stroke(palette.border, lineWidth: 0.5))
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(TactilePressStyle(scale: 0.97))
             }
@@ -636,7 +662,10 @@ struct BooksView: View {
                 )
             } else {
                 LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: sizeClass == .compact ? 156 : 200, maximum: 260), spacing: 14)],
+                    columns: sizeClass == .compact
+                        ? Array(repeating: GridItem(.flexible(), spacing: 14), count: 2)
+                        : [GridItem(.adaptive(minimum: 200, maximum: .infinity), spacing: 14)],
+                    alignment: .center,
                     spacing: 16
                 ) {
                     ForEach(sortedCollections) { collection in
@@ -837,7 +866,7 @@ private struct LibraryScopeBar: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal) {
-                HStack(spacing: 4) {
+                HStack(spacing: 22) {
                     ForEach(LibraryScope.allCases) { item in
                         let selected = selection == item
                         Button {
@@ -846,32 +875,35 @@ private struct LibraryScopeBar: View {
                                 selection = item
                             }
                         } label: {
-                            Text(item.label)
-                                .font(.chickenUI(13.5, weight: selected ? .semibold : .medium))
-                                .foregroundStyle(selected ? palette.background : palette.muted)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .background {
+                            VStack(spacing: 8) {
+                                Text(item.label)
+                                    .font(.chickenUI(14.5, weight: selected ? .semibold : .medium))
+                                    .foregroundStyle(selected ? palette.text : palette.muted)
+                                ZStack {
+                                    Color.clear.frame(height: 2)
                                     if selected {
                                         Capsule()
                                             .fill(palette.text)
+                                            .frame(height: 2)
                                             .matchedGeometryEffect(id: "libraryScope", in: namespace)
                                     }
                                 }
-                                .contentShape(Capsule())
+                            }
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .id(item)
                         .accessibilityAddTraits(selected ? .isSelected : [])
                     }
                 }
-                .padding(3)
-                .background(palette.surface, in: Capsule())
-                .overlay(Capsule().stroke(palette.border, lineWidth: 0.5))
-                .padding(.vertical, 2)
             }
             .scrollIndicators(.never)
             .contentMargins(.horizontal, gutter, for: .scrollContent)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(palette.border)
+                    .frame(height: 0.5)
+            }
             .onAppear { proxy.scrollTo(selection, anchor: .center) }
             .onChange(of: selection) { _, item in
                 withAnimation(reduceMotion ? nil : ChickenMotion.standard) {

@@ -20,13 +20,17 @@ struct BookGrid: View {
 
     private var columns: [GridItem] {
         let large = typeSize.isAccessibilitySize
-        return sizeClass == .compact
-            ? [GridItem(.adaptive(minimum: large ? 168 : 136, maximum: large ? 240 : 184), spacing: spacing, alignment: .bottom)]
-            : [GridItem(.adaptive(minimum: large ? 220 : 172, maximum: large ? 280 : 220), spacing: spacing, alignment: .bottom)]
+        if sizeClass == .compact {
+            return Array(
+                repeating: GridItem(.flexible(), spacing: spacing, alignment: .bottom),
+                count: large ? 1 : 2
+            )
+        }
+        return [GridItem(.adaptive(minimum: large ? 220 : 172, maximum: .infinity), spacing: spacing, alignment: .bottom)]
     }
 
     var body: some View {
-        let grid = LazyVGrid(columns: columns, alignment: .leading, spacing: sizeClass == .compact ? 26 : 36) {
+        let grid = LazyVGrid(columns: columns, alignment: .center, spacing: sizeClass == .compact ? 26 : 36) {
             ForEach(books) { book in
                 BookObjectView(
                     book: book,
@@ -37,6 +41,7 @@ struct BookGrid: View {
                 .id(book.id)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         if let collectionContext {
             grid.coverCollection(collectionContext, books: books.map(\.id))
         } else {

@@ -124,22 +124,12 @@ struct HomeView: View {
         return s.deskBooks.first
     }
 
-    private var homeEyebrow: String {
-        let day = Date().formatted(.dateTime.weekday(.wide)).uppercased()
-        let minutes = library.readingSecondsToday / 60
-        let goal = library.preferences.dailyGoalMinutes
-        if minutes > 0 {
-            return "\(day) · \(minutes) OF \(goal) MIN"
-        }
-        return day
-    }
-
     var body: some View {
         let s = sections
         let hero = resolvedFocusedBook(in: s)
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
-                ChickenScreenHeader(eyebrow: homeEyebrow, title: "Home") {
+                ChickenScreenHeader(title: "Home") {
                     #if !os(macOS)
                     CircularGlassMenu(title: "Add Books", systemImage: "plus") {
                         AddBooksMenuItems()
@@ -487,6 +477,7 @@ private struct ReadingDeskHero: View {
             }
             .frame(maxWidth: 290)
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, gutter)
         .bookContextMenu(book)
     }

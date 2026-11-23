@@ -1,6 +1,17 @@
 import ChickenKit
 import SwiftUI
 
+struct BeginBookSelectionAction {
+    let handler: (UUID) -> Void
+    func callAsFunction(_ bookID: UUID) {
+        handler(bookID)
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var beginBookSelection: BeginBookSelectionAction? = nil
+}
+
 enum BookSurface {
     case grid
     case shelf
@@ -53,14 +64,14 @@ struct BookObjectView: View {
 
     var body: some View {
         Button(action: tapped) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: showsCaptionBelow ? .leading : .center, spacing: 8) {
                 coverBody
                 if showsCaptionBelow {
                     captionFooter
                 }
             }
-            .frame(width: shelfWidth, alignment: .leading)
-            .frame(maxWidth: shelfWidth == nil ? .infinity : nil, alignment: .leading)
+            .frame(width: shelfWidth, alignment: showsCaptionBelow ? .leading : .center)
+            .frame(maxWidth: shelfWidth == nil ? .infinity : nil, alignment: showsCaptionBelow ? .leading : .center)
             .contentShape(Rectangle())
         }
         .buttonStyle(TactilePressStyle())
@@ -130,7 +141,9 @@ struct BookObjectView: View {
         if let shelfHeight, let shelfWidth {
             baseCover.frame(width: shelfWidth, height: shelfHeight)
         } else {
-            baseCover.aspectRatio(book.resolvedAspectRatio, contentMode: .fit)
+            baseCover
+                .frame(maxWidth: .infinity)
+                .aspectRatio(book.resolvedAspectRatio, contentMode: .fit)
         }
     }
 
@@ -270,6 +283,7 @@ private struct BookContextMenu: ViewModifier {
     @Environment(\.openBook) private var openBook
     @Environment(\.coverContext) private var coverContext
     @Environment(\.bookSequence) private var bookSequence
+    @Environment(\.beginBookSelection) private var beginBookSelection
 
     let book: Book
     @State private var confirmingRemoval = false
@@ -307,6 +321,12 @@ private struct BookContextMenu: ViewModifier {
                 CollectionMenuItem(book: book)
                 if !book.isPhysical {
                     DownloadMenuItems(book: book)
+                }
+                if let beginBookSelection {
+                    Divider()
+                    Button("Select Books", systemImage: "checkmark.circle") {
+                        beginBookSelection(book.id)
+                    }
                 }
                 Divider()
                 Button("Remove from Library…", systemImage: "trash", role: .destructive) { confirmingRemoval = true }
