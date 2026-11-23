@@ -52,6 +52,7 @@ final class LibraryStore {
     @ObservationIgnored var scanTask: Task<Void, Never>?
     @ObservationIgnored var importTask: Task<Void, Never>?
     @ObservationIgnored var coverRefreshTask: Task<Void, Never>?
+    @ObservationIgnored var coverBackfillTask: Task<Void, Never>?
     @ObservationIgnored var catalogEnrichTask: Task<Void, Never>?
     @ObservationIgnored var derivedDataTask: Task<Void, Never>?
     @ObservationIgnored var widgetTask: Task<Void, Never>?
@@ -103,6 +104,8 @@ final class LibraryStore {
         scanTask?.cancel()
         importTask?.cancel()
         coverRefreshTask?.cancel()
+        coverBackfillTask?.cancel()
+        catalogEnrichTask?.cancel()
         derivedDataTask?.cancel()
         widgetTask?.cancel()
         progressFlushTask?.cancel()

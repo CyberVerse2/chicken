@@ -46,8 +46,8 @@ struct DownloadBadge: View {
 }
 
 extension View {
-    func downloadBadge(_ book: Book, size: CGFloat = 22) -> some View {
-        overlay(alignment: .bottomTrailing) {
+    func downloadBadge(_ book: Book, size: CGFloat = 22, alignment: Alignment = .bottomTrailing) -> some View {
+        overlay(alignment: alignment) {
             DownloadBadge(book: book, size: size)
                 .padding(size * 0.3)
                 .allowsHitTesting(false)

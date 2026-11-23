@@ -39,4 +39,12 @@ struct WidgetSnapshotTests {
         #expect(snap.week(endingOn: written) == [0, 0, 0, 0, 0, 0, 600])
         #expect(snap.secondsToday(on: written) == 600)
     }
+
+    @Test func currentBookWithoutAspectRatioStillDecodes() throws {
+        let id = UUID()
+        let json = #"{"currentBook":{"id":"\#(id.uuidString)","title":"Book","author":"Author","progress":0.4,"coverTintIndex":1,"hasCover":true},"secondsToday":300,"dailyGoalMinutes":30,"theme":"paper"}"#
+        let snap = try JSONDecoder().decode(WidgetSnapshot.self, from: Data(json.utf8))
+        #expect(snap.currentBook?.id == id)
+        #expect(snap.currentBook?.coverAspectRatio == nil)
+    }
 }

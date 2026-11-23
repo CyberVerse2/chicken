@@ -41,8 +41,8 @@ enum BookCoverStyle {
 
     var decodeSize: Int {
         switch self {
-        case .hero: 900
-        case .tile: 600
+        case .hero: 1080
+        case .tile: 720
         case .mini: 240
         }
     }
@@ -67,21 +67,29 @@ struct BookCover: View {
         let preset = CoverPreset.preset(for: book.coverTintIndex)
         let coverURL = library.coverURL(for: book)
         let cached = coverURL.flatMap { CoverImageCache.shared.cachedImage(for: $0, maxPixelSize: style.decodeSize) }
-        let cachedTextPage = (book.format == .pdf && !book.hasCatalogCover)
+        let cachedTextPage = !book.coverOrigin.isTrustedArtwork
             ? (coverURL.flatMap { CoverImageCache.shared.cachedIsTextPage(at: $0) } ?? isTextPage)
             : false
         let shownImage = image ?? cached
+        let previewImage: CGImage? = if shownImage == nil, let previewData = book.coverPreviewData {
+            CoverImageCache.shared.previewImage(for: book.id, data: previewData)
+        } else {
+            nil
+        }
+        let artworkImage = (shownImage != nil && !cachedTextPage) ? shownImage : previewImage
         Rectangle()
             .fill(preset.cloth)
             .overlay {
-                if let shownImage, !cachedTextPage, CGFloat(shownImage.width) / CGFloat(max(shownImage.height, 1)) <= 1.05 {
-                    Image(decorative: shownImage, scale: 1)
+                if let artworkImage, CGFloat(artworkImage.width) / CGFloat(max(artworkImage.height, 1)) <= 1.05 {
+                    Image(decorative: artworkImage, scale: 1)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {
                     ClothCover(
                         title: book.displayTitle,
                         author: book.author,
+                        seriesBadge: book.seriesBadgeText,
+                        formatLabel: book.format == .epub ? nil : book.format.label,
                         preset: preset,
                         style: style,
                         showsText: showsClothText
@@ -103,7 +111,7 @@ struct BookCover: View {
                     return
                 }
                 if let hit = CoverImageCache.shared.cachedImage(for: url, maxPixelSize: style.decodeSize) {
-                    if book.format == .pdf && !book.hasCatalogCover {
+                    if !book.coverOrigin.isTrustedArtwork {
                         isTextPage = await CoverImageCache.shared.isTextPage(hit, at: url)
                     } else if isTextPage {
                         isTextPage = false
@@ -112,7 +120,7 @@ struct BookCover: View {
                     return
                 }
                 let loaded = await CoverImageCache.shared.image(for: url, maxPixelSize: style.decodeSize)
-                if book.format == .pdf && !book.hasCatalogCover, let loaded {
+                if !book.coverOrigin.isTrustedArtwork, let loaded {
                     isTextPage = await CoverImageCache.shared.isTextPage(loaded, at: url)
                 } else {
                     isTextPage = false
@@ -164,6 +172,8 @@ private struct CoverFinish: View {
 struct ClothCover: View {
     let title: String
     let author: String?
+    var seriesBadge: String? = nil
+    var formatLabel: String? = nil
     let preset: CoverPreset
     let style: BookCoverStyle
     var showsText = true
@@ -241,17 +251,44 @@ struct ClothCover: View {
         }
     }
 
+    @ViewBuilder
+    private var seriesText: some View {
+        if style != .mini, let seriesBadge, !seriesBadge.isEmpty {
+            Text(seriesBadge.uppercased())
+                .font(.chickenMono(style == .hero ? 9.5 : 8, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(preset.accent)
+                .lineLimit(1)
+        }
+    }
+
+    @ViewBuilder
+    private var colophonFooter: some View {
+        if style != .mini {
+            HStack(spacing: 6) {
+                colophon
+                if let formatLabel, !formatLabel.isEmpty {
+                    Text(formatLabel)
+                        .font(.chickenMono(style == .hero ? 9 : 7.5, weight: .semibold))
+                        .tracking(0.8)
+                        .foregroundStyle(preset.ink.opacity(0.55))
+                }
+            }
+        }
+    }
+
     private var editorial: some View {
         VStack(alignment: .leading, spacing: style.padding * 0.42) {
             HStack(spacing: 5) {
                 Rectangle().fill(preset.accent).frame(width: style.padding * 1.1, height: style == .mini ? 0.8 : 1.5)
                 Spacer(minLength: 0)
             }
+            seriesText
             titleText.multilineTextAlignment(.leading)
             authorText
             Spacer(minLength: 0)
             HStack {
-                colophon
+                colophonFooter
                 Spacer()
             }
         }
@@ -262,15 +299,16 @@ struct ClothCover: View {
 
     private var framed: some View {
         let inset = style.padding * 0.55
-        return VStack(spacing: style.padding * 0.48) {
+        return VStack(spacing: style.padding * 0.45) {
             Spacer(minLength: 0)
+            seriesText.multilineTextAlignment(.center)
             titleText.multilineTextAlignment(.center)
             if style != .mini {
                 Rectangle().fill(preset.accent).frame(width: style.titleSize * 1.2, height: 1).opacity(0.8)
             }
             authorText.multilineTextAlignment(.center)
             Spacer(minLength: 0)
-            colophon
+            colophonFooter
         }
         .padding(style.padding)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -287,6 +325,13 @@ struct ClothCover: View {
             VStack(alignment: .leading, spacing: 0) {
                 Spacer().frame(height: geometry.size.height * 0.14)
                 VStack(alignment: .leading, spacing: style.padding * 0.35) {
+                    if style != .mini, let seriesBadge, !seriesBadge.isEmpty {
+                        Text(seriesBadge.uppercased())
+                            .font(.chickenMono(style == .hero ? 9 : 7.5, weight: .semibold))
+                            .tracking(0.8)
+                            .foregroundStyle(preset.accent)
+                            .lineLimit(1)
+                    }
                     titleText.multilineTextAlignment(.leading)
                     authorText
                 }
@@ -298,7 +343,7 @@ struct ClothCover: View {
                 Spacer(minLength: 0)
                 HStack {
                     Spacer()
-                    colophon
+                    colophonFooter
                     Spacer()
                 }
                 .padding(.bottom, style.padding)
@@ -455,6 +500,17 @@ nonisolated final class CoverImageCache: @unchecked Sendable {
 
     func cachedImage(for url: URL, maxPixelSize: Int) -> CGImage? {
         cache.object(forKey: "\(url.path)@\(maxPixelSize)" as NSString)
+    }
+
+    func previewImage(for bookID: UUID, data: Data) -> CGImage? {
+        let key = "preview-\(bookID.uuidString)-\(data.count)" as NSString
+        if let hit = cache.object(forKey: key) { return hit }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { return nil }
+        let cost = max(1, image.bytesPerRow * image.height)
+        cache.setObject(image, forKey: key, cost: cost)
+        return image
     }
 
     func cachedIsTextPage(at url: URL) -> Bool? {

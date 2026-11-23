@@ -12,6 +12,8 @@ extension LibraryStore {
             guard !Task.isCancelled, let self else { return }
             let book = self.continueReadingBook()
             let coverURL = book.flatMap { self.coverURL(for: $0) }
+            let previewFallbackData = coverURL == nil ? book?.coverPreviewData : nil
+            let hasWidgetCover = coverURL != nil || previewFallbackData != nil
             let snapshot = WidgetSnapshot(
                 currentBook: book.map {
                     WidgetSnapshot.CurrentBook(
@@ -20,7 +22,8 @@ extension LibraryStore {
                         author: $0.displayAuthor,
                         progress: ($0.progress * 100).rounded() / 100,
                         coverTintIndex: $0.coverTintIndex,
-                        hasCover: coverURL != nil
+                        hasCover: hasWidgetCover,
+                        coverAspectRatio: $0.coverAspectRatio
                     )
                 },
                 secondsToday: self.readingSecondsToday,
@@ -32,9 +35,14 @@ extension LibraryStore {
                 chapter: book?.lastChapterTitle,
                 day: Calendar.current.startOfDay(for: .now)
             )
-            let coverChanged = coverURL != self.lastPublishedWidgetCoverURL
+            let coverChanged = coverURL != self.lastPublishedWidgetCoverURL || (coverURL == nil && previewFallbackData != nil)
             guard snapshot != self.lastPublishedSnapshot || coverChanged else { return }
-            await Self.writeWidgetSnapshot(snapshot, coverURL: coverChanged ? coverURL : nil, keepExistingCover: !coverChanged && coverURL != nil)
+            await Self.writeWidgetSnapshot(
+                snapshot,
+                coverURL: coverChanged ? coverURL : nil,
+                previewData: previewFallbackData,
+                keepExistingCover: !coverChanged && hasWidgetCover
+            )
             guard !Task.isCancelled else { return }
             self.lastPublishedSnapshot = snapshot
             self.lastPublishedWidgetCoverURL = coverURL
@@ -43,7 +51,13 @@ extension LibraryStore {
     }
 
     @concurrent
-    private static func writeWidgetSnapshot(_ snapshot: WidgetSnapshot, coverURL: URL?, keepExistingCover: Bool) async {
-        snapshot.save(coverJPEG: coverURL.flatMap { CoverRenderer.thumbnailJPEG(from: $0) }, keepExistingCover: keepExistingCover)
+    private static func writeWidgetSnapshot(
+        _ snapshot: WidgetSnapshot,
+        coverURL: URL?,
+        previewData: Data?,
+        keepExistingCover: Bool
+    ) async {
+        let jpeg = coverURL.flatMap { CoverRenderer.thumbnailJPEG(from: $0) } ?? previewData
+        snapshot.save(coverJPEG: jpeg, keepExistingCover: keepExistingCover)
     }
 }

@@ -120,7 +120,7 @@ struct HomeView: View {
                     ReadingDeskStage(
                         book: hero,
                         isContinuing: s.activeBook != nil,
-                        coverHue: heroHue,
+                        coverHue: heroHue ?? hero.persistedCoverHue,
                         gutter: gutter,
                         onRead: {
                             Haptics.impact(.light)
@@ -167,15 +167,15 @@ struct HomeView: View {
         .background(alignment: .top) {
             ZStack(alignment: .top) {
                 palette.background.ignoresSafeArea()
-                if hero != nil {
-                    HomeAtmosphereBackdrop(coverHue: heroHue, isCompact: isCompact)
+                if let hero {
+                    HomeAtmosphereBackdrop(coverHue: heroHue ?? hero.persistedCoverHue, isCompact: isCompact)
                         .frame(height: isCompact ? 560 : 460)
                         .ignoresSafeArea(edges: .top)
                 }
             }
         }
         .pageTitle("Home")
-        .task(id: "\(hero?.id.uuidString ?? "none")-\(hero?.coverImageName ?? "")") {
+        .task(id: "\(hero?.id.uuidString ?? "none")-\(hero?.coverImageName ?? "")-\(hero?.coverDominantHex ?? -1)") {
             guard let hero else {
                 heroHue = nil
                 return
@@ -226,6 +226,7 @@ private struct ReadingDeskStage: View {
     @Environment(\.palette) private var palette
     @Environment(\.readingTheme) private var theme
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let book: Book
@@ -238,6 +239,7 @@ private struct ReadingDeskStage: View {
     @State private var hovering = false
 
     private var isCompact: Bool { sizeClass == .compact }
+    private var showsTitleText: Bool { library.preferences.showCoverTitles || typeSize.isAccessibilitySize }
 
     private var heroPrimaryTitle: String {
         if book.isPhysical {
@@ -258,10 +260,10 @@ private struct ReadingDeskStage: View {
 
     private var compactStage: some View {
         VStack(spacing: 0) {
-            sculptedCover(width: 158)
+            sculptedCover(width: 184)
                 .padding(.bottom, 22)
 
-            if book.coverImageName == nil {
+            if showsTitleText {
                 VStack(spacing: 5) {
                     if let seriesBadge = book.seriesBadgeText {
                         Text(seriesBadge)
@@ -343,15 +345,15 @@ private struct ReadingDeskStage: View {
 
     private var regularStage: some View {
         HStack(alignment: .center, spacing: 44) {
-            sculptedCover(width: 196)
+            sculptedCover(width: 224)
 
             VStack(alignment: .leading, spacing: 0) {
                 if let seriesBadge = book.seriesBadgeText {
                     Text(seriesBadge)
                         .chickenEyebrow(palette, color: palette.ribbon)
-                        .padding(.bottom, book.coverImageName == nil ? 6 : 14)
+                        .padding(.bottom, showsTitleText ? 6 : 14)
                 }
-                if book.coverImageName == nil {
+                if showsTitleText {
                     Text(book.displayTitle)
                         .font(.chickenDisplay(38))
                         .tracking(-0.9)
@@ -400,9 +402,10 @@ private struct ReadingDeskStage: View {
     }
 
     private func sculptedCover(width: CGFloat) -> some View {
-        Button(action: onRead) {
+        let coverHeight = min((width / book.resolvedAspectRatio).rounded(), width * 1.65)
+        return Button(action: onRead) {
             BookCover(book: book, style: isCompact ? .tile : .hero, showsClothText: true)
-                .frame(width: width, height: width * 1.5)
+                .frame(width: width, height: coverHeight)
                 .coverTransitionSource(book.id)
                 .shadow(color: .black.opacity(palette.isDark ? 0.55 : 0.22), radius: 3, x: 0, y: 2)
                 .shadow(color: palette.shadow, radius: hovering ? 28 : 18, x: 0, y: hovering ? 18 : 12)
@@ -420,6 +423,7 @@ private struct ReadingDeskStage: View {
         #if os(macOS)
         .onHover { hovering = $0 }
         .animation(reduceMotion ? nil : ChickenMotion.standard, value: hovering)
+        .help("\(book.displayTitle) — \(book.displayAuthor)")
         #endif
         .accessibilityLabel("Continue reading \(book.displayTitle)")
     }
@@ -539,7 +543,7 @@ struct BookShelf: View {
     @State private var scroll = ShelfScroll()
     @State private var hovering = false
 
-    private var coverWidth: CGFloat { sizeClass == .compact ? 112 : 136 }
+    private var shelfHeight: CGFloat { sizeClass == .compact ? 192 : 236 }
     private var headroom: CGFloat { Platform.isMac ? 8 : 2 }
 
     var body: some View {
@@ -557,9 +561,14 @@ struct BookShelf: View {
             .padding(.horizontal, gutter)
 
             ScrollView(.horizontal) {
-                LazyHStack(alignment: .top, spacing: sizeClass == .compact ? 16 : 24) {
+                LazyHStack(alignment: .bottom, spacing: sizeClass == .compact ? 16 : 24) {
                     ForEach(books) { book in
-                        ShelfItem(book: book, width: coverWidth, showsProgress: showsProgress)
+                        BookObjectView(
+                            book: book,
+                            surface: .shelf,
+                            shelfHeight: shelfHeight,
+                            showsProgressOverlay: showsProgress || book.progress > 0
+                        )
                     }
                 }
                 .scrollTargetLayout()
@@ -599,7 +608,7 @@ struct BookShelf: View {
             }
         }
         .padding(.horizontal, 8)
-        .frame(height: coverWidth * 1.5)
+        .frame(height: shelfHeight)
         .padding(.top, headroom)
         .frame(maxHeight: .infinity, alignment: .top)
         .opacity(hovering ? 1 : 0)
@@ -619,7 +628,8 @@ struct BookShelf: View {
     }
 
     private func page(by direction: CGFloat) {
-        let step = max(scroll.visible - coverWidth, coverWidth)
+        let stepWidth = shelfHeight * 0.67
+        let step = max(scroll.visible - stepWidth, stepWidth)
         let target = min(max(0, scroll.offset + direction * step), max(0, scroll.content - scroll.visible))
         withAnimation(reduceMotion ? nil : ChickenMotion.standard) { position.scrollTo(x: target) }
     }
@@ -633,76 +643,6 @@ nonisolated struct ShelfScroll: Equatable {
 
     var canGoBack: Bool { offset > 2 }
     var canGoForward: Bool { offset + visible < content - 2 }
-}
-
-private struct ShelfItem: View {
-    @Environment(\.palette) private var palette
-    @Environment(\.coverContext) private var coverContext
-    @Environment(\.bookSequence) private var bookSequence
-    @Environment(\.selectBook) private var selectBook
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let book: Book
-    let width: CGFloat
-    let showsProgress: Bool
-    @State private var hovering = false
-
-    private var inProgress: Bool { book.progress > 0 && !book.isFinished }
-
-    var body: some View {
-        Button {
-            Haptics.selection()
-            selectBook(book.id, in: bookSequence, from: CoverSource(context: coverContext, bookID: book.id))
-        } label: {
-            VStack(alignment: .leading, spacing: 10) {
-                BookCover(book: book, style: .tile)
-                    .frame(width: width, height: width * 1.5)
-                    .coverTransitionSource(book.id)
-                    .downloadBadge(book)
-                    .shadow(color: palette.shadow, radius: hovering ? 14 : 6, x: 0, y: hovering ? 8 : 4)
-                    #if os(macOS)
-                    .offset(y: hovering && !reduceMotion ? -4 : 0)
-                    #endif
-                    .coverRibbon(inProgress)
-                if book.coverImageName == nil || showsProgress {
-                    VStack(alignment: .leading, spacing: 2) {
-                        if book.coverImageName == nil {
-                            Text(book.displayTitle)
-                                .font(.chickenUI(13.5, weight: .semibold))
-                                .foregroundStyle(palette.text)
-                                .lineLimit(2)
-                                .multilineTextAlignment(.leading)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if let author = book.author, !author.isEmpty {
-                                Text(author)
-                                    .font(.chickenUI(12))
-                                    .foregroundStyle(palette.muted)
-                                    .lineLimit(1)
-                            }
-                        }
-                        if showsProgress {
-                            HStack(spacing: 6) {
-                                ProgressLine(progress: book.progress, height: 2.5)
-                                Text("\(Int((book.progress * 100).rounded()))%")
-                                    .font(.chickenMono(10.5, weight: .medium))
-                                    .foregroundStyle(palette.ribbon)
-                                    .fixedSize()
-                            }
-                            .padding(.top, 3)
-                        }
-                    }
-                }
-            }
-            .frame(width: width, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(TactilePressStyle())
-        #if os(macOS)
-        .onHover { hovering = $0 }
-        .animation(reduceMotion ? nil : ChickenMotion.micro, value: hovering)
-        #endif
-        .bookContextMenu(book)
-        .accessibilityLabel("\(book.displayTitle) by \(book.displayAuthor)")
-    }
 }
 
 struct MigrationNotice: View {

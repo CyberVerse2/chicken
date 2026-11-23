@@ -121,7 +121,9 @@ extension LibraryStore {
             book.language = imported.metadata.language
             book.summary = imported.metadata.summary
             book.isbn = imported.metadata.isbn
-            book.coverImageName = imported.coverImageName
+            if let cover = imported.cover {
+                book.applyRenderedCover(cover)
+            }
             book.importedAt = now
             book.lastActivityAt = now
             book.derivedDataChecked = true

@@ -132,11 +132,15 @@ struct ContinueReadingView: View {
         }
     }
 
+    private func coverWidth(for book: WidgetSnapshot.CurrentBook, height: CGFloat) -> CGFloat {
+        (height * CGFloat(CoverMetrics.clampedAspectRatio(book.coverAspectRatio))).rounded()
+    }
+
     private func small(_ book: WidgetSnapshot.CurrentBook) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top) {
                 cover(book)
-                    .frame(width: 50, height: 75)
+                    .frame(width: coverWidth(for: book, height: 75), height: 75)
                 Spacer(minLength: 0)
                 Text("\(Int((book.progress * 100).rounded()))%")
                     .font(.system(size: 12, weight: .semibold).monospacedDigit())
@@ -158,7 +162,7 @@ struct ContinueReadingView: View {
     private func medium(_ book: WidgetSnapshot.CurrentBook) -> some View {
         HStack(spacing: 16) {
             cover(book)
-                .frame(width: 78, height: 117)
+                .frame(width: coverWidth(for: book, height: 117), height: 117)
             VStack(alignment: .leading, spacing: 4) {
                 Text(book.title)
                     .font(.system(size: 17.5, weight: .semibold))
@@ -186,7 +190,7 @@ struct ContinueReadingView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 16) {
                 cover(book)
-                    .frame(width: 84, height: 126)
+                    .frame(width: coverWidth(for: book, height: 126), height: 126)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(book.title)
                         .font(.system(size: 19.5, weight: .semibold))

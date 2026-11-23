@@ -11,7 +11,8 @@ public struct ImportedBook: Sendable, Hashable {
     public let storedFileName: String
     public let fileSize: Int64
     public let metadata: DocumentMetadata
-    public let coverImageName: String?
+    public let cover: RenderedCover?
+    public var coverImageName: String? { cover?.fileName }
 }
 
 public enum BookImportError: LocalizedError, Equatable {
@@ -62,7 +63,7 @@ public enum BookImporter {
 
         let format = BookFormat(fileExtension: fileExtension)
         let fresh: DocumentMetadata
-        let cover: String?
+        let cover: RenderedCover?
 
         switch format {
         case .epub:
@@ -73,14 +74,14 @@ public enum BookImporter {
                 throw BookImportError.unreadableFile(name)
             }
             fresh = package.metadata
-            cover = CoverRenderer.generateEPUBCover(archive: archive, package: package, id: id, in: paths.covers)
+            cover = CoverRenderer.renderEPUBCover(archive: archive, package: package, id: id, in: paths.covers)
         case .pdf:
             guard let document = PDFDocument(url: destination) else {
                 try? fileManager.removeItem(at: destination)
                 throw BookImportError.unreadableFile(name)
             }
             fresh = PDFMetadataReader.metadata(for: document)
-            cover = CoverRenderer.generatePDFCover(for: destination, id: id, in: paths.covers)
+            cover = CoverRenderer.renderPDFCover(for: destination, id: id, in: paths.covers)
         case .text:
             guard fileManager.isReadableFile(atPath: destination.path) else {
                 try? fileManager.removeItem(at: destination)
@@ -104,7 +105,7 @@ public enum BookImporter {
             storedFileName: storedFileName,
             fileSize: fileSize,
             metadata: metadata,
-            coverImageName: cover
+            cover: cover
         )
     }
 

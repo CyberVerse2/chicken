@@ -28,7 +28,7 @@ struct SettingsView: View {
                         button: "Manage"
                     ) { openDiscovery() }
                 }
-                ChickenRow(isLast: true) {
+                ChickenRow {
                     actionRow(
                         icon: "photo.on.rectangle.angled",
                         title: "Covers",
@@ -36,6 +36,34 @@ struct SettingsView: View {
                         button: library.coverRefreshState.isRefreshing ? "Refreshing…" : "Refresh"
                     ) { library.refreshAllCovers() }
                     .disabled(library.coverRefreshState.isRefreshing)
+                }
+                ChickenRow(isLast: true) {
+                    HStack(spacing: 14) {
+                        Image(systemName: "textformat")
+                            .font(.system(size: 17, weight: .light))
+                            .foregroundStyle(palette.muted)
+                            .frame(width: 26)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show titles under covers")
+                                .font(.chickenUI(15, weight: .semibold))
+                                .foregroundStyle(palette.text)
+                            Text("Covers stand on their own by default. Turn on to always show titles below.")
+                                .font(.chickenUI(12))
+                                .foregroundStyle(palette.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 8)
+                        Toggle(
+                            "Show titles under covers",
+                            isOn: Binding(
+                                get: { library.preferences.showCoverTitles },
+                                set: { library.preferences.showCoverTitles = $0 }
+                            )
+                        )
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .tint(palette.ribbon)
+                    }
                 }
             }
 

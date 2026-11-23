@@ -29,6 +29,7 @@ struct BookDossierView: View {
     @State private var generatingCompanion = false
     @State private var companionError: String?
     @State private var showingMetadataMatch = false
+    @State private var showingChangeCover = false
 
     private var book: Book? { library.book(id: bookID) }
     private var isCompact: Bool { sizeClass == .compact }
@@ -54,6 +55,15 @@ struct BookDossierView: View {
             if let book {
                 NavigationStack {
                     BookMetadataMatchSheet(book: book)
+                        .environment(library)
+                }
+                .readingTheme(library.preferences.theme)
+            }
+        }
+        .sheet(isPresented: $showingChangeCover) {
+            if let book {
+                NavigationStack {
+                    ChangeCoverSheet(book: book)
                         .environment(library)
                 }
                 .readingTheme(library.preferences.theme)
@@ -113,7 +123,7 @@ struct BookDossierView: View {
         .scrollContentBackground(.hidden)
         .background(palette.background.ignoresSafeArea())
         .ignoresSafeArea(edges: isPage ? [] : .top)
-        .task(id: "\(book.id)-\(book.coverImageName ?? "")") {
+        .task(id: "\(book.id)-\(book.coverImageName ?? "")-\(book.coverDominantHex ?? -1)") {
             coverHue = await CoverTintModifier.hue(for: book, library: library)
         }
         .overlay(alignment: .top) {
@@ -162,10 +172,13 @@ struct BookDossierView: View {
     }
 
     private func atmosphericHero(for book: Book) -> some View {
-        ZStack(alignment: .bottom) {
+        let heroHeight: CGFloat = isCompact ? 256 : 292
+        let heroWidth = (heroHeight * book.resolvedAspectRatio).rounded()
+        let wash = (coverHue ?? book.persistedCoverHue).wash(for: theme)
+        return ZStack(alignment: .bottom) {
             LinearGradient(
                 colors: [
-                    (coverHue?.wash(for: theme) ?? palette.surfaceAlt).opacity(palette.isDark ? 0.65 : 0.72),
+                    wash.opacity(palette.isDark ? 0.65 : 0.72),
                     palette.background,
                 ],
                 startPoint: .top,
@@ -176,7 +189,7 @@ struct BookDossierView: View {
             VStack(spacing: 18) {
                 Button { read(book) } label: {
                     BookCover(book: book, style: .hero)
-                        .frame(width: isCompact ? 156 : 176, height: isCompact ? 234 : 264)
+                        .frame(width: heroWidth, height: heroHeight)
                         .downloadBadge(book, size: 28)
                         .shadow(color: palette.shadow.opacity(0.95), radius: 2, x: 0, y: 1)
                         .shadow(color: palette.shadow, radius: 24, x: 0, y: 16)
@@ -589,10 +602,16 @@ struct BookDossierView: View {
         return Group {
             if !rows.isEmpty || hasExtraRows {
                 ChickenSection("Edition", accessory: {
-                    Button("Match Metadata") { showingMetadataMatch = true }
-                        .font(.chickenUI(12.5, weight: .medium))
-                        .foregroundStyle(palette.ribbon)
-                        .buttonStyle(.plain)
+                    HStack(spacing: 12) {
+                        Button("Change Cover") { showingChangeCover = true }
+                            .font(.chickenUI(12.5, weight: .medium))
+                            .foregroundStyle(palette.ribbon)
+                            .buttonStyle(.plain)
+                        Button("Match Metadata") { showingMetadataMatch = true }
+                            .font(.chickenUI(12.5, weight: .medium))
+                            .foregroundStyle(palette.ribbon)
+                            .buttonStyle(.plain)
+                    }
                 }) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                         ChickenRow(isLast: index == rows.count - 1 && !hasExtraRows) {
@@ -656,6 +675,9 @@ struct BookDossierView: View {
         Menu {
             Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {
                 library.setFinished(!book.isFinished, for: book)
+            }
+            Button("Change Cover…", systemImage: "photo.on.rectangle.angled") {
+                showingChangeCover = true
             }
             Button("Match Metadata…", systemImage: "text.magnifyingglass") {
                 showingMetadataMatch = true

@@ -61,6 +61,11 @@ nonisolated struct CoverHue: Equatable, Sendable {
             blue: Double(hex & 0xFF) / 255
         )
     }
+
+    init(_ color: CoverColor) {
+        self.hue = color.hue
+        self.saturation = color.saturation
+    }
 }
 
 extension CoverImageCache {
@@ -104,7 +109,7 @@ struct CoverTintModifier: ViewModifier {
             .background {
                 // The card is filled with the book's colour, settling a
                 // little toward the page further down.
-                let fill = coverHue?.wash(for: theme) ?? palette.surface
+                let fill = (coverHue ?? book.persistedCoverHue).wash(for: theme)
                 LinearGradient(
                     colors: [fill, fill.mix(with: palette.background, by: 0.45)],
                     startPoint: .top, endPoint: .bottom
@@ -112,15 +117,18 @@ struct CoverTintModifier: ViewModifier {
                 .ignoresSafeArea()
                 .animation(.easeInOut(duration: 0.35), value: coverHue)
             }
-            .task(id: "\(book.id)-\(book.coverImageName ?? "")") {
+            .task(id: "\(book.id)-\(book.coverImageName ?? "")-\(book.coverDominantHex ?? -1)") {
                 coverHue = await Self.hue(for: book, library: library)
             }
     }
 
     static func hue(for book: Book, library: LibraryStore) async -> CoverHue {
+        if book.coverDominantHex != nil {
+            return book.persistedCoverHue
+        }
         let cloth = CoverHue(hex: CoverPreset.preset(for: book.coverTintIndex).clothHex)
         guard let url = library.coverURL(for: book) else { return cloth }
-        if book.format == .pdf,
+        if !book.coverOrigin.isTrustedArtwork,
            let image = await CoverImageCache.shared.image(for: url, maxPixelSize: 600),
            await CoverImageCache.shared.isTextPage(image, at: url) {
             return cloth

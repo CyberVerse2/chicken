@@ -35,6 +35,11 @@ final class Book {
     var catalogURLString: String?
     var hardcoverBookID: Int?
     var coverImageName: String?
+    var coverOriginRaw: String = CoverOrigin.none.rawValue
+    var coverAspectRatio: Double?
+    var coverDominantHex: Int?
+    var coverHasLegibleText: Bool?
+    @Attribute(.externalStorage) var coverPreviewData: Data?
     /// Set once cover/metadata extraction has been attempted, so launches
     /// don't keep re-parsing books that have no embedded cover.
     var derivedDataChecked: Bool = false
@@ -131,6 +136,53 @@ final class Book {
     /// Stable index into the stylized cover palette, so a book keeps its
     /// color until it gets a real cover.
     var coverTintIndex: Int { Int(title.stableChickenHash % 8) }
+
+    var coverOrigin: CoverOrigin {
+        get {
+            let parsed = CoverOrigin(rawValue: coverOriginRaw) ?? .none
+            if parsed != .none { return parsed }
+            guard coverImageName != nil else { return .none }
+            if hasCatalogCover { return .catalog }
+            return format == .pdf ? .pdfFirstPage : .embedded
+        }
+        set {
+            coverOriginRaw = newValue.rawValue
+            hasCatalogCover = (newValue == .catalog || newValue == .custom)
+        }
+    }
+
+    var resolvedAspectRatio: CGFloat {
+        CGFloat(CoverMetrics.clampedAspectRatio(coverAspectRatio))
+    }
+
+    var persistedCoverHue: CoverHue {
+        if let hex = coverDominantHex, hex >= 0 {
+            return CoverHue(hex: UInt32(hex))
+        }
+        return CoverHue(hex: SharedCoverCloth.preset(for: coverTintIndex).clothHex)
+    }
+
+    var hasCoverArtwork: Bool {
+        coverImageName != nil || coverPreviewData != nil
+    }
+
+    func applyRenderedCover(_ rendered: RenderedCover) {
+        coverImageName = rendered.fileName
+        coverOrigin = rendered.origin
+        coverAspectRatio = rendered.metrics.aspectRatio
+        coverDominantHex = Int(rendered.metrics.dominantColor.hex)
+        coverHasLegibleText = rendered.metrics.hasLegibleText
+        coverPreviewData = rendered.previewData
+    }
+
+    func clearCover() {
+        coverImageName = nil
+        coverOrigin = .none
+        coverAspectRatio = nil
+        coverDominantHex = nil
+        coverHasLegibleText = nil
+        coverPreviewData = nil
+    }
 
     var highlightCount: Int { highlights?.count ?? 0 }
 

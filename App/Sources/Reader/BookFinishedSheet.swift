@@ -45,21 +45,22 @@ struct BookFinishedSheet: View {
             ScrollView {
                 VStack(spacing: 24) {
                     ZStack {
-                        if let coverHue {
-                            RadialGradient(
-                                colors: [
-                                    coverHue.wash(for: theme).opacity(palette.isDark ? 0.36 : 0.44),
-                                    coverHue.wash(for: theme).opacity(0.08),
-                                    .clear,
-                                ],
-                                center: .center,
-                                startRadius: 16,
-                                endRadius: 145
-                            )
-                            .frame(width: 290, height: 290)
-                        }
+                        let resolvedHue = coverHue ?? book.persistedCoverHue
+                        RadialGradient(
+                            colors: [
+                                resolvedHue.wash(for: theme).opacity(palette.isDark ? 0.36 : 0.44),
+                                resolvedHue.wash(for: theme).opacity(0.08),
+                                .clear,
+                            ],
+                            center: .center,
+                            startRadius: 16,
+                            endRadius: 145
+                        )
+                        .frame(width: 290, height: 290)
+                        let coverHeight: CGFloat = 204
+                        let coverWidth = (coverHeight * book.resolvedAspectRatio).rounded()
                         BookCover(book: book, style: .hero)
-                            .frame(width: 136, height: 204)
+                            .frame(width: coverWidth, height: coverHeight)
                             .shadow(color: palette.shadow, radius: 22, x: 0, y: 14)
                             .scaleEffect(revealed ? 1 : 0.94)
                             .opacity(revealed ? 1 : 0)

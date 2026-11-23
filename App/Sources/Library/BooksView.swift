@@ -231,6 +231,89 @@ struct BooksView: View {
         return false
     }
 
+    private var searchMatchReasons: [UUID: String] {
+        let q = trimmedSearchQuery
+        guard !q.isEmpty else { return [:] }
+        var reasons: [UUID: String] = [:]
+        for book in visible {
+            if let reason = matchReason(for: book, query: q) {
+                reasons[book.id] = reason
+            }
+        }
+        return reasons
+    }
+
+    private func matchReason(for book: Book, query q: String) -> String? {
+        if book.displayTitle.localizedStandardContains(q) || book.title.localizedStandardContains(q) {
+            return nil
+        }
+        if (book.author ?? "").localizedStandardContains(q) { return "Author" }
+        if (book.seriesName ?? "").localizedStandardContains(q) { return "Series" }
+        if book.genres.contains(where: { $0.localizedStandardContains(q) }) { return "Genre" }
+        if book.moods.contains(where: { $0.localizedStandardContains(q) }) { return "Mood" }
+        if let year = book.releaseYear, String(year).contains(q) { return String(year) }
+        if (book.publisher ?? "").localizedStandardContains(q) { return "Publisher" }
+        if (book.isbn ?? "").localizedStandardContains(q) { return "ISBN" }
+        if (book.summary ?? "").localizedStandardContains(q) { return "Synopsis" }
+        return nil
+    }
+
+    private var groupedSections: [BookSection]? {
+        guard viewMode == .covers, trimmedSearchQuery.isEmpty, activeCollection == nil else {
+            return nil
+        }
+        if case .author = router.libraryFacet, sort == .author { return nil }
+        if case .series = router.libraryFacet, sort == .series { return nil }
+        switch sort {
+        case .author:
+            return buildSections(from: visible) { book in
+                let author = book.author?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let title = author.isEmpty ? "Unknown Author" : author
+                return (key: title.lowercased(), title: title)
+            }
+        case .series:
+            return buildSections(from: visible) { book in
+                let series = book.seriesName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let title = series.isEmpty ? "Standalone" : series
+                return (key: title.lowercased(), title: title)
+            }
+        case .year:
+            return buildSections(from: visible) { book in
+                let title = book.releaseYear.map(String.init) ?? "Year Unknown"
+                return (key: title, title: title)
+            }
+        case .recent, .added, .title, .rating, .length:
+            return nil
+        }
+    }
+
+    private func buildSections(
+        from books: [Book],
+        grouping: (Book) -> (key: String, title: String)
+    ) -> [BookSection]? {
+        guard !books.isEmpty else { return nil }
+        var order: [String] = []
+        var titles: [String: String] = [:]
+        var buckets: [String: [Book]] = [:]
+        for book in books {
+            let group = grouping(book)
+            if buckets[group.key] == nil {
+                order.append(group.key)
+                titles[group.key] = group.title
+            }
+            buckets[group.key, default: []].append(book)
+        }
+        guard order.count >= 2 else { return nil }
+        return order.map { key in
+            BookSection(
+                id: key,
+                title: titles[key] ?? key,
+                subtitle: nil,
+                books: buckets[key] ?? []
+            )
+        }
+    }
+
     private var filters: [LibraryFilter] {
         let hasQuick = books.contains(where: \.isQuickRead)
         return LibraryFilter.allCases.filter {
@@ -342,7 +425,19 @@ struct BooksView: View {
                         Group {
                             switch viewMode {
                             case .covers:
-                                BookGrid(books: visible, selection: selectionBinding)
+                                if let sections = groupedSections {
+                                    SectionedBookGrid(
+                                        sections: sections,
+                                        selection: selectionBinding,
+                                        matchReasons: searchMatchReasons
+                                    )
+                                } else {
+                                    BookGrid(
+                                        books: visible,
+                                        selection: selectionBinding,
+                                        matchReasons: searchMatchReasons
+                                    )
+                                }
                             case .spines:
                                 BookSpineShelf(books: visible, selection: selectionBinding)
                             case .list:
@@ -460,6 +555,14 @@ struct BooksView: View {
                             Button("Select Books", systemImage: "checkmark.circle") {
                                 selection = []
                             }
+                            Toggle(
+                                "Show Cover Titles",
+                                systemImage: "textformat",
+                                isOn: Binding(
+                                    get: { library.preferences.showCoverTitles },
+                                    set: { library.preferences.showCoverTitles = $0 }
+                                )
+                            )
                             Divider()
                             Picker("Sort By", selection: $sort) {
                                 ForEach(LibrarySort.allCases) { Text($0.label).tag($0) }
@@ -825,7 +928,7 @@ private struct BookEditorialList: View {
                             .lineLimit(2)
                             .multilineTextAlignment(.leading)
 
-                        if book.coverImageName == nil, let author = book.author, !author.isEmpty {
+                        if let author = book.author, !author.isEmpty {
                             Text(book.releaseYear.map { "\(author) · \($0)" } ?? author)
                                 .font(.chickenUI(13))
                                 .foregroundStyle(palette.muted)

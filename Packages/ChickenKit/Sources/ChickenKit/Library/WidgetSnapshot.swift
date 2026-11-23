@@ -11,14 +11,24 @@ public struct WidgetSnapshot: Codable, Sendable, Hashable {
         public let progress: Double
         public let coverTintIndex: Int
         public let hasCover: Bool
+        public let coverAspectRatio: Double?
 
-        public init(id: UUID, title: String, author: String, progress: Double, coverTintIndex: Int, hasCover: Bool) {
+        public init(
+            id: UUID,
+            title: String,
+            author: String,
+            progress: Double,
+            coverTintIndex: Int,
+            hasCover: Bool,
+            coverAspectRatio: Double? = nil
+        ) {
             self.id = id
             self.title = title
             self.author = author
             self.progress = progress
             self.coverTintIndex = coverTintIndex
             self.hasCover = hasCover
+            self.coverAspectRatio = coverAspectRatio
         }
     }
 

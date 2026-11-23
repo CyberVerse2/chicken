@@ -3,7 +3,7 @@ import Foundation
 import SwiftData
 
 extension LibraryStore {
-    static let currentCatalogEnrichVersion = 3
+    static let currentCatalogEnrichVersion = 4
 
     func applyCatalogMatch(
         _ rawMatch: BookCatalogMatch,
@@ -16,14 +16,14 @@ extension LibraryStore {
         let coversDirectory = paths.covers
         let shouldReplaceCover = (replaceCover || book.coverImageName == nil) && match.coverURL != nil
 
-        var downloadedCoverName: String?
+        var downloadedCover: RenderedCover?
         var staleCoverFiles: [URL] = []
         if shouldReplaceCover, let coverURL = match.coverURL {
             if replaceCover, let existingName = book.coverImageName {
                 staleCoverFiles = storedFiles(of: book).filter { $0.lastPathComponent == existingName }
             }
             if let data = await BookCatalogClient.shared.downloadCoverData(from: coverURL) {
-                downloadedCoverName = await Self.encodeCoverData(data, bookID: UUID(), directory: coversDirectory)
+                downloadedCover = await Self.encodeCoverData(data, origin: .catalog, bookID: UUID(), directory: coversDirectory)
             }
         }
 
@@ -48,12 +48,11 @@ extension LibraryStore {
             _ = applyMissingCatalogFields(match, to: book)
         }
 
-        if let downloadedCoverName {
+        if let downloadedCover {
             if !staleCoverFiles.isEmpty {
                 await CloudFolders.removeAll(staleCoverFiles)
             }
-            book.coverImageName = downloadedCoverName
-            book.hasCatalogCover = true
+            book.applyRenderedCover(downloadedCover)
             CoverImageCache.shared.invalidate()
             coversGeneration += 1
         }
@@ -62,6 +61,62 @@ extension LibraryStore {
         book.catalogEnrichVersion = Self.currentCatalogEnrichVersion
         save()
         moveFilesToICloud()
+        publishWidgetSnapshot()
+    }
+
+    func setCustomCover(data: Data, for book: Book) async -> Bool {
+        let coversDirectory = paths.covers
+        guard let rendered = await Self.encodeCoverData(
+            data,
+            origin: .custom,
+            bookID: UUID(),
+            directory: coversDirectory,
+            minWidth: 60,
+            minHeight: 60
+        ) else {
+            return false
+        }
+        let staleCoverFiles: [URL]
+        if let existingName = book.coverImageName {
+            staleCoverFiles = storedFiles(of: book).filter { $0.lastPathComponent == existingName }
+        } else {
+            staleCoverFiles = []
+        }
+        if !staleCoverFiles.isEmpty {
+            await CloudFolders.removeAll(staleCoverFiles)
+        }
+        book.applyRenderedCover(rendered)
+        CoverImageCache.shared.invalidate()
+        coversGeneration += 1
+        save()
+        moveFilesToICloud()
+        publishWidgetSnapshot()
+        return true
+    }
+
+    func applyCatalogCover(from url: URL, for book: Book) async -> Bool {
+        guard let data = await BookCatalogClient.shared.downloadCoverData(from: url) else {
+            return false
+        }
+        return await setCustomCover(data: data, for: book)
+    }
+
+    func resetCoverToCloth(for book: Book) async {
+        let staleCoverFiles: [URL]
+        if let existingName = book.coverImageName {
+            staleCoverFiles = storedFiles(of: book).filter { $0.lastPathComponent == existingName }
+        } else {
+            staleCoverFiles = []
+        }
+        if !staleCoverFiles.isEmpty {
+            await CloudFolders.removeAll(staleCoverFiles)
+        }
+        book.clearCover()
+        book.catalogChecked = true
+        book.catalogEnrichVersion = Self.currentCatalogEnrichVersion
+        CoverImageCache.shared.invalidate()
+        coversGeneration += 1
+        save()
         publishWidgetSnapshot()
     }
 
@@ -177,10 +232,12 @@ extension LibraryStore {
                 let url = fileURL(for: book)
                 return CloudFolders.isDownloaded(url) ? url : nil
             }()
+            let needsCatalogCover = book.coverOrigin.canBeReplacedAutomatically(by: .catalog)
+                && (book.coverImageName == nil || !book.coverOrigin.isTrustedArtwork || Self.hasLegacyCoverName(book))
             return EnrichmentWork(
                 id: book.id,
                 query: BookCatalogQuery(title: book.displayTitle, author: book.author, isbn: book.isbn),
-                needsCover: !book.hasCatalogCover || book.coverImageName == nil || Self.hasLegacyCoverName(book),
+                needsCover: needsCatalogCover,
                 hadExistingCover: book.coverImageName != nil,
                 fileURL: localURL,
                 format: book.format
@@ -223,12 +280,12 @@ extension LibraryStore {
                             if self.applyMissingCatalogFields(match, to: book) {
                                 didUpdate = true
                             }
-                            if let coverName = result.coverImageName {
-                                if let existingName = book.coverImageName, existingName != coverName {
+                            if let renderedCover = result.renderedCover,
+                               book.coverOrigin.canBeReplacedAutomatically(by: renderedCover.origin) {
+                                if let existingName = book.coverImageName, existingName != renderedCover.fileName {
                                     staleFilesToRemove = self.storedFiles(of: book).filter { $0.lastPathComponent == existingName }
                                 }
-                                book.coverImageName = coverName
-                                book.hasCatalogCover = true
+                                book.applyRenderedCover(renderedCover)
                                 CoverImageCache.shared.invalidate()
                                 self.coversGeneration += 1
                                 didUpdate = true
@@ -345,20 +402,36 @@ extension LibraryStore {
     }
 
     private static func needsCatalogEnrichment(_ book: Book) -> Bool {
-        (book.summary ?? "").isEmpty
+        let missingCover = book.coverOrigin.canBeReplacedAutomatically(by: .catalog)
+            && (book.coverImageName == nil || !book.coverOrigin.isTrustedArtwork || hasLegacyCoverName(book))
+        return (book.summary ?? "").isEmpty
             || (book.author ?? "").isEmpty
             || (book.publisher ?? "").isEmpty
             || (book.pageCount ?? 0) <= 0
-            || book.coverImageName == nil
-            || !book.hasCatalogCover
-            || hasLegacyCoverName(book)
+            || missingCover
             || book.releaseYear == nil
             || book.genres.isEmpty
     }
 
     @concurrent
-    private static func encodeCoverData(_ data: Data, bookID: UUID, directory: URL) async -> String? {
-        CoverRenderer.saveCover(from: data, id: bookID, in: directory)
+    private static func encodeCoverData(
+        _ data: Data,
+        origin: CoverOrigin,
+        bookID: UUID,
+        directory: URL,
+        minWidth: Int = 80,
+        minHeight: Int = 80
+    ) async -> RenderedCover? {
+        CoverRenderer.saveRenderedCover(
+            from: data,
+            origin: origin,
+            id: bookID,
+            in: directory,
+            minWidth: minWidth,
+            minHeight: minHeight,
+            allowLandscape: false,
+            detectText: true
+        )
     }
 
     @concurrent
@@ -374,20 +447,23 @@ extension LibraryStore {
             query.isbn = extractedISBN
         }
         guard let match = await BookCatalogClient.shared.bestMatch(for: query, hardcoverToken: token) else {
-            return EnrichmentResult(id: item.id, match: nil, coverImageName: nil, extractedISBN: extractedISBN)
+            return EnrichmentResult(id: item.id, match: nil, renderedCover: nil, extractedISBN: extractedISBN)
         }
-        var coverName: String?
+        var renderedCover: RenderedCover?
         if item.needsCover, let coverURL = match.coverURL,
            let data = await BookCatalogClient.shared.downloadCoverData(from: coverURL) {
-            coverName = CoverRenderer.saveCover(
+            renderedCover = CoverRenderer.saveRenderedCover(
                 from: data,
+                origin: .catalog,
                 id: UUID(),
                 in: coversDirectory,
                 minWidth: item.hadExistingCover ? 200 : 80,
-                minHeight: item.hadExistingCover ? 260 : 80
+                minHeight: item.hadExistingCover ? 260 : 80,
+                allowLandscape: false,
+                detectText: true
             )
         }
-        return EnrichmentResult(id: item.id, match: match, coverImageName: coverName, extractedISBN: extractedISBN)
+        return EnrichmentResult(id: item.id, match: match, renderedCover: renderedCover, extractedISBN: extractedISBN)
     }
 
     @discardableResult
@@ -610,6 +686,6 @@ nonisolated private struct EnrichmentWork: Sendable {
 nonisolated private struct EnrichmentResult: Sendable {
     let id: UUID
     let match: BookCatalogMatch?
-    let coverImageName: String?
+    let renderedCover: RenderedCover?
     let extractedISBN: String?
 }

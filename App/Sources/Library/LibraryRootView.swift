@@ -114,11 +114,10 @@ struct LibraryRootView: View {
                 route(to: destination)
             }
             .task {
-                try? await Task.sleep(for: .milliseconds(600))
+                try? await Task.sleep(for: .milliseconds(300))
                 guard !Task.isCancelled else { return }
                 EPUBWebViewPool.shared.warmUpIfNeeded()
-                try? await Task.sleep(for: .milliseconds(900))
-                guard !Task.isCancelled else { return }
+                library.scheduleCoverMetadataBackfill()
                 library.scheduleCatalogEnrichmentIfNeeded()
             }
     }

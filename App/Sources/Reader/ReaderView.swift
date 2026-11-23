@@ -523,9 +523,11 @@ struct ReaderView: View {
 
     private var downloadingView: some View {
         let errorMessage: String? = if case .failed(let msg, _) = fileState { msg } else { nil }
+        let coverHeight: CGFloat = isCompact ? 240 : 300
+        let coverWidth = (coverHeight * book.resolvedAspectRatio).rounded()
         return VStack(spacing: 22) {
             BookCover(book: book, style: .hero)
-                .frame(width: isCompact ? 160 : 200, height: isCompact ? 240 : 300)
+                .frame(width: coverWidth, height: coverHeight)
                 .shadow(color: palette.shadow, radius: 22, x: 0, y: 14)
                 .opacity(errorMessage == nil ? 1 : 0.6)
             if let errorMessage {
@@ -719,10 +721,12 @@ private struct ReaderCoverWaitingOverlay: View {
     var body: some View {
         Group {
             if waiting {
+                let coverHeight: CGFloat = isCompact ? 300 : 390
+                let coverWidth = (coverHeight * book.resolvedAspectRatio).rounded()
                 ZStack {
                     palette.background
                     BookCover(book: book, style: .hero)
-                        .frame(width: isCompact ? 200 : 260, height: isCompact ? 300 : 390)
+                        .frame(width: coverWidth, height: coverHeight)
                         .shadow(color: palette.shadow, radius: 22, x: 0, y: 14)
                 }
                 .ignoresSafeArea()

@@ -5,6 +5,70 @@ import SwiftData
 /// Background upkeep: covers and metadata for books imported before they
 /// could be extracted, and the manual "refresh covers" action.
 extension LibraryStore {
+    func scheduleCoverMetadataBackfill() {
+        let pending: [BackfillWork] = allBooks().compactMap { book in
+            guard book.coverImageName != nil,
+                  (book.coverAspectRatio == nil || book.coverDominantHex == nil || book.coverPreviewData == nil),
+                  let url = coverURL(for: book)
+            else { return nil }
+            return BackfillWork(id: book.id, coverURL: url, origin: book.coverOrigin)
+        }
+        guard !pending.isEmpty else { return }
+
+        coverBackfillTask?.cancel()
+        coverBackfillTask = Task { [weak self] in
+            var changed = false
+            for chunk in pending.chunked(into: 6) {
+                guard !Task.isCancelled else { return }
+                let results = await Self.inspectCoverChunk(chunk)
+                guard !Task.isCancelled, let self else { return }
+                var staleFiles: [URL] = []
+                for result in results {
+                    guard let book = self.book(id: result.id) else { continue }
+                    let invalidPDFOrLandscape = !result.origin.isTrustedArtwork
+                        && (result.looksLikeTextPage || result.metrics.aspectRatio > CoverMetrics.maxAcceptedAspectRatio)
+                    if invalidPDFOrLandscape {
+                        if let name = book.coverImageName {
+                            staleFiles += self.storedFiles(of: book).filter { $0.lastPathComponent == name }
+                        }
+                        book.clearCover()
+                        changed = true
+                    } else {
+                        book.coverOrigin = result.origin
+                        book.coverAspectRatio = result.metrics.aspectRatio
+                        book.coverDominantHex = Int(result.metrics.dominantColor.hex)
+                        book.coverHasLegibleText = result.metrics.hasLegibleText
+                        book.coverPreviewData = result.previewData
+                        changed = true
+                    }
+                }
+                if !staleFiles.isEmpty {
+                    await CloudFolders.removeAll(staleFiles)
+                }
+                self.save()
+            }
+            guard !Task.isCancelled, let self, changed else { return }
+            self.coversGeneration += 1
+            self.publishWidgetSnapshot()
+        }
+    }
+
+    @concurrent
+    private static func inspectCoverChunk(_ chunk: [BackfillWork]) async -> [BackfillResult] {
+        chunk.compactMap { item in
+            guard let inspected = CoverRenderer.inspectCover(at: item.coverURL, origin: item.origin, detectText: true) else {
+                return nil
+            }
+            return BackfillResult(
+                id: item.id,
+                origin: item.origin,
+                metrics: inspected.metrics,
+                previewData: inspected.previewData,
+                looksLikeTextPage: inspected.looksLikeTextPage
+            )
+        }
+    }
+
     func scheduleDerivedDataRefresh() {
         let pending = allBooks()
             .filter { !$0.derivedDataChecked && ($0.format == .pdf || $0.format == .epub) }
@@ -41,7 +105,10 @@ extension LibraryStore {
             if let language = metadata.language { book.language = language }
             if let summary = metadata.summary { book.summary = summary }
             if let isbn = metadata.isbn { book.isbn = isbn }
-            if let cover = result.coverImageName { book.coverImageName = cover }
+            if let cover = result.renderedCover,
+               book.coverOrigin.canBeReplacedAutomatically(by: cover.origin) {
+                book.applyRenderedCover(cover)
+            }
             book.derivedDataChecked = true
         }
         save()
@@ -52,13 +119,17 @@ extension LibraryStore {
     /// have rather than being downloaded for this.
     func refreshAllCovers() {
         guard !coverRefreshState.isRefreshing else { return }
-        let books = allBooks().filter { ($0.format == .pdf || $0.format == .epub) && readableFileURL(for: $0) != nil }
+        let books = allBooks().filter {
+            ($0.format == .pdf || $0.format == .epub)
+                && $0.coverOrigin != .custom
+                && readableFileURL(for: $0) != nil
+        }
         guard !books.isEmpty else { return }
 
         var staleCovers: [URL] = []
         for book in books {
             staleCovers += storedFiles(of: book).filter { $0.lastPathComponent == book.coverImageName }
-            book.coverImageName = nil
+            book.clearCover()
         }
         save()
         CoverImageCache.shared.invalidate()
@@ -75,12 +146,14 @@ extension LibraryStore {
             var refreshed = 0
             for chunk in work.chunked(into: 6) {
                 guard !Task.isCancelled else { return }
-                let names = await Self.generateCovers(chunk: chunk, covers: covers)
+                let rendered = await Self.generateCovers(chunk: chunk, covers: covers)
                 guard !Task.isCancelled, let self else { return }
                 completed += chunk.count
-                refreshed += names.filter { $0.1 != nil }.count
-                for (id, name) in names {
-                    self.book(id: id)?.coverImageName = name
+                refreshed += rendered.filter { $0.1 != nil }.count
+                for (id, cover) in rendered {
+                    if let cover, let book = self.book(id: id) {
+                        book.applyRenderedCover(cover)
+                    }
                 }
                 self.coverRefreshState = .refreshing(completed: completed, total: work.count)
             }
@@ -96,8 +169,8 @@ extension LibraryStore {
     }
 
     @concurrent
-    private static func generateCovers(chunk: [DerivedWork], covers: URL) async -> [(UUID, String?)] {
-        chunk.map { ($0.id, CoverRenderer.generateCover(for: $0.fileURL, format: $0.format, id: $0.id, in: covers)) }
+    private static func generateCovers(chunk: [DerivedWork], covers: URL) async -> [(UUID, RenderedCover?)] {
+        chunk.map { ($0.id, CoverRenderer.renderCover(for: $0.fileURL, format: $0.format, id: $0.id, in: covers)) }
     }
 
     /// Total size of the managed library on disk.
@@ -106,6 +179,20 @@ extension LibraryStore {
         let bytes = source.reduce(Int64(0)) { $0 + $1.fileSize }
         return ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
+}
+
+nonisolated private struct BackfillWork: Sendable {
+    let id: UUID
+    let coverURL: URL
+    let origin: CoverOrigin
+}
+
+nonisolated private struct BackfillResult: Sendable {
+    let id: UUID
+    let origin: CoverOrigin
+    let metrics: CoverMetrics
+    let previewData: Data?
+    let looksLikeTextPage: Bool
 }
 
 nonisolated private struct DerivedWork: Sendable {
@@ -118,7 +205,7 @@ nonisolated private struct DerivedWork: Sendable {
         DerivedResult(
             id: id,
             metadata: DocumentMetadataReader.metadata(for: fileURL, format: format),
-            coverImageName: needsCover ? CoverRenderer.generateCover(for: fileURL, format: format, id: id, in: coversDirectory) : nil
+            renderedCover: needsCover ? CoverRenderer.renderCover(for: fileURL, format: format, id: id, in: coversDirectory) : nil
         )
     }
 }
@@ -126,7 +213,7 @@ nonisolated private struct DerivedWork: Sendable {
 nonisolated private struct DerivedResult: Sendable {
     let id: UUID
     let metadata: DocumentMetadata
-    let coverImageName: String?
+    let renderedCover: RenderedCover?
 }
 
 extension Array {

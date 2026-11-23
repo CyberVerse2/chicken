@@ -203,7 +203,15 @@ extension LibraryStore {
             keeper.preferencesData = duplicate.preferencesData ?? keeper.preferencesData
         }
         keeper.lastActivityAt = max(keeper.lastActivityAt, duplicate.lastActivityAt)
-        if keeper.coverImageName == nil { keeper.coverImageName = duplicate.coverImageName }
+        if duplicate.coverOrigin.priority > keeper.coverOrigin.priority
+            || (keeper.coverImageName == nil && duplicate.coverImageName != nil) {
+            keeper.coverImageName = duplicate.coverImageName
+            keeper.coverOriginRaw = duplicate.coverOriginRaw
+            keeper.coverAspectRatio = duplicate.coverAspectRatio
+            keeper.coverDominantHex = duplicate.coverDominantHex
+            keeper.coverHasLegibleText = duplicate.coverHasLegibleText
+            keeper.coverPreviewData = duplicate.coverPreviewData
+        }
 
         for highlight in duplicate.highlights ?? [] {
             if keeper.highlights?.contains(where: { $0.chapterIndex == highlight.chapterIndex && $0.text == highlight.text }) == true {
