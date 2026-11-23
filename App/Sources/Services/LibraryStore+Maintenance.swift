@@ -40,6 +40,7 @@ extension LibraryStore {
             if let publisher = metadata.publisher { book.publisher = publisher }
             if let language = metadata.language { book.language = language }
             if let summary = metadata.summary { book.summary = summary }
+            if let isbn = metadata.isbn { book.isbn = isbn }
             if let cover = result.coverImageName { book.coverImageName = cover }
             book.derivedDataChecked = true
         }

@@ -68,6 +68,10 @@ final class AppPreferences {
         }
     }
 
+    var autoEnrichMetadata: Bool {
+        didSet { defaults.set(autoEnrichMetadata, forKey: Keys.autoEnrichMetadata) }
+    }
+
     var hasCalibratedPace: Bool {
         defaults.object(forKey: Keys.minutesPerPage) != nil
     }
@@ -101,6 +105,7 @@ final class AppPreferences {
         minutesPerPage = storedPace > 0
             ? min(max(storedPace, ReadingEstimate.paceRange.lowerBound), ReadingEstimate.paceRange.upperBound)
             : ReadingEstimate.minutesPerPage
+        autoEnrichMetadata = defaults.object(forKey: Keys.autoEnrichMetadata) as? Bool ?? true
         if let existing = defaults.string(forKey: Keys.deviceID) {
             deviceID = existing
         } else {
@@ -117,5 +122,6 @@ final class AppPreferences {
         static let downloadsAll = "Chicken.downloadsAllBooks"
         static let keptBooks = "Chicken.keptBooks"
         static let minutesPerPage = "Chicken.minutesPerPage"
+        static let autoEnrichMetadata = "Chicken.autoEnrichMetadata"
     }
 }

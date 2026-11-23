@@ -23,6 +23,7 @@ final class LibraryStore {
     var importState: ImportState = .idle
     var importErrors: [String] = []
     var coverRefreshState: CoverRefreshState = .idle
+    var catalogEnrichState: CatalogEnrichState = .idle
     var scanState: ScanState = .idle
     var discoveredBooks: [DiscoveredBook] = []
     var folders: [WatchedFolder] = []
@@ -51,6 +52,7 @@ final class LibraryStore {
     @ObservationIgnored var scanTask: Task<Void, Never>?
     @ObservationIgnored var importTask: Task<Void, Never>?
     @ObservationIgnored var coverRefreshTask: Task<Void, Never>?
+    @ObservationIgnored var catalogEnrichTask: Task<Void, Never>?
     @ObservationIgnored var derivedDataTask: Task<Void, Never>?
     @ObservationIgnored var widgetTask: Task<Void, Never>?
     @ObservationIgnored var lastPublishedSnapshot: WidgetSnapshot?
@@ -437,6 +439,17 @@ enum CoverRefreshState: Equatable {
 
     var isRefreshing: Bool {
         if case .refreshing = self { return true }
+        return false
+    }
+}
+
+enum CatalogEnrichState: Equatable {
+    case idle
+    case enriching(completed: Int, total: Int)
+    case finished(updated: Int)
+
+    var isEnriching: Bool {
+        if case .enriching = self { return true }
         return false
     }
 }

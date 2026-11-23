@@ -105,6 +105,7 @@ extension LibraryStore {
     private func applyImported(_ results: [(ImportedBook, String?)]) {
         guard !results.isEmpty else { return }
         let now = Date()
+        var importedIDs: [UUID] = []
         for (imported, discoveredID) in results {
             let book = Book(
                 id: imported.id,
@@ -119,16 +120,21 @@ extension LibraryStore {
             book.publisher = imported.metadata.publisher
             book.language = imported.metadata.language
             book.summary = imported.metadata.summary
+            book.isbn = imported.metadata.isbn
             book.coverImageName = imported.coverImageName
             book.importedAt = now
             book.lastActivityAt = now
             book.derivedDataChecked = true
             context.insert(book)
+            importedIDs.append(book.id)
             if let discoveredID {
                 discoveredBooks.removeAll { $0.id == discoveredID }
             }
         }
         save()
+        if preferences.autoEnrichMetadata {
+            enrichBooksIfNeeded(ids: importedIDs)
+        }
     }
 }
 

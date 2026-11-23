@@ -24,6 +24,7 @@ final class Book {
     var publisher: String?
     var language: String?
     var summary: String?
+    var isbn: String?
     var coverImageName: String?
     /// Set once cover/metadata extraction has been attempted, so launches
     /// don't keep re-parsing books that have no embedded cover.

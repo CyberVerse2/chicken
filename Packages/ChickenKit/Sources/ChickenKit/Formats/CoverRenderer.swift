@@ -41,6 +41,14 @@ public enum CoverRenderer {
         return writeCompressedCover(image, id: id, in: directory)
     }
 
+    public static func saveCover(from imageData: Data, id: UUID, in directory: URL) -> String? {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard let image = downsampledImage(from: imageData), image.width >= 80, image.height >= 80 else {
+            return nil
+        }
+        return writeCompressedCover(image, id: id, in: directory)
+    }
+
     private static func writeCompressedCover(_ image: CGImage, id: UUID, in directory: URL) -> String? {
         let jpgName = "\(id.uuidString).jpg"
         let jpgURL = directory.appendingPathComponent(jpgName)

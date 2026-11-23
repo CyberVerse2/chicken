@@ -109,13 +109,25 @@ public struct EPUBPackage: Sendable {
             return DocumentMetadata.clean(text.map { HTMLText.decodeEntities($0) })
         }
         let description = value("description").map { HTMLText.plainText(from: $0) }
+        var detectedISBN13: String?
+        var detectedISBN10: String?
+        for identifierNode in metadataNode?.descendants("identifier") ?? [] {
+            if let found = ISBNExtractor.extract(from: identifierNode.textContent) {
+                if found.count == 13 && detectedISBN13 == nil {
+                    detectedISBN13 = found
+                } else if found.count == 10 && detectedISBN10 == nil {
+                    detectedISBN10 = found
+                }
+            }
+        }
         metadata = DocumentMetadata(
             title: value("title"),
             author: value("creator"),
             pageCount: nil,
             publisher: value("publisher"),
             language: value("language"),
-            summary: DocumentMetadata.clean(description)
+            summary: DocumentMetadata.clean(description),
+            isbn: detectedISBN13 ?? detectedISBN10
         )
 
         // Table of contents

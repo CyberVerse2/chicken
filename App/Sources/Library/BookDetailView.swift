@@ -28,6 +28,7 @@ struct BookDossierView: View {
     @State private var companionNote: String?
     @State private var generatingCompanion = false
     @State private var companionError: String?
+    @State private var showingMetadataMatch = false
 
     private var book: Book? { library.book(id: bookID) }
     private var isCompact: Bool { sizeClass == .compact }
@@ -48,6 +49,15 @@ struct BookDossierView: View {
         .sheet(item: $quoteCardRequest) { request in
             QuoteCardSheet(request: request)
                 .readingTheme(library.preferences.theme)
+        }
+        .sheet(isPresented: $showingMetadataMatch) {
+            if let book {
+                NavigationStack {
+                    BookMetadataMatchSheet(book: book)
+                        .environment(library)
+                }
+                .readingTheme(library.preferences.theme)
+            }
         }
         #if os(macOS)
         .frame(minWidth: isPage ? nil : 540, idealWidth: isPage ? nil : 620, minHeight: isPage ? nil : 600, idealHeight: isPage ? nil : 720)
@@ -478,6 +488,7 @@ struct BookDossierView: View {
         let rows: [(String, String)] = [
             ("Publisher", book.publisher ?? ""),
             ("Language", book.language.flatMap { Locale.current.localizedString(forLanguageCode: $0) } ?? book.language ?? ""),
+            ("ISBN", book.isbn ?? ""),
             ("File Size", book.fileSize > 0 ? ByteCountFormatter.string(fromByteCount: book.fileSize, countStyle: .file) : ""),
             ("Added", book.importedAt.formatted(date: .long, time: .omitted)),
             ("Finished", book.finishedAt?.formatted(date: .long, time: .omitted) ?? ""),
@@ -485,7 +496,12 @@ struct BookDossierView: View {
 
         return Group {
             if !rows.isEmpty {
-                ChickenSection("Edition") {
+                ChickenSection("Edition", accessory: {
+                    Button("Match Metadata") { showingMetadataMatch = true }
+                        .font(.chickenUI(12.5, weight: .medium))
+                        .foregroundStyle(palette.ribbon)
+                        .buttonStyle(.plain)
+                }) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
                         ChickenRow(isLast: index == rows.count - 1) {
                             HStack(alignment: .firstTextBaseline) {
@@ -511,6 +527,9 @@ struct BookDossierView: View {
         Menu {
             Button(book.isFinished ? "Mark as Unread" : "Mark as Finished", systemImage: book.isFinished ? "arrow.uturn.backward" : "checkmark.circle") {
                 library.setFinished(!book.isFinished, for: book)
+            }
+            Button("Match Metadata…", systemImage: "text.magnifyingglass") {
+                showingMetadataMatch = true
             }
             #if os(macOS)
             Button("Show in Finder", systemImage: "folder") {
