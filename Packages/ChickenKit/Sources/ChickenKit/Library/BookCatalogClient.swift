@@ -852,13 +852,13 @@ public final class BookCatalogClient: Sendable {
         var result: [String] = []
         for raw in rawSubjects {
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, trimmed.count <= 26, !trimmed.contains("--"), !trimmed.contains("(") else { continue }
+            guard !trimmed.isEmpty, trimmed.count <= 26, !trimmed.contains("--"), !trimmed.contains("("), !trimmed.contains("/") else { continue }
             if trimmed.rangeOfCharacter(from: .decimalDigits) != nil { continue }
             let lower = trimmed.lowercased()
             if noisyFragments.contains(where: { lower.contains($0) }) { continue }
             if lower == "fiction" && result.contains(where: { $0.lowercased().contains("fiction") }) { continue }
             if seen.insert(lower).inserted {
-                result.append(trimmed.readableTitle)
+                result.append(trimmed.capitalized)
                 if result.count >= limit { break }
             }
         }
