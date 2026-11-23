@@ -177,44 +177,233 @@ public enum HTMLText {
 
     static func numericEntities(in text: String, dropUnknown: Bool = false) -> String {
         guard text.contains("&") else { return text }
-        return text.replacing(/&([A-Za-z][A-Za-z0-9]*);/) { match in
-            let name = String(match.output.1)
-            if builtIn.contains(name) { return String(match.output.0) }
-            if let numeric = namedEntities[name] { return numeric }
-            return dropUnknown ? "" : String(match.output.0)
+        var output = String()
+        output.reserveCapacity(text.count)
+        var cursor = text.startIndex
+        while let amp = text[cursor...].firstIndex(of: "&") {
+            output.append(contentsOf: text[cursor..<amp])
+            let afterAmp = text.index(after: amp)
+            if afterAmp < text.endIndex,
+               let semi = text[afterAmp...].prefix(20).firstIndex(of: ";"),
+               let firstChar = text[afterAmp...].first,
+               firstChar.isASCII && firstChar.isLetter,
+               text[afterAmp..<semi].allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) {
+                let name = String(text[afterAmp..<semi])
+                if builtIn.contains(name) {
+                    output.append(contentsOf: text[amp...semi])
+                } else if let numeric = namedEntities[name] {
+                    output.append(numeric)
+                } else if !dropUnknown {
+                    output.append(contentsOf: text[amp...semi])
+                }
+                cursor = text.index(after: semi)
+            } else {
+                output.append("&")
+                cursor = afterAmp
+            }
         }
+        output.append(contentsOf: text[cursor...])
+        return output
     }
 
     /// Strips tags, decodes common entities, and collapses whitespace.
     public static func plainText(from html: String) -> String {
-        var text = html
-            .replacing(/<!\[CDATA\[([\s\S]*?)\]\]>/) { String($0.output.1) }
-            .replacing(/(?i)<br\s*\/?>|<\/p>/, with: "\n")
-            .replacing(/<[^>]+>/, with: "")
-        text = decodeEntities(text)
-        return text
-            .components(separatedBy: "\n")
-            .map { $0.replacing(/\s+/, with: " ").trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-            .joined(separator: "\n")
+        let utf8 = Array(html.utf8)
+        let stripped: [UInt8]
+        var hasAmpersand = false
+
+        if utf8.contains(0x3C) {
+            var out: [UInt8] = []
+            out.reserveCapacity(utf8.count / 2)
+            let count = utf8.count
+            var i = 0
+            while i < count {
+                let b = utf8[i]
+                if b == 0x26 { hasAmpersand = true }
+                if b == 0x3C {
+                    if i + 9 <= count,
+                       utf8[i + 1] == 0x21, utf8[i + 2] == 0x5B, utf8[i + 3] == 0x43,
+                       utf8[i + 4] == 0x44, utf8[i + 5] == 0x41, utf8[i + 6] == 0x54,
+                       utf8[i + 7] == 0x41, utf8[i + 8] == 0x5B {
+                        var j = i + 9
+                        var foundEnd = false
+                        while j + 2 < count {
+                            if utf8[j] == 0x5D && utf8[j + 1] == 0x5D && utf8[j + 2] == 0x3E {
+                                foundEnd = true
+                                break
+                            }
+                            if utf8[j] == 0x26 { hasAmpersand = true }
+                            out.append(utf8[j])
+                            j += 1
+                        }
+                        if foundEnd {
+                            i = j + 3
+                            continue
+                        }
+                    }
+                    var close = i + 1
+                    while close < count && utf8[close] != 0x3E {
+                        close += 1
+                    }
+                    if close < count {
+                        let tagLen = close - (i + 1)
+                        if tagLen >= 2 {
+                            let b0 = utf8[i + 1]
+                            let b1 = utf8[i + 2]
+                            if (b0 == 0x62 || b0 == 0x42) && (b1 == 0x72 || b1 == 0x52) {
+                                out.append(0x0A)
+                            } else if b0 == 0x2F && tagLen >= 2 {
+                                if b1 == 0x70 || b1 == 0x50 || b1 == 0x68 || b1 == 0x48 {
+                                    out.append(0x0A)
+                                } else if tagLen >= 4 {
+                                    let b2 = utf8[i + 3]
+                                    let b3 = utf8[i + 4]
+                                    if ((b1 == 0x64 || b1 == 0x44) && (b2 == 0x69 || b2 == 0x49) && (b3 == 0x76 || b3 == 0x56)) ||
+                                        ((b1 == 0x6C || b1 == 0x4C) && (b2 == 0x69 || b2 == 0x49)) {
+                                        out.append(0x0A)
+                                    }
+                                } else if tagLen >= 3 {
+                                    let b2 = utf8[i + 3]
+                                    if (b1 == 0x6C || b1 == 0x4C) && (b2 == 0x69 || b2 == 0x49) {
+                                        out.append(0x0A)
+                                    }
+                                }
+                            }
+                        }
+                        i = close + 1
+                        continue
+                    }
+                }
+                out.append(b)
+                i += 1
+            }
+            stripped = out
+        } else {
+            stripped = utf8
+            hasAmpersand = utf8.contains(0x26)
+        }
+
+        let sourceBytes: [UInt8]
+        if hasAmpersand {
+            let decoded = decodeEntities(String(decoding: stripped, as: UTF8.self))
+            sourceBytes = Array(decoded.utf8)
+        } else {
+            sourceBytes = stripped
+        }
+
+        var result: [UInt8] = []
+        result.reserveCapacity(sourceBytes.count)
+        var inSpace = true
+        var lineHasContent = false
+        var idx = 0
+        let total = sourceBytes.count
+
+        while idx < total {
+            let b = sourceBytes[idx]
+            if b == 0x0A {
+                if !result.isEmpty && result.last == 0x20 {
+                    result.removeLast()
+                }
+                if lineHasContent {
+                    result.append(0x0A)
+                }
+                inSpace = true
+                lineHasContent = false
+                idx += 1
+                continue
+            }
+            if b == 0x20 || b == 0x09 || b == 0x0D || b == 0x0B || b == 0x0C {
+                if !inSpace && lineHasContent {
+                    result.append(0x20)
+                    inSpace = true
+                }
+                idx += 1
+                continue
+            }
+            if b == 0xC2 && idx + 1 < total && sourceBytes[idx + 1] == 0xA0 {
+                if !inSpace && lineHasContent {
+                    result.append(0x20)
+                    inSpace = true
+                }
+                idx += 2
+                continue
+            }
+            if b == 0xE2 && idx + 2 < total && sourceBytes[idx + 1] == 0x80 &&
+                ((sourceBytes[idx + 2] >= 0x80 && sourceBytes[idx + 2] <= 0x8B) || sourceBytes[idx + 2] == 0xAF) {
+                if !inSpace && lineHasContent {
+                    result.append(0x20)
+                    inSpace = true
+                }
+                idx += 3
+                continue
+            }
+            if b == 0xE3 && idx + 2 < total && sourceBytes[idx + 1] == 0x80 && sourceBytes[idx + 2] == 0x80 {
+                if !inSpace && lineHasContent {
+                    result.append(0x20)
+                    inSpace = true
+                }
+                idx += 3
+                continue
+            }
+            result.append(b)
+            inSpace = false
+            lineHasContent = true
+            idx += 1
+        }
+        if !result.isEmpty && result.last == 0x20 {
+            result.removeLast()
+        }
+        if !result.isEmpty && result.last == 0x0A {
+            result.removeLast()
+        }
+        return String(decoding: result, as: UTF8.self)
     }
 
     public static func decodeEntities(_ text: String) -> String {
         guard text.contains("&") else { return text }
-        var result = numericEntities(in: text, dropUnknown: false)
-        result = result
-            .replacingOccurrences(of: "&lt;", with: "<")
-            .replacingOccurrences(of: "&gt;", with: ">")
-            .replacingOccurrences(of: "&quot;", with: "\"")
-            .replacingOccurrences(of: "&apos;", with: "'")
-        result = result.replacing(/&#([xX]?)([0-9A-Fa-f]+);/) { match in
-            let isHex = !match.output.1.isEmpty
-            let digits = String(match.output.2)
-            guard let value = UInt32(digits, radix: isHex ? 16 : 10),
+        var output = String()
+        output.reserveCapacity(text.count)
+        var cursor = text.startIndex
+        while let amp = text[cursor...].firstIndex(of: "&") {
+            output.append(contentsOf: text[cursor..<amp])
+            let afterAmp = text.index(after: amp)
+            if afterAmp < text.endIndex, let semi = text[afterAmp...].prefix(20).firstIndex(of: ";") {
+                let entity = text[afterAmp..<semi]
+                if let resolved = resolveEntity(entity) {
+                    output.append(resolved)
+                    cursor = text.index(after: semi)
+                    continue
+                }
+            }
+            output.append("&")
+            cursor = afterAmp
+        }
+        output.append(contentsOf: text[cursor...])
+        return output
+    }
+
+    private static func resolveEntity(_ entity: Substring) -> String? {
+        if entity.hasPrefix("#") {
+            let digits = entity.dropFirst()
+            let isHex = digits.first == "x" || digits.first == "X"
+            let rawDigits = isHex ? digits.dropFirst() : digits
+            guard !rawDigits.isEmpty,
+                  let value = UInt32(rawDigits, radix: isHex ? 16 : 10),
                   let scalar = Unicode.Scalar(value)
-            else { return String(match.output.0) }
+            else { return nil }
             return String(Character(scalar))
         }
-        return result.replacingOccurrences(of: "&amp;", with: "&")
+        switch entity {
+        case "amp": return "&"
+        case "lt": return "<"
+        case "gt": return ">"
+        case "quot": return "\""
+        case "apos": return "'"
+        default:
+            guard let numeric = namedEntities[String(entity)] else { return nil }
+            let inner = numeric.dropFirst(2).dropLast()
+            guard let value = UInt32(inner), let scalar = Unicode.Scalar(value) else { return nil }
+            return String(Character(scalar))
+        }
     }
 }

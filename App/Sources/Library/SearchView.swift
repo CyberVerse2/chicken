@@ -12,50 +12,51 @@ struct SearchView: View {
     private var gutter: CGFloat { sizeClass == .compact ? 20 : 40 }
     private var trimmed: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    private var matchingBooks: [Book] {
-        guard !trimmed.isEmpty else { return [] }
+    private func matchingBooks(for term: String) -> [Book] {
+        guard !term.isEmpty else { return [] }
         return books.filter {
-            $0.displayTitle.localizedStandardContains(trimmed)
-                || $0.title.localizedStandardContains(trimmed)
-                || $0.displayAuthor.localizedStandardContains(trimmed)
-                || ($0.publisher?.localizedStandardContains(trimmed) ?? false)
-                || $0.originalFileName.localizedStandardContains(trimmed)
+            $0.displayTitle.localizedStandardContains(term)
+                || $0.title.localizedStandardContains(term)
+                || $0.displayAuthor.localizedStandardContains(term)
+                || ($0.publisher?.localizedStandardContains(term) ?? false)
+                || $0.originalFileName.localizedStandardContains(term)
         }
     }
 
-    private var listedBooks: [Book] {
-        trimmed.isEmpty ? Array(books.filter { $0.lastOpenedAt != nil }.prefix(6)) : Array(matchingBooks.prefix(60))
-    }
-
-    private var matchingHighlights: [Highlight] {
-        guard !trimmed.isEmpty else { return [] }
-        return highlights.filter { $0.text.localizedStandardContains(trimmed) || $0.note.localizedStandardContains(trimmed) }
+    private func matchingHighlights(for term: String) -> [Highlight] {
+        guard !term.isEmpty else { return [] }
+        return highlights.filter { $0.text.localizedStandardContains(term) || $0.note.localizedStandardContains(term) }
     }
 
     var body: some View {
+        let term = trimmed
+        let bookHits = matchingBooks(for: term)
+        let highlightHits = matchingHighlights(for: term)
+        let listed = term.isEmpty ? Array(books.filter { $0.lastOpenedAt != nil }.prefix(6)) : Array(bookHits.prefix(60))
         ScrollView {
             VStack(alignment: .leading, spacing: 26) {
-                if trimmed.isEmpty {
+                if term.isEmpty {
                     suggestions
-                } else if matchingBooks.isEmpty && matchingHighlights.isEmpty {
+                } else if bookHits.isEmpty && highlightHits.isEmpty {
                     VStack(spacing: 10) {
                         Image(systemName: "magnifyingglass")
                             .font(.system(size: 26, weight: .light))
                             .foregroundStyle(palette.faint)
-                        Text("Nothing matches \u{201C}\(trimmed)\u{201D}")
+                        Text("Nothing matches \u{201C}\(term)\u{201D}")
                             .font(.chickenUI(15.5))
                             .foregroundStyle(palette.muted)
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.top, 80)
                 } else {
-                    if !matchingBooks.isEmpty {
+                    if !bookHits.isEmpty {
+                        let shownCount = min(bookHits.count, 60)
                         VStack(alignment: .leading, spacing: 12) {
-                            SectionLabel(text: "Books", count: matchingBooks.count)
+                            SectionLabel(text: "Books", count: bookHits.count)
                             VStack(spacing: 0) {
-                                ForEach(Array(matchingBooks.prefix(60).enumerated()), id: \.element.id) { index, book in
+                                ForEach(Array(bookHits.prefix(60).enumerated()), id: \.element.id) { index, book in
                                     SearchBookRow(book: book)
-                                    if index < min(matchingBooks.count, 60) - 1 {
+                                    if index < shownCount - 1 {
                                         Rectangle().fill(palette.border).frame(height: 0.5).padding(.leading, 74)
                                     }
                                 }
@@ -67,10 +68,10 @@ struct SearchView: View {
                             )
                         }
                     }
-                    if !matchingHighlights.isEmpty {
+                    if !highlightHits.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
-                            SectionLabel(text: "In your highlights", count: matchingHighlights.count)
-                            ForEach(matchingHighlights.prefix(40)) { highlight in
+                            SectionLabel(text: "In your highlights", count: highlightHits.count)
+                            ForEach(highlightHits.prefix(40)) { highlight in
                                 SearchHighlightCard(highlight: highlight)
                             }
                         }
@@ -80,7 +81,7 @@ struct SearchView: View {
             .padding(.horizontal, gutter)
             .padding(.top, sizeClass == .compact ? 2 : 12)
             .padding(.bottom, 96)
-            .coverCollection("search", books: listedBooks.map(\.id))
+            .coverCollection("search", books: listed.map(\.id))
             .frame(maxWidth: 820, alignment: .topLeading)
             .frame(maxWidth: .infinity, alignment: .top)
         }

@@ -94,6 +94,34 @@ struct EPUBPackageTests {
         #expect(html.contains("Styles/book.css"))
         #expect(FileManager.default.fileExists(atPath: publication.rootURL.appendingPathComponent("OEBPS/Text/chapter2.xhtml").path))
     }
+
+    @Test func epubBookSessionStreamsChaptersAndSearchesWithoutExtraction() throws {
+        let epubURL = try Fixtures.sampleEPUB(extraFiles: [
+            "OEBPS/Text/chapter2.xhtml": Data("""
+            <html><body><h2 id="part">Chapter Two</h2><p>The quiet garden.</p><aside id="fn1">Footnote text here.</aside></body></html>
+            """.utf8),
+        ])
+        let session = try EPUBBookSession(bookAt: epubURL)
+        #expect(session.package.spine.count == 2)
+        let ch0 = try #require(session.chapter(at: 0))
+        #expect(ch0.stylesHTML.contains("OEBPS/Styles/book.css"))
+        #expect(ch0.bodyHTML.contains(#"src="OEBPS/Images/front.jpg""#))
+        #expect(ch0.bodyHTML.contains(#"loading="lazy""#))
+        #expect(ch0.bodyHTML.contains(#"data-chicken-target-chapter="1""#))
+
+        let res = try #require(session.resourceData(for: "OEBPS/Styles/book.css"))
+        #expect(res.mimeType.contains("text/css"))
+        #expect(!res.data.isEmpty)
+
+        #expect(session.footnoteText(chapterIndex: 1, fragment: "fn1") == "Footnote text here.")
+        let matches = session.search("garden")
+        #expect(matches.count == 1)
+        #expect(matches.first?.spineIndex == 1)
+
+        let mid = session.globalProgress(spineIndex: 1, localProgress: 0.5)
+        let back = session.location(forGlobalProgress: mid)
+        #expect(back.spineIndex == 1)
+    }
 }
 
 struct PathAndTextTests {

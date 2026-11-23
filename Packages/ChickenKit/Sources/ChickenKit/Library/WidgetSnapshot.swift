@@ -100,7 +100,7 @@ public struct WidgetSnapshot: Codable, Sendable, Hashable {
         }
     }
 
-    public func save(coverJPEG: Data?) {
+    public func save(coverJPEG: Data?, keepExistingCover: Bool = false) {
         guard let url = Self.snapshotURL else { return }
         let data: Data
         do {
@@ -123,7 +123,7 @@ public struct WidgetSnapshot: Codable, Sendable, Hashable {
                     } catch {
                         ChickenLog.widgets.error("Failed to write widget cover: \(error.localizedDescription, privacy: .public)")
                     }
-                } else {
+                } else if !keepExistingCover {
                     try? FileManager.default.removeItem(at: coverURL)
                 }
             }

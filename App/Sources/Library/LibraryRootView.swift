@@ -114,6 +114,11 @@ struct LibraryRootView: View {
                 router.pendingDestination = nil
                 route(to: destination)
             }
+            .task {
+                try? await Task.sleep(for: .milliseconds(600))
+                guard !Task.isCancelled else { return }
+                EPUBWebViewPool.shared.warmUpIfNeeded()
+            }
     }
 
     @ViewBuilder

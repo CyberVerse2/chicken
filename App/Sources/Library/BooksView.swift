@@ -354,9 +354,35 @@ struct BooksView: View {
     }
 
     private var counts: [LibraryFilter: Int] {
-        Dictionary(uniqueKeysWithValues: filters.map { filter in
-            (filter, books.filter { filter.includes($0, in: library) }.count)
-        })
+        var reading = 0
+        var unread = 0
+        var finished = 0
+        var pdf = 0
+        var epub = 0
+        var onDevice = 0
+        let checkOnDevice = library.cloud != nil
+        for book in books {
+            if book.isFinished {
+                finished += 1
+            } else if book.progress > 0 {
+                reading += 1
+            } else {
+                unread += 1
+            }
+            if book.format == .pdf { pdf += 1 }
+            else if book.format == .epub { epub += 1 }
+            if checkOnDevice && library.isOnDevice(book) { onDevice += 1 }
+        }
+        var result: [LibraryFilter: Int] = [
+            .all: books.count,
+            .reading: reading,
+            .unread: unread,
+            .finished: finished,
+            .pdf: pdf,
+            .epub: epub,
+        ]
+        if checkOnDevice { result[.onDevice] = onDevice }
+        return result
     }
 
     private var selectionBar: some View {
@@ -518,7 +544,7 @@ private struct BookEditorialList: View {
     var selection: Binding<Set<UUID>>?
 
     var body: some View {
-        VStack(spacing: 0) {
+        LazyVStack(spacing: 0) {
             ForEach(Array(books.enumerated()), id: \.element.id) { index, book in
                 row(book)
                 if index < books.count - 1 {

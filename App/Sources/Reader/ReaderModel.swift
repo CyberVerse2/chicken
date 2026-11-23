@@ -103,6 +103,7 @@ final class ReaderModel {
     @ObservationIgnored private var wasAlreadyFinishedOnOpen: Bool
     @ObservationIgnored private var paceAnchorPage: Int?
     @ObservationIgnored private var paceAnchorDate: Date?
+    @ObservationIgnored private var savePreferencesTask: Task<Void, Never>?
     @ObservationIgnored let sessionOpenedAt = Date()
 
     var chapters: [ReaderChapter] = [] {
@@ -266,6 +267,17 @@ final class ReaderModel {
     }
 
     func savePreferences() {
+        savePreferencesTask?.cancel()
+        savePreferencesTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            guard !Task.isCancelled else { return }
+            self?.flushPreferences()
+        }
+    }
+
+    func flushPreferences() {
+        savePreferencesTask?.cancel()
+        savePreferencesTask = nil
         library.setPreferences(
             ReaderPreferences(
                 theme: library.preferences.theme.rawValue,
@@ -344,7 +356,6 @@ final class ReaderModel {
         let title = chapters[chapterIndex].title
         guard book.lastChapterTitle != title else { return }
         book.lastChapterTitle = title
-        library.save()
         #if os(iOS)
         ReadingActivityController.shared.refresh()
         #endif

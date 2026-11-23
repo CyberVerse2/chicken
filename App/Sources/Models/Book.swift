@@ -61,9 +61,12 @@ final class Book {
 
     var format: BookFormat { BookFormat(rawValue: formatRaw) ?? .unknown }
 
+    private static let preferencesEncoder = JSONEncoder()
+    private static let preferencesDecoder = JSONDecoder()
+
     var preferences: ReaderPreferences? {
-        get { preferencesData.flatMap { try? JSONDecoder().decode(ReaderPreferences.self, from: $0) } }
-        set { preferencesData = newValue.flatMap { try? JSONEncoder().encode($0) } }
+        get { preferencesData.flatMap { try? Self.preferencesDecoder.decode(ReaderPreferences.self, from: $0) } }
+        set { preferencesData = newValue.flatMap { try? Self.preferencesEncoder.encode($0) } }
     }
 
     var displayTitle: String {

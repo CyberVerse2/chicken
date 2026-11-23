@@ -131,12 +131,14 @@ struct NotebookView: View {
     }
 
     private var colorFilter: some View {
-        ScrollView(.horizontal) {
+        var counts: [HighlightColor: Int] = [:]
+        for item in highlights { counts[item.color, default: 0] += 1 }
+        return ScrollView(.horizontal) {
             GlassEffectContainer(spacing: 8) {
                 HStack(spacing: 8) {
                     colorPill(nil, label: "All", count: highlights.count)
                     ForEach(HighlightColor.allCases) { option in
-                        let count = highlights.filter { $0.color == option }.count
+                        let count = counts[option] ?? 0
                         if count > 0 { colorPill(option, label: option.label, count: count) }
                     }
                 }

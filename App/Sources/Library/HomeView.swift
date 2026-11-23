@@ -17,38 +17,66 @@ struct HomeView: View {
     private var isCompact: Bool { sizeClass == .compact }
     private var gutter: CGFloat { isCompact ? 20 : 40 }
 
-    private var activeBook: Book? {
-        books.first { $0.lastOpenedAt != nil && !$0.isFinished }
+    private struct DerivedSections {
+        let activeBook: Book?
+        let featuredBook: Book?
+        let deskBooks: [Book]
+        let upNext: [Book]
+        let finishedThisYearCount: Int
     }
 
-    private var unfinishedByRecent: [Book] {
-        books
-            .filter { !$0.isFinished }
-            .sorted { lhs, rhs in
-                if lhs.importedAt != rhs.importedAt { return lhs.importedAt > rhs.importedAt }
-                return lhs.title < rhs.title
+    private var sections: DerivedSections {
+        let now = Date()
+        let calendar = Calendar.current
+        var active: Book?
+        var unfinished: [Book] = []
+        var finishedCount = 0
+
+        for book in books {
+            if book.isFinished {
+                if let finishedAt = book.finishedAt, calendar.isDate(finishedAt, equalTo: now, toGranularity: .year) {
+                    finishedCount += 1
+                }
+            } else {
+                if active == nil && book.lastOpenedAt != nil {
+                    active = book
+                }
+                unfinished.append(book)
             }
-    }
+        }
 
-    private var featuredBook: Book? {
-        activeBook ?? unfinishedByRecent.first ?? books.first
-    }
+        let featured = active ?? unfinished.max(by: { lhs, rhs in
+            if lhs.importedAt != rhs.importedAt { return lhs.importedAt < rhs.importedAt }
+            return lhs.title > rhs.title
+        }) ?? books.first
 
-    private var deskBooks: [Book] {
-        books.filter { $0.progress > 0 && !$0.isFinished && $0.id != featuredBook?.id }
-    }
+        let featuredID = featured?.id
+        var desk: [Book] = []
+        var nextCandidates: [Book] = []
+        for book in unfinished where book.id != featuredID {
+            if book.progress > 0 {
+                desk.append(book)
+            } else {
+                nextCandidates.append(book)
+            }
+        }
+        nextCandidates.sort { lhs, rhs in
+            if lhs.importedAt != rhs.importedAt { return lhs.importedAt > rhs.importedAt }
+            return lhs.title < rhs.title
+        }
 
-    private var upNext: [Book] {
-        let excluded = Set(([featuredBook?.id].compactMap { $0 }) + deskBooks.map(\.id))
-        return Array(unfinishedByRecent.filter { !excluded.contains($0.id) }.prefix(16))
-    }
-
-    private var finishedThisYear: [Book] {
-        books.filter { $0.finishedAt.map { Calendar.current.isDate($0, equalTo: Date(), toGranularity: .year) } ?? false }
-            .sorted { ($0.finishedAt ?? .distantPast) > ($1.finishedAt ?? .distantPast) }
+        return DerivedSections(
+            activeBook: active,
+            featuredBook: featured,
+            deskBooks: desk,
+            upNext: Array(nextCandidates.prefix(16)),
+            finishedThisYearCount: finishedCount
+        )
     }
 
     var body: some View {
+        let s = sections
+        let hero = s.featuredBook
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 if let summary = library.migrationSummary {
@@ -62,10 +90,10 @@ struct HomeView: View {
                     EmptyLibraryView()
                         .padding(.horizontal, gutter)
                         .padding(.top, 20)
-                } else if let hero = featuredBook {
+                } else if let hero {
                     ReadingDeskStage(
                         book: hero,
-                        isContinuing: activeBook != nil,
+                        isContinuing: s.activeBook != nil,
                         coverHue: heroHue,
                         gutter: gutter,
                         onRead: {
@@ -78,19 +106,19 @@ struct HomeView: View {
                     )
 
                     VStack(alignment: .leading, spacing: isCompact ? 34 : 42) {
-                        if !deskBooks.isEmpty {
-                            BookShelf(title: "Also reading", books: deskBooks, gutter: gutter, showsProgress: true)
+                        if !s.deskBooks.isEmpty {
+                            BookShelf(title: "Also reading", books: s.deskBooks, gutter: gutter, showsProgress: true)
                         }
 
-                        if !upNext.isEmpty {
-                            BookShelf(title: "Up next", books: upNext, gutter: gutter)
+                        if !s.upNext.isEmpty {
+                            BookShelf(title: "Up next", books: s.upNext, gutter: gutter)
                         }
 
                         NavigationLink {
                             YourReadingView()
                         } label: {
                             ReadingPulseStrip(
-                                finishedCount: finishedThisYear.count,
+                                finishedCount: s.finishedThisYearCount,
                                 annualGoal: library.preferences.annualBookGoal
                             )
                         }
@@ -109,7 +137,7 @@ struct HomeView: View {
         .background(alignment: .top) {
             ZStack(alignment: .top) {
                 palette.background.ignoresSafeArea()
-                if featuredBook != nil {
+                if hero != nil {
                     HomeAtmosphereBackdrop(coverHue: heroHue, isCompact: isCompact)
                         .frame(height: isCompact ? 560 : 460)
                         .ignoresSafeArea(edges: .top)
@@ -117,8 +145,8 @@ struct HomeView: View {
             }
         }
         .pageTitle("Home")
-        .task(id: "\(featuredBook?.id.uuidString ?? "none")-\(featuredBook?.coverImageName ?? "")") {
-            guard let hero = featuredBook else {
+        .task(id: "\(hero?.id.uuidString ?? "none")-\(hero?.coverImageName ?? "")") {
+            guard let hero else {
                 heroHue = nil
                 return
             }

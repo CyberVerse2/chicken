@@ -56,7 +56,7 @@ extension Image {
 
 extension PlatformColor {
     /// Builds a platform color from the same hex values the SwiftUI palette uses.
-    static func hex(_ value: UInt32, alpha: CGFloat = 1) -> PlatformColor {
+    nonisolated static func hex(_ value: UInt32, alpha: CGFloat = 1) -> PlatformColor {
         PlatformColor(
             red: CGFloat((value >> 16) & 0xFF) / 255,
             green: CGFloat((value >> 8) & 0xFF) / 255,

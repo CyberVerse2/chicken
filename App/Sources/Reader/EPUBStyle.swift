@@ -43,12 +43,17 @@ struct EPUBStyle: Equatable {
         }
 
         return """
-        html { background: \(background) !important; color: \(text) !important; -webkit-text-size-adjust: 100%; }
+        :root {
+          --ch-bg: \(background);
+          --ch-text: \(text);
+          --ch-muted: \(muted);
+        }
+        html { background: var(--ch-bg) !important; color: var(--ch-text) !important; -webkit-text-size-adjust: 100%; }
         body {
           box-sizing: border-box;
           margin: 0 auto !important;
-          background: \(background) !important;
-          color: \(text) !important;
+          background: var(--ch-bg) !important;
+          color: var(--ch-text) !important;
           font-family: \(serif) !important;
           font-size: \(size)px !important;
           line-height: \(lineHeight) !important;
@@ -56,10 +61,10 @@ struct EPUBStyle: Equatable {
         }
         body::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: \(horizontal ? "none" : "initial"); }
         \(layout)
-        .chicken-spine-section { box-sizing: border-box; }
+        .chicken-spine-section { box-sizing: border-box; \(horizontal ? "" : "contain: layout style;") }
         .chicken-spine-section p, .chicken-spine-section li, .chicken-spine-section blockquote,
         .chicken-spine-section dd, .chicken-spine-section dt, .chicken-spine-section figcaption {
-          color: \(text) !important;
+          color: var(--ch-text) !important;
           font-size: \(size)px !important;
           line-height: \(lineHeight) !important;
         }
@@ -72,7 +77,7 @@ struct EPUBStyle: Equatable {
         }
         .chicken-spine-section h1, .chicken-spine-section h2, .chicken-spine-section h3,
         .chicken-spine-section h4, .chicken-spine-section h5, .chicken-spine-section h6 {
-          color: \(text) !important;
+          color: var(--ch-text) !important;
           font-family: \(display) !important;
           font-weight: 600 !important;
           letter-spacing: -0.02em;
@@ -80,7 +85,7 @@ struct EPUBStyle: Equatable {
         }
         .chicken-spine-section hr {
           border: 0 !important; height: auto !important; margin: 1.8em auto !important;
-          text-align: center !important; color: \(muted) !important; background: transparent !important;
+          text-align: center !important; color: var(--ch-muted) !important; background: transparent !important;
           font-family: \(serif) !important; font-size: 0.9em !important; letter-spacing: 0.6em !important; line-height: 1 !important;
         }
         .chicken-spine-section hr::before { content: "* * *"; }
@@ -89,9 +94,9 @@ struct EPUBStyle: Equatable {
           border-collapse: collapse; font-size: max(13px, \(size - 2)px) !important; line-height: 1.45 !important;
         }
         .chicken-spine-section th, .chicken-spine-section td {
-          color: \(text) !important; padding: 0.28em 0.7em 0.28em 0 !important; vertical-align: top !important;
+          color: var(--ch-text) !important; padding: 0.28em 0.7em 0.28em 0 !important; vertical-align: top !important;
         }
-        .chicken-spine-section a { color: \(muted) !important; }
+        .chicken-spine-section a { color: var(--ch-muted) !important; }
         .chicken-spine-section img, .chicken-spine-section svg, .chicken-spine-section video {
           max-width: 100% !important; height: auto !important; \(horizontal ? "max-height: calc(100dvh - 180px) !important; object-fit: contain;" : "")
         }
@@ -103,6 +108,14 @@ struct EPUBStyle: Equatable {
           scroll-margin-top: 18vh;
         }
         """
+    }
+
+    func hasSameLayout(as other: EPUBStyle) -> Bool {
+        fontSize == other.fontSize
+            && lineHeight == other.lineHeight
+            && columnWidth == other.columnWidth
+            && mode == other.mode
+            && typeface == other.typeface
     }
 
     private static var pagedBottomPadding: Int {

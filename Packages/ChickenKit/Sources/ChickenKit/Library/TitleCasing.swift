@@ -1,4 +1,20 @@
 import Foundation
+import Synchronization
+
+private final class ReadableTitleCache: Sendable {
+    static let shared = ReadableTitleCache()
+    private let cache = Mutex<[String: String]>([:])
+
+    func getOrCompute(_ key: String, compute: () -> String) -> String {
+        if let cached = cache.withLock({ $0[key] }) { return cached }
+        let value = compute()
+        cache.withLock { map in
+            if map.count >= 2048 { map.removeAll(keepingCapacity: true) }
+            map[key] = value
+        }
+        return value
+    }
+}
 
 public extension String {
     /// The title as Chicken shows it. Publishers often store titles in all
@@ -7,18 +23,20 @@ public extension String {
     /// any lowercase letters are left exactly as the publisher wrote them.
     var readableTitle: String {
         guard contains(where: \.isUppercase), !contains(where: \.isLowercase) else { return self }
-        let words = split(separator: " ", omittingEmptySubsequences: false).map(String.init)
-        // A single short word in caps is probably an acronym ("SPQR", "IT").
-        if words.count == 1, count <= 4 { return self }
+        return ReadableTitleCache.shared.getOrCompute(self) {
+            let words = split(separator: " ", omittingEmptySubsequences: false).map(String.init)
+            if words.count == 1, count <= 4 { return self }
 
-        var result: [String] = []
-        var startsPhrase = true
-        for (index, word) in words.enumerated() {
-            let isLast = index == words.count - 1
-            result.append(Self.titleCased(word, capitalizingMinor: startsPhrase || isLast))
-            if !word.isEmpty { startsPhrase = word.last.map { ":—–?!.".contains($0) } ?? false }
+            var result: [String] = []
+            result.reserveCapacity(words.count)
+            var startsPhrase = true
+            for (index, word) in words.enumerated() {
+                let isLast = index == words.count - 1
+                result.append(Self.titleCased(word, capitalizingMinor: startsPhrase || isLast))
+                if !word.isEmpty { startsPhrase = word.last.map { ":—–?!.".contains($0) } ?? false }
+            }
+            return result.joined(separator: " ")
         }
-        return result.joined(separator: " ")
     }
 
     private static let minorWords: Set<String> = [

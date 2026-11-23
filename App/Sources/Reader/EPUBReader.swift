@@ -3,8 +3,6 @@ import os
 import SwiftUI
 import WebKit
 
-/// EPUB reader: the book is unpacked into the caches directory, stitched
-/// into one document, and shown in a web view driven by `ChickenReader.js`.
 struct EPUBReader: PlatformViewRepresentable {
     let model: ReaderModel
     let fileURL: URL
@@ -15,60 +13,36 @@ struct EPUBReader: PlatformViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(model: model) }
 
     func makeView(context: Context) -> WKWebView {
-        let configuration = WKWebViewConfiguration()
-        let controller = configuration.userContentController
-        controller.add(WeakMessageHandler(context.coordinator), name: "chicken")
-        if let script = Self.runtimeScript {
-            controller.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
-        }
-        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-        #if os(iOS)
-        configuration.dataDetectorTypes = []
-        #endif
-
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = EPUBWebViewPool.shared.acquire(messageHandler: context.coordinator)
         webView.navigationDelegate = context.coordinator
-        webView.isInspectable = true
-        #if os(macOS)
-        webView.setValue(false, forKey: "drawsBackground")
-        #else
-        webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.contentInsetAdjustmentBehavior = .never
-        #endif
-
-        context.coordinator.webView = webView
-        context.coordinator.onTapCenter = onTapCenter
-        context.coordinator.style = style
-        context.coordinator.load(fileURL, cacheDirectory: cacheDirectory)
+        context.coordinator.attach(webView: webView, style: style, onTapCenter: onTapCenter)
+        context.coordinator.load(fileURL)
         return webView
     }
 
     func updateView(_ webView: WKWebView, context: Context) {
         let coordinator = context.coordinator
         coordinator.onTapCenter = onTapCenter
-        if coordinator.style != style {
+        if let previous = coordinator.style, previous != style {
+            let themeOnly = previous.hasSameLayout(as: style)
             coordinator.style = style
-            coordinator.applyStyle(preservePosition: true)
+            coordinator.applyStyle(preservePosition: !themeOnly, themeOnly: themeOnly)
+        } else if coordinator.style == nil {
+            coordinator.style = style
         }
     }
 
     static func dismantleView(_ webView: WKWebView, coordinator: Coordinator) {
         coordinator.captureLocation()
         coordinator.tearDown()
+        EPUBWebViewPool.shared.release(webView)
     }
-
-    private static let runtimeScript: String? = {
-        guard let url = Bundle.main.url(forResource: "ChickenReader", withExtension: "js") else { return nil }
-        return try? String(contentsOf: url, encoding: .utf8)
-    }()
 
     final class Coordinator: NSObject, ReaderEngine, WKNavigationDelegate, WKScriptMessageHandler {
         private enum Lifecycle {
             case idle
             case loading(Task<Void, Never>)
-            case loaded(EPUBPublication, isReady: Bool)
+            case loaded(EPUBBookSession, isReady: Bool)
             case tornDown
         }
 
@@ -77,10 +51,18 @@ struct EPUBReader: PlatformViewRepresentable {
         var style: EPUBStyle?
         var onTapCenter: () -> Void = {}
         private var lifecycle: Lifecycle = .idle
-        private var restoreTask: Task<Void, Never>?
+        private var searchTask: Task<Void, Never>?
+        private var searchQuery = ""
+        private var searchMatches: [EPUBBookSession.SearchMatch] = []
+        private var searchIndex = -1
+        private var registeredBookID: UUID?
+        private var loadStartedAt: ContinuousClock.Instant?
+        #if os(iOS)
+        private var scrollBridge: EPUBScrollBridge?
+        #endif
 
-        private var publication: EPUBPublication? {
-            if case .loaded(let publication, _) = lifecycle { return publication }
+        private var session: EPUBBookSession? {
+            if case .loaded(let session, _) = lifecycle { return session }
             return nil
         }
 
@@ -95,18 +77,78 @@ struct EPUBReader: PlatformViewRepresentable {
             model.engine = self
         }
 
-        func load(_ url: URL, cacheDirectory: URL) {
+        func attach(webView: WKWebView, style: EPUBStyle, onTapCenter: @escaping () -> Void) {
+            self.webView = webView
+            self.style = style
+            self.onTapCenter = onTapCenter
+            #if os(iOS)
+            let bridge = EPUBScrollBridge { [weak self] delta in
+                self?.call("chicken.turnChapter", delta)
+            }
+            scrollBridge = bridge
+            webView.scrollView.delegate = bridge
+            updateScrollViewPaging(for: style.mode)
+            #endif
+        }
+
+        func load(_ url: URL) {
+            let start = ContinuousClock.now
+            loadStartedAt = start
+            let initialStyle = style ?? EPUBStyle(
+                palette: ReadingTheme.paper.palette,
+                fontSize: model.fontSize,
+                lineHeight: model.lineHeight,
+                columnWidth: model.columnWidth,
+                mode: model.readingMode,
+                typeface: model.typeface
+            )
+            let preferredLocation = model.preferredStartLocation
+            let fallbackChapter = model.chapterIndex
+            let highlights = (model.book.highlights ?? []).map {
+                HighlightPayload(id: $0.id.uuidString, text: $0.text, spineIndex: $0.chapterIndex, color: $0.color.cssFill)
+            }
+            let sessionBookID = UUID()
+            let nativeSwipe = Platform.isMac ? false : initialStyle.mode.isHorizontal
+            let styleCSS = initialStyle.css
+            let modeRaw = initialStyle.mode.rawValue
+            let backgroundCSS = ReaderPalette.css(initialStyle.palette.backgroundHex)
+            let textColorCSS = ReaderPalette.css(initialStyle.palette.textHex)
+            let mutedColorCSS = ReaderPalette.css(initialStyle.palette.mutedHex)
+            let layoutKey = "\(Int(initialStyle.fontSize))|\(initialStyle.lineHeight)|\(Int(initialStyle.columnWidth))|\(initialStyle.mode.rawValue)|\(initialStyle.typeface.rawValue)"
+
             let task = Task { [weak self] in
-                let result = await Self.preparePublication(url: url, cacheDirectory: cacheDirectory)
+                let result = await Self.prepareInitialLoad(
+                    url: url,
+                    bookID: sessionBookID,
+                    modeRaw: modeRaw,
+                    styleCSS: styleCSS,
+                    backgroundCSS: backgroundCSS,
+                    textColorCSS: textColorCSS,
+                    mutedColorCSS: mutedColorCSS,
+                    layoutKey: layoutKey,
+                    nativeSwipe: nativeSwipe,
+                    preferredLocation: preferredLocation,
+                    fallbackChapter: fallbackChapter,
+                    highlights: highlights
+                )
                 guard let self, !Task.isCancelled else { return }
                 if case .tornDown = self.lifecycle { return }
                 switch result {
-                case .success(let publication):
-                    self.lifecycle = .loaded(publication, isReady: false)
-                    self.model.chapters = publication.spine.enumerated().map { index, item in
+                case .success(let prepared):
+                    self.registeredBookID = prepared.session.bookID
+                    EPUBSchemeRegistry.shared.register(session: prepared.session)
+                    EPUBSchemeRegistry.shared.stageInitialHTML(prepared.htmlData, token: prepared.token, for: prepared.session.bookID)
+                    self.lifecycle = .loaded(prepared.session, isReady: false)
+                    self.model.chapters = prepared.session.package.spine.enumerated().map { index, item in
                         ReaderChapter(id: index, title: item.title, level: item.tocLevel)
                     }
-                    self.webView?.loadFileURL(publication.documentURL, allowingReadAccessTo: publication.rootURL)
+                    let loadURL = URL(string: "\(EPUBSchemeRegistry.scheme)://\(prepared.session.bookID.uuidString)/__reader/\(prepared.token)")!
+                    self.webView?.load(URLRequest(url: loadURL))
+                    if let t0 = self.loadStartedAt {
+                        let d = t0.duration(to: .now)
+                        let ms = Double(d.components.seconds) * 1000.0 + Double(d.components.attoseconds) / 1e15
+                        PerfMonitor.log("epub_session_prepared", ms: ms, bytes: prepared.htmlData.count)
+                    }
                 case .failure(let error):
                     ChickenLog.epub.error("Failed to open EPUB: \(error.localizedDescription, privacy: .public)")
                     self.model.engineDidFail(
@@ -118,45 +160,153 @@ struct EPUBReader: PlatformViewRepresentable {
             lifecycle = .loading(task)
         }
 
+        nonisolated private struct HighlightPayload: Encodable, Sendable {
+            let id: String
+            let text: String
+            let spineIndex: Int
+            let color: String
+        }
+
+        private struct PreparedLoad: @unchecked Sendable {
+            let session: EPUBBookSession
+            let htmlData: Data
+            let token: String
+        }
+
         @concurrent
-        private static func preparePublication(url: URL, cacheDirectory: URL) async -> Result<EPUBPublication, any Error> {
-            Result { try EPUBPublication.prepare(bookAt: url, cacheDirectory: cacheDirectory) }
+        private static func prepareInitialLoad(
+            url: URL,
+            bookID: UUID,
+            modeRaw: String,
+            styleCSS: String,
+            backgroundCSS: String,
+            textColorCSS: String,
+            mutedColorCSS: String,
+            layoutKey: String,
+            nativeSwipe: Bool,
+            preferredLocation: String?,
+            fallbackChapter: Int,
+            highlights: [HighlightPayload]
+        ) async -> Result<PreparedLoad, any Error> {
+            Result {
+                let session = try EPUBBookSession(bookAt: url, bookID: bookID)
+                let decoded = EPUBLocation.decode(preferredLocation)
+                let resolvedIndex: Int
+                let progression: Double
+                let pageWithinSpine: Int?
+                if let decoded,
+                   session.package.spine.indices.contains(decoded.spineIndex),
+                   session.package.spine[decoded.spineIndex].locationHref == decoded.href {
+                    resolvedIndex = decoded.spineIndex
+                    progression = decoded.progression
+                    pageWithinSpine = decoded.pageWithinSpine
+                } else if session.package.spine.indices.contains(fallbackChapter) {
+                    resolvedIndex = fallbackChapter
+                    progression = 0
+                    pageWithinSpine = nil
+                } else {
+                    resolvedIndex = 0
+                    progression = 0
+                    pageWithinSpine = nil
+                }
+
+                var groupedHighlights: [String: [HighlightPayload]] = [:]
+                for item in highlights {
+                    groupedHighlights[String(item.spineIndex), default: []].append(item)
+                }
+
+                let boot = BootPayload(
+                    mode: modeRaw,
+                    nativeSwipe: nativeSwipe,
+                    background: backgroundCSS,
+                    textColor: textColorCSS,
+                    mutedColor: mutedColorCSS,
+                    layoutKey: layoutKey,
+                    spineCount: session.package.spine.count,
+                    spineWeights: session.spineWeights,
+                    cumulativeWeights: session.cumulativeWeights,
+                    totalWeight: session.totalWeight,
+                    initialChapter: resolvedIndex,
+                    restore: RestoreBoot(spineIndex: resolvedIndex, progression: progression, pageWithinSpine: pageWithinSpine),
+                    highlightsByChapter: groupedHighlights
+                )
+                let bootJSONData = try JSONEncoder().encode(boot)
+                let bootJSON = String(data: bootJSONData, encoding: .utf8) ?? "{}"
+                let html = session.initialDocumentHTML(chapterIndex: resolvedIndex, styleCSS: styleCSS, bootJSON: bootJSON)
+                return PreparedLoad(session: session, htmlData: Data(html.utf8), token: UUID().uuidString)
+            }
+        }
+
+        nonisolated private struct RestoreBoot: Encodable {
+            let spineIndex: Int
+            let progression: Double
+            let pageWithinSpine: Int?
+        }
+
+        nonisolated private struct BootPayload: Encodable {
+            let mode: String
+            let nativeSwipe: Bool
+            let background: String
+            let textColor: String
+            let mutedColor: String
+            let layoutKey: String
+            let spineCount: Int
+            let spineWeights: [Int]
+            let cumulativeWeights: [Int]
+            let totalWeight: Int
+            let initialChapter: Int
+            let restore: RestoreBoot
+            let highlightsByChapter: [String: [HighlightPayload]]
         }
 
         func tearDown() {
             if case .loading(let task) = lifecycle { task.cancel() }
             lifecycle = .tornDown
-            restoreTask?.cancel()
-            restoreTask = nil
-            webView?.stopLoading()
-            webView?.navigationDelegate = nil
-            webView?.configuration.userContentController.removeScriptMessageHandler(forName: "chicken")
+            searchTask?.cancel()
+            searchTask = nil
+            if let registeredBookID {
+                let bytes = EPUBSchemeRegistry.shared.totalBytesServed(for: registeredBookID)
+                PerfMonitor.log("epub_session_closed", bytes: bytes)
+                EPUBSchemeRegistry.shared.unregister(bookID: registeredBookID)
+                self.registeredBookID = nil
+            }
         }
 
-        // MARK: Script bridge
-
-        func applyStyle(preservePosition: Bool) {
+        func applyStyle(preservePosition: Bool, themeOnly: Bool = false) {
             guard isReady, let style else { return }
-            let config: [String: Any] = [
-                "mode": style.mode.rawValue,
-                "horizontal": style.mode.isHorizontal,
-                "spread": style.mode == .spread,
+            var config: [String: Any] = [
                 "background": ReaderPalette.css(style.palette.backgroundHex),
-                "css": style.css,
-                "preservePosition": preservePosition,
-                "nativeSwipe": Platform.isMac ? false : style.mode.isHorizontal,
+                "textColor": ReaderPalette.css(style.palette.textHex),
+                "mutedColor": ReaderPalette.css(style.palette.mutedHex),
+                "themeOnly": themeOnly,
             ]
+            if !themeOnly {
+                config["mode"] = style.mode.rawValue
+                config["horizontal"] = style.mode.isHorizontal
+                config["spread"] = style.mode == .spread
+                config["css"] = style.css
+                config["preservePosition"] = preservePosition
+                config["nativeSwipe"] = Platform.isMac ? false : style.mode.isHorizontal
+                config["layoutKey"] = "\(Int(style.fontSize))|\(style.lineHeight)|\(Int(style.columnWidth))|\(style.mode.rawValue)|\(style.typeface.rawValue)"
+            }
             call("chicken.configure", config)
             #if os(iOS)
-            if let scrollView = webView?.scrollView {
-                scrollView.isScrollEnabled = true
-                scrollView.isPagingEnabled = style.mode.isHorizontal
-                scrollView.bounces = true
-                scrollView.alwaysBounceHorizontal = style.mode.isHorizontal
-                scrollView.showsHorizontalScrollIndicator = false
+            if !themeOnly {
+                updateScrollViewPaging(for: style.mode)
             }
             #endif
         }
+
+        #if os(iOS)
+        private func updateScrollViewPaging(for mode: ReadingMode) {
+            guard let scrollView = webView?.scrollView else { return }
+            scrollView.isScrollEnabled = true
+            scrollView.isPagingEnabled = mode.isHorizontal
+            scrollView.bounces = true
+            scrollView.alwaysBounceHorizontal = mode.isHorizontal
+            scrollView.showsHorizontalScrollIndicator = false
+        }
+        #endif
 
         private func call(_ function: String, _ arguments: Any...) {
             let encoded = arguments.map(Self.javascriptLiteral).joined(separator: ", ")
@@ -178,13 +328,17 @@ struct EPUBReader: PlatformViewRepresentable {
         private func handle(_ message: MessagePayload) {
             switch message.type {
             case "ready":
-                if case .loaded(let pub, _) = lifecycle {
-                    lifecycle = .loaded(pub, isReady: true)
+                if case .loaded(let session, _) = lifecycle {
+                    lifecycle = .loaded(session, isReady: true)
+                }
+                if let t0 = loadStartedAt {
+                    let d = t0.duration(to: .now)
+                    let ms = Double(d.components.seconds) * 1000.0 + Double(d.components.attoseconds) / 1e15
+                    PerfMonitor.log("epub_ready", ms: ms)
+                    loadStartedAt = nil
                 }
                 model.engineDidBecomeReady()
-                applyStyle(preservePosition: false)
-                refreshHighlights()
-                restoreInitialLocation()
+                handleProgress(message)
                 focusWebView()
             case "progress":
                 handleProgress(message)
@@ -216,7 +370,7 @@ struct EPUBReader: PlatformViewRepresentable {
         }
 
         private func handleProgress(_ message: MessagePayload) {
-            guard let publication, let index = message.index, publication.spine.indices.contains(index) else { return }
+            guard let session, let index = message.index, session.package.spine.indices.contains(index) else { return }
             model.engineDidChangeChapter(index)
 
             let displayPage = message.page.map { $0 + 1 }
@@ -227,7 +381,7 @@ struct EPUBReader: PlatformViewRepresentable {
             model.chapterPageCount = message.chapterPageCount
 
             let location = EPUBLocation(
-                href: publication.spine[index].locationHref,
+                href: session.package.spine[index].locationHref,
                 spineIndex: index,
                 progression: message.sectionProgression ?? 0,
                 globalProgression: message.progression ?? 0,
@@ -235,36 +389,6 @@ struct EPUBReader: PlatformViewRepresentable {
                 pageWithinSpine: message.pageWithinSpine
             )
             model.reportProgress(message.progression ?? 0, location: location.encoded)
-        }
-
-        private func restoreInitialLocation() {
-            guard let publication else { return }
-            if let location = EPUBLocation.decode(model.preferredStartLocation),
-               publication.spine.indices.contains(location.spineIndex),
-               publication.spine[location.spineIndex].locationHref == location.href {
-                scheduleRestore(location, settlePasses: 2)
-            } else {
-                let start = EPUBLocation(href: "", spineIndex: model.chapterIndex, progression: 0, globalProgression: 0)
-                scheduleRestore(start, settlePasses: 0)
-            }
-        }
-
-        private func scheduleRestore(_ location: EPUBLocation, settlePasses: Int, force: Bool = false) {
-            restoreTask?.cancel()
-            let payload: [String: Any] = [
-                "spineIndex": location.spineIndex,
-                "progression": location.progression,
-                "pageNumber": location.pageNumber as Any? ?? NSNull(),
-            ]
-            call("chicken.restore", payload, force)
-            guard settlePasses > 0 else { return }
-            restoreTask = Task { [weak self] in
-                for _ in 0..<settlePasses {
-                    try? await Task.sleep(for: .milliseconds(180))
-                    guard !Task.isCancelled, let self, self.isReady else { return }
-                    self.call("chicken.restore", payload, false)
-                }
-            }
         }
 
         private func focusWebView() {
@@ -276,30 +400,72 @@ struct EPUBReader: PlatformViewRepresentable {
             #endif
         }
 
-        // MARK: ReaderEngine
-
         func goToChapter(_ index: Int) {
             guard isReady else { return }
-            restoreTask?.cancel()
             call("chicken.scrollToSection", index, 0)
         }
 
         func seek(to progress: Double) {
-            restoreTask?.cancel()
+            guard isReady else { return }
             call("chicken.scrollToProgress", progress)
         }
 
         func jump(to location: String?, chapterIndex: Int) {
-            restoreTask?.cancel()
+            guard isReady else { return }
             if let location = EPUBLocation.decode(location) {
-                scheduleRestore(location, settlePasses: 0, force: true)
+                let payload: [String: Any] = [
+                    "spineIndex": location.spineIndex,
+                    "progression": location.progression,
+                    "pageWithinSpine": location.pageWithinSpine as Any? ?? NSNull(),
+                ]
+                call("chicken.restore", payload, true)
             } else {
                 goToChapter(chapterIndex)
             }
         }
 
         func search(_ query: String, backwards: Bool) {
-            call("chicken.search", query, backwards)
+            guard isReady, let session else { return }
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                model.searchMatchSummary = nil
+                return
+            }
+            if trimmed == searchQuery && !searchMatches.isEmpty {
+                advanceSearch(query: trimmed, backwards: backwards)
+                return
+            }
+            searchTask?.cancel()
+            searchQuery = trimmed
+            searchMatches = []
+            searchIndex = -1
+            searchTask = Task { [weak self] in
+                let matches = await Self.runSearch(session: session, query: trimmed)
+                guard let self, !Task.isCancelled, self.searchQuery == trimmed else { return }
+                self.searchMatches = matches
+                self.searchIndex = backwards ? matches.count : -1
+                self.advanceSearch(query: trimmed, backwards: backwards)
+            }
+        }
+
+        @concurrent
+        private static func runSearch(session: EPUBBookSession, query: String) async -> [EPUBBookSession.SearchMatch] {
+            session.search(query)
+        }
+
+        private func advanceSearch(query: String, backwards: Bool) {
+            guard !searchMatches.isEmpty else {
+                model.searchMatchSummary = "No matches"
+                return
+            }
+            if backwards {
+                searchIndex = searchIndex <= 0 ? searchMatches.count - 1 : searchIndex - 1
+            } else {
+                searchIndex = (searchIndex + 1) % searchMatches.count
+            }
+            let match = searchMatches[searchIndex]
+            model.searchMatchSummary = "\(searchIndex + 1) of \(searchMatches.count)"
+            call("chicken.highlightSearchMatch", query, match.spineIndex, match.occurrenceInSpine)
         }
 
         func clearSelection() {
@@ -322,8 +488,6 @@ struct EPUBReader: PlatformViewRepresentable {
             }
         }
 
-        // MARK: Reading aloud
-
         func readAloudPassages(after: String?) async -> [SpokenPassage] {
             guard isReady, let webView else { return [] }
             let value = try? await webView.callAsyncJavaScript(
@@ -345,11 +509,11 @@ struct EPUBReader: PlatformViewRepresentable {
             call("chicken.endReadingAloud")
         }
 
-        // MARK: Navigation
-
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
             guard let url = navigationAction.request.url else { return .cancel }
-            if url.isFileURL { return .allow }
+            if url.scheme == EPUBSchemeRegistry.scheme || url.isFileURL || url.absoluteString == "about:blank" {
+                return .allow
+            }
             if navigationAction.navigationType == .linkActivated {
                 #if os(macOS)
                 NSWorkspace.shared.open(url)
@@ -361,6 +525,27 @@ struct EPUBReader: PlatformViewRepresentable {
         }
     }
 }
+
+#if os(iOS)
+private final class EPUBScrollBridge: NSObject, UIScrollViewDelegate {
+    let onTurnChapter: (Int) -> Void
+
+    init(onTurnChapter: @escaping (Int) -> Void) {
+        self.onTurnChapter = onTurnChapter
+    }
+
+    func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
+        guard scrollView.isPagingEnabled else { return }
+        let x = scrollView.contentOffset.x
+        let maxX = max(0, scrollView.contentSize.width - scrollView.bounds.width)
+        if x < -36 {
+            onTurnChapter(-1)
+        } else if x > maxX + 36 {
+            onTurnChapter(1)
+        }
+    }
+}
+#endif
 
 nonisolated private struct MessagePayload: Sendable {
     let type: String
@@ -395,17 +580,5 @@ nonisolated private struct MessagePayload: Sendable {
         pageCount = int("pageCount")
         pageWithinSpine = int("pageWithinSpine")
         chapterPageCount = int("chapterPageCount")
-    }
-}
-
-private final class WeakMessageHandler: NSObject, WKScriptMessageHandler {
-    weak var target: (any WKScriptMessageHandler)?
-
-    init(_ target: any WKScriptMessageHandler) {
-        self.target = target
-    }
-
-    func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        target?.userContentController(controller, didReceive: message)
     }
 }

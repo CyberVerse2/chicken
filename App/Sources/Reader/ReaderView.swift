@@ -213,7 +213,7 @@ struct ReaderView: View {
             zenHintTask?.cancel()
             model.readAloud.stop()
             model.engine?.captureLocation()
-            model.savePreferences()
+            model.flushPreferences()
             library.setOpen(false, book)
             library.save()
         }
@@ -309,36 +309,21 @@ struct ReaderView: View {
         Binding(get: { showChapters && isCompact }, set: { showChapters = $0 })
     }
 
-    private var isWaitingForFirstPage: Bool {
-        guard book.format == .epub || book.format == .pdf else { return false }
-        return fileState.url != nil
-            && model.error == nil
-            && model.currentPage == nil
-            && model.chapterProgress == nil
-            && !coverTimedOut
-    }
-
     private var readingSurface: some View {
         engineView
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay(alignment: .top) {
-                VStack(spacing: 10) {
-                    if let offered = remoteOffer.offered {
-                        furtherBanner(offered)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    } else if let catchUpDate, !isWaitingForFirstPage, !showSearch {
-                        PreviouslyCatchUpCard(
-                            book: book,
-                            lastOpened: catchUpDate,
-                            recentHighlight: book.sortedHighlights.first,
-                            onJumpToHighlight: { model.jump(toHighlight: $0) },
-                            onDismiss: { self.catchUpDate = nil }
-                        )
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
-                .padding(.top, 12)
-                .padding(.horizontal, 16)
+                ReaderTopBannerOverlay(
+                    model: model,
+                    book: book,
+                    remoteOffered: remoteOffer.offered,
+                    catchUpDate: catchUpDate,
+                    fileReady: fileState.url != nil,
+                    coverTimedOut: coverTimedOut,
+                    showSearch: showSearch,
+                    onDismissFurther: dismissFurther,
+                    onDismissCatchUp: { self.catchUpDate = nil }
+                )
             }
             .animation(reduceMotion ? nil : ChickenMotion.standard, value: remoteOffer.offered?.updatedAt)
             .animation(reduceMotion ? nil : ChickenMotion.standard, value: catchUpDate)
@@ -348,19 +333,15 @@ struct ReaderView: View {
             }
             .onChange(of: library.remoteChangeGeneration) { checkFurtherPosition() }
             .overlay {
-                if isWaitingForFirstPage {
-                    ZStack {
-                        palette.background
-                        BookCover(book: book, style: .hero)
-                            .frame(width: isCompact ? 200 : 260, height: isCompact ? 300 : 390)
-                            .shadow(color: palette.shadow, radius: 22, x: 0, y: 14)
-                    }
-                    .ignoresSafeArea()
-                    .transition(.opacity)
-                    .allowsHitTesting(false)
-                }
+                ReaderCoverWaitingOverlay(
+                    model: model,
+                    book: book,
+                    fileReady: fileState.url != nil,
+                    coverTimedOut: coverTimedOut,
+                    isCompact: isCompact,
+                    reduceMotion: reduceMotion
+                )
             }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: isWaitingForFirstPage)
             .task(id: fileState.url) {
                 guard fileState.url != nil else { return }
                 coverTimedOut = false
@@ -384,13 +365,7 @@ struct ReaderView: View {
             }
             .animation(reduceMotion ? nil : ChickenMotion.standard, value: showingZenHint)
             .overlay(alignment: .topTrailing) {
-                if model.error == nil && fileState.url != nil {
-                    PullRibbonOverlay(
-                        isBookmarked: model.isBookmarked,
-                        isCompact: isCompact,
-                        onToggle: { model.toggleBookmark() }
-                    )
-                }
+                ReaderRibbonHost(model: model, fileReady: fileState.url != nil, isCompact: isCompact)
             }
             .overlay(alignment: .top) {
                 if showSearch && chromeVisible {
@@ -405,27 +380,11 @@ struct ReaderView: View {
                 }
             }
             .overlay(alignment: .bottom) {
-                if let footnote = model.activeFootnote {
-                    FootnotePopoverCard(
-                        footnote: footnote,
-                        onJump: { model.jumpToFootnote(footnote) },
-                        onDismiss: { model.activeFootnote = nil }
-                    )
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, chromeVisible ? 88 : 24)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-                }
+                ReaderFootnoteOverlay(model: model, chromeVisible: chromeVisible, reduceMotion: reduceMotion)
             }
-            .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.activeFootnote)
             .overlay {
-                if let imagePreview = model.activeImage {
-                    ImageLightboxOverlay(preview: imagePreview) {
-                        model.activeImage = nil
-                    }
-                    .transition(.opacity)
-                }
+                ReaderImageOverlay(model: model, reduceMotion: reduceMotion)
             }
-            .animation(reduceMotion ? nil : ChickenMotion.micro, value: model.activeImage)
             #if os(macOS)
             .overlay(alignment: .topTrailing) {
                 if model.isZen {
@@ -445,47 +404,14 @@ struct ReaderView: View {
             }
             #endif
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                GlassEffectContainer(spacing: 10) {
-                    VStack(spacing: 10) {
-                        if model.selection != nil {
-                            HighlightPicker(model: model) { selectedText in
-                                presentQuoteCard(text: selectedText)
-                            }
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                        if model.readAloud.state != .idle {
-                            ReadAloudBar(
-                                controller: model.readAloud,
-                                chapter: model.chapters.isEmpty ? book.displayTitle : model.chapterTitle,
-                                compact: isCompact
-                            )
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                        if chromeVisible && model.error == nil {
-                            HStack(spacing: 8) {
-                                ReaderProgressBar(model: model, compact: isCompact)
-                                if model.isOnLastPage && !book.isFinished {
-                                    Button {
-                                        model.completeBookAndCelebrate()
-                                    } label: {
-                                        Label("Finish", systemImage: "checkmark")
-                                            .font(.chickenUI(12.5, weight: .semibold))
-                                            .padding(.horizontal, 12)
-                                            .padding(.vertical, 8)
-                                    }
-                                    .inkProminentButton()
-                                    .transition(.scale(scale: 0.92).combined(with: .opacity))
-                                }
-                            }
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-                    }
-                }
-                .padding(.horizontal, isCompact ? 12 : 24)
-                .padding(.bottom, isCompact ? 6 : 14)
-                .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.selection)
-                .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.readAloud.state)
-                .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.isOnLastPage)
+                ReaderBottomOverlay(
+                    model: model,
+                    book: book,
+                    chromeVisible: chromeVisible,
+                    isCompact: isCompact,
+                    reduceMotion: reduceMotion,
+                    onShareSelection: { selectedText in presentQuoteCard(text: selectedText) }
+                )
             }
     }
 
@@ -585,38 +511,6 @@ struct ReaderView: View {
     private func dismissFurther() {
         remoteOffer.dismissedAt = remoteOffer.offered?.updatedAt
         remoteOffer.offered = nil
-    }
-
-    private func furtherBanner(_ position: ReadingPosition) -> some View {
-        HStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("\(Int((position.progress * 100).rounded()))% on your \(position.deviceKind.isEmpty ? "other device" : position.deviceKind)")
-                    .font(.chickenUI(13.5, weight: .semibold))
-                    .foregroundStyle(palette.text)
-                Text(position.updatedAt, format: .relative(presentation: .named))
-                    .font(.chickenUI(12))
-                    .foregroundStyle(palette.muted)
-            }
-            Button("Go") {
-                model.jump(to: position)
-                dismissFurther()
-            }
-            .font(.chickenUI(13, weight: .medium))
-            .inkProminentButton()
-            Button(action: dismissFurther) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(palette.muted)
-                    .frame(width: 32, height: 32)
-                    .contentShape(Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Stay here")
-        }
-        .padding(.leading, 18)
-        .padding(.trailing, 10)
-        .padding(.vertical, 8)
-        .glassEffect(.regular, in: .capsule)
     }
 
     private var downloadingView: some View {
@@ -793,5 +687,219 @@ struct ReaderView: View {
 
     private var themeBinding: Binding<ReadingTheme> {
         Binding(get: { library.preferences.theme }, set: { library.preferences.theme = $0 })
+    }
+}
+
+private struct ReaderCoverWaitingOverlay: View {
+    @Environment(\.palette) private var palette
+    let model: ReaderModel
+    let book: Book
+    let fileReady: Bool
+    let coverTimedOut: Bool
+    let isCompact: Bool
+    let reduceMotion: Bool
+
+    private var waiting: Bool {
+        guard book.format == .epub || book.format == .pdf else { return false }
+        return fileReady
+            && model.error == nil
+            && model.currentPage == nil
+            && model.chapterProgress == nil
+            && !coverTimedOut
+    }
+
+    var body: some View {
+        Group {
+            if waiting {
+                ZStack {
+                    palette.background
+                    BookCover(book: book, style: .hero)
+                        .frame(width: isCompact ? 200 : 260, height: isCompact ? 300 : 390)
+                        .shadow(color: palette.shadow, radius: 22, x: 0, y: 14)
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .allowsHitTesting(false)
+            }
+        }
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.28), value: waiting)
+    }
+}
+
+private struct ReaderTopBannerOverlay: View {
+    @Environment(\.palette) private var palette
+    let model: ReaderModel
+    let book: Book
+    let remoteOffered: ReadingPosition?
+    let catchUpDate: Date?
+    let fileReady: Bool
+    let coverTimedOut: Bool
+    let showSearch: Bool
+    let onDismissFurther: () -> Void
+    let onDismissCatchUp: () -> Void
+
+    private var waitingForFirstPage: Bool {
+        guard book.format == .epub || book.format == .pdf else { return false }
+        return fileReady
+            && model.error == nil
+            && model.currentPage == nil
+            && model.chapterProgress == nil
+            && !coverTimedOut
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            if let offered = remoteOffered {
+                HStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(Int((offered.progress * 100).rounded()))% on your \(offered.deviceKind.isEmpty ? "other device" : offered.deviceKind)")
+                            .font(.chickenUI(13.5, weight: .semibold))
+                            .foregroundStyle(palette.text)
+                        Text(offered.updatedAt, format: .relative(presentation: .named))
+                            .font(.chickenUI(12))
+                            .foregroundStyle(palette.muted)
+                    }
+                    Button("Go") {
+                        model.jump(to: offered)
+                        onDismissFurther()
+                    }
+                    .font(.chickenUI(13, weight: .medium))
+                    .inkProminentButton()
+                    Button(action: onDismissFurther) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(palette.muted)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Stay here")
+                }
+                .padding(.leading, 18)
+                .padding(.trailing, 10)
+                .padding(.vertical, 8)
+                .glassEffect(.regular, in: .capsule)
+                .transition(.move(edge: .top).combined(with: .opacity))
+            } else if let catchUpDate, !waitingForFirstPage, !showSearch {
+                PreviouslyCatchUpCard(
+                    book: book,
+                    lastOpened: catchUpDate,
+                    recentHighlight: book.sortedHighlights.first,
+                    onJumpToHighlight: { model.jump(toHighlight: $0) },
+                    onDismiss: onDismissCatchUp
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .padding(.top, 12)
+        .padding(.horizontal, 16)
+    }
+}
+
+private struct ReaderRibbonHost: View {
+    let model: ReaderModel
+    let fileReady: Bool
+    let isCompact: Bool
+
+    var body: some View {
+        if model.error == nil && fileReady {
+            PullRibbonOverlay(
+                isBookmarked: model.isBookmarked,
+                isCompact: isCompact,
+                onToggle: { model.toggleBookmark() }
+            )
+        }
+    }
+}
+
+private struct ReaderFootnoteOverlay: View {
+    let model: ReaderModel
+    let chromeVisible: Bool
+    let reduceMotion: Bool
+
+    var body: some View {
+        Group {
+            if let footnote = model.activeFootnote {
+                FootnotePopoverCard(
+                    footnote: footnote,
+                    onJump: { model.jumpToFootnote(footnote) },
+                    onDismiss: { model.activeFootnote = nil }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, chromeVisible ? 88 : 24)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.activeFootnote)
+    }
+}
+
+private struct ReaderImageOverlay: View {
+    let model: ReaderModel
+    let reduceMotion: Bool
+
+    var body: some View {
+        Group {
+            if let imagePreview = model.activeImage {
+                ImageLightboxOverlay(preview: imagePreview) {
+                    model.activeImage = nil
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(reduceMotion ? nil : ChickenMotion.micro, value: model.activeImage)
+    }
+}
+
+private struct ReaderBottomOverlay: View {
+    let model: ReaderModel
+    let book: Book
+    let chromeVisible: Bool
+    let isCompact: Bool
+    let reduceMotion: Bool
+    let onShareSelection: (String) -> Void
+
+    var body: some View {
+        GlassEffectContainer(spacing: 10) {
+            VStack(spacing: 10) {
+                if model.selection != nil {
+                    HighlightPicker(model: model) { selectedText in
+                        onShareSelection(selectedText)
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                if model.readAloud.state != .idle {
+                    ReadAloudBar(
+                        controller: model.readAloud,
+                        chapter: model.chapters.isEmpty ? book.displayTitle : model.chapterTitle,
+                        compact: isCompact
+                    )
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+                if chromeVisible && model.error == nil {
+                    HStack(spacing: 8) {
+                        ReaderProgressBar(model: model, compact: isCompact)
+                        if model.isOnLastPage && !book.isFinished {
+                            Button {
+                                model.completeBookAndCelebrate()
+                            } label: {
+                                Label("Finish", systemImage: "checkmark")
+                                    .font(.chickenUI(12.5, weight: .semibold))
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 8)
+                            }
+                            .inkProminentButton()
+                            .transition(.scale(scale: 0.92).combined(with: .opacity))
+                        }
+                    }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+        }
+        .padding(.horizontal, isCompact ? 12 : 24)
+        .padding(.bottom, isCompact ? 6 : 14)
+        .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.selection)
+        .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.readAloud.state)
+        .animation(reduceMotion ? nil : ChickenMotion.standard, value: model.isOnLastPage)
     }
 }

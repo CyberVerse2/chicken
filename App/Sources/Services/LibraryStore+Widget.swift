@@ -8,7 +8,7 @@ extension LibraryStore {
     func publishWidgetSnapshot() {
         widgetTask?.cancel()
         widgetTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(2))
+            try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled, let self else { return }
             let book = self.continueReadingBook()
             let coverURL = book.flatMap { self.coverURL(for: $0) }
@@ -18,7 +18,7 @@ extension LibraryStore {
                         id: $0.id,
                         title: $0.displayTitle,
                         author: $0.displayAuthor,
-                        progress: $0.progress,
+                        progress: ($0.progress * 100).rounded() / 100,
                         coverTintIndex: $0.coverTintIndex,
                         hasCover: coverURL != nil
                     )
@@ -32,16 +32,18 @@ extension LibraryStore {
                 chapter: book?.lastChapterTitle,
                 day: Calendar.current.startOfDay(for: .now)
             )
-            guard snapshot != self.lastPublishedSnapshot else { return }
-            await Self.writeWidgetSnapshot(snapshot, coverURL: coverURL)
+            let coverChanged = coverURL != self.lastPublishedWidgetCoverURL
+            guard snapshot != self.lastPublishedSnapshot || coverChanged else { return }
+            await Self.writeWidgetSnapshot(snapshot, coverURL: coverChanged ? coverURL : nil, keepExistingCover: !coverChanged && coverURL != nil)
             guard !Task.isCancelled else { return }
             self.lastPublishedSnapshot = snapshot
+            self.lastPublishedWidgetCoverURL = coverURL
             WidgetCenter.shared.reloadAllTimelines()
         }
     }
 
     @concurrent
-    private static func writeWidgetSnapshot(_ snapshot: WidgetSnapshot, coverURL: URL?) async {
-        snapshot.save(coverJPEG: coverURL.flatMap { CoverRenderer.thumbnailJPEG(from: $0) })
+    private static func writeWidgetSnapshot(_ snapshot: WidgetSnapshot, coverURL: URL?, keepExistingCover: Bool) async {
+        snapshot.save(coverJPEG: coverURL.flatMap { CoverRenderer.thumbnailJPEG(from: $0) }, keepExistingCover: keepExistingCover)
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// An EPUB unpacked into the caches directory and stitched into one HTML
 /// document, ready for a web view. Each spine document becomes a
@@ -13,10 +14,11 @@ public struct EPUBPublication: Sendable {
 
     /// Bump when the generated HTML changes shape so stale caches rebuild.
     static let documentName = "__chicken-reader-v3.html"
+    private static let lastPruneAt = Mutex<Date>(.distantPast)
 
     public static func prepare(bookAt archiveURL: URL, cacheDirectory: URL) throws -> EPUBPublication {
         let fileManager = FileManager.default
-        pruneCache(at: cacheDirectory)
+        pruneCacheIfNeeded(at: cacheDirectory)
 
         let archive = try ZipArchive(url: archiveURL)
         let package = try EPUBPackage(archive: archive)
@@ -30,11 +32,21 @@ public struct EPUBPublication: Sendable {
             try archive.extractAll(to: root)
             try combinedHTML(package: package, root: root).write(to: documentURL, atomically: true, encoding: .utf8)
         } else {
-            // Touch so the pruner treats this book as recently used.
             try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: root.path)
         }
 
         return EPUBPublication(rootURL: root, documentURL: documentURL, package: package)
+    }
+
+    public static func pruneCacheIfNeeded(at cacheDirectory: URL, maxBytes: Int = 1_500_000_000, minInterval: TimeInterval = 3600) {
+        let now = Date()
+        let shouldPrune = lastPruneAt.withLock { last -> Bool in
+            guard now.timeIntervalSince(last) >= minInterval else { return false }
+            last = now
+            return true
+        }
+        guard shouldPrune else { return }
+        pruneCache(at: cacheDirectory, maxBytes: maxBytes)
     }
 
     // MARK: Cache management
@@ -136,12 +148,46 @@ public struct EPUBPublication: Sendable {
     }
 
     static func bodyHTML(from html: String) -> String {
-        guard let match = html.firstMatch(of: /(?i)<body\b[^>]*>([\s\S]*?)<\/body>/) else { return html }
-        return String(match.output.1)
+        guard let bodyOpen = html.range(of: "<body", options: .caseInsensitive) else { return html }
+        guard let openEnd = html[bodyOpen.upperBound...].firstIndex(of: ">") else { return html }
+        let contentStart = html.index(after: openEnd)
+        if let bodyClose = html.range(of: "</body>", options: [.caseInsensitive, .backwards], range: contentStart..<html.endIndex) {
+            return String(html[contentStart..<bodyClose.lowerBound])
+        }
+        return String(html[contentStart...])
     }
 
     static func stylesheetLinks(in html: String) -> [String] {
-        html.matches(of: /(?i)<link\b[^>]*rel\s*=\s*["'][^"']*stylesheet[^"']*["'][^>]*>|<style\b[^>]*>[\s\S]*?<\/style>/).map { String($0.output) }
+        var results: [String] = []
+        var cursor = html.startIndex
+        while let lt = html[cursor...].firstIndex(of: "<") {
+            let afterLT = html.index(after: lt)
+            guard afterLT < html.endIndex else { break }
+            if html[afterLT...].range(of: "link", options: [.caseInsensitive, .anchored]) != nil,
+               afterLT < html.index(after: afterLT) || true {
+                let afterTag = html.index(afterLT, offsetBy: min(4, html.distance(from: afterLT, to: html.endIndex)))
+                if afterTag < html.endIndex && html[afterTag].isWhitespace,
+                   let gt = html[afterTag...].firstIndex(of: ">") {
+                    let tag = html[lt...gt]
+                    if tag.range(of: "stylesheet", options: .caseInsensitive) != nil {
+                        results.append(String(tag))
+                    }
+                    cursor = html.index(after: gt)
+                    continue
+                }
+            }
+            if html[afterLT...].range(of: "style", options: [.caseInsensitive, .anchored]) != nil {
+                let afterTag = html.index(afterLT, offsetBy: min(5, html.distance(from: afterLT, to: html.endIndex)))
+                if afterTag < html.endIndex && (html[afterTag] == ">" || html[afterTag].isWhitespace),
+                   let close = html.range(of: "</style>", options: .caseInsensitive, range: afterTag..<html.endIndex) {
+                    results.append(String(html[lt..<close.upperBound]))
+                    cursor = close.upperBound
+                    continue
+                }
+            }
+            cursor = afterLT
+        }
+        return results
     }
 
     /// Points `src`/`href` attributes at the unpacked files. Links into other
@@ -152,30 +198,146 @@ public struct EPUBPublication: Sendable {
         root: URL,
         spineIndexByPath: [String: Int]
     ) -> String {
+        rewriteResourceURLs(in: html, directory: directory, spineIndexByPath: spineIndexByPath, injectLazyImages: false)
+    }
+
+    static func rewriteResourceURLs(
+        in html: String,
+        directory: String,
+        spineIndexByPath: [String: Int],
+        injectLazyImages: Bool
+    ) -> String {
+        let lowerHTML = html.lowercased()
+        let utf8 = Array(html.utf8)
+        let lowerUTF8 = Array(lowerHTML.utf8)
+        guard utf8.count == lowerUTF8.count else {
+            return rewriteResourceURLsSlow(in: html, directory: directory, spineIndexByPath: spineIndexByPath)
+        }
+        let count = utf8.count
+        var output = Data()
+        output.reserveCapacity(count + 128)
+        var lastCopied = 0
+        var i = 0
+
+        func isIdentChar(_ b: UInt8) -> Bool {
+            (b >= 97 && b <= 122) || (b >= 65 && b <= 90) || (b >= 48 && b <= 57) || b == 95 || b == 45 || b == 58
+        }
+        func isSpace(_ b: UInt8) -> Bool {
+            b == 32 || b == 9 || b == 10 || b == 13
+        }
+        func matchesLower(_ at: Int, _ pattern: [UInt8]) -> Bool {
+            guard at + pattern.count <= count else { return false }
+            for k in 0..<pattern.count {
+                if lowerUTF8[at + k] != pattern[k] { return false }
+            }
+            return true
+        }
+
+        let patImg: [UInt8] = [60, 105, 109, 103]
+        let patSrc: [UInt8] = [115, 114, 99]
+        let patHref: [UInt8] = [104, 114, 101, 102]
+        let patXlink: [UInt8] = [120, 108, 105, 110, 107, 58, 104, 114, 101, 102]
+
+        while i < count {
+            let byte = lowerUTF8[i]
+            if injectLazyImages && byte == 60 && matchesLower(i, patImg) {
+                let after = i + 4
+                if after < count && isSpace(utf8[after]) {
+                    if let gt = utf8[after...].firstIndex(of: 62) {
+                        let tagSlice = String(decoding: utf8[i...gt], as: UTF8.self)
+                        if tagSlice.range(of: "loading=", options: .caseInsensitive) == nil {
+                            output.append(contentsOf: utf8[lastCopied..<after])
+                            output.append(contentsOf: " loading=\"lazy\" decoding=\"async\"".utf8)
+                            lastCopied = after
+                        }
+                    }
+                    i = after
+                    continue
+                }
+            }
+
+            if (byte == 115 || byte == 104 || byte == 120) && (i == 0 || !isIdentChar(utf8[i - 1])) {
+                let attrLen: Int
+                if matchesLower(i, patSrc) {
+                    attrLen = 3
+                } else if matchesLower(i, patHref) {
+                    attrLen = 4
+                } else if matchesLower(i, patXlink) {
+                    attrLen = 10
+                } else {
+                    i += 1
+                    continue
+                }
+                var cursor = i + attrLen
+                while cursor < count && isSpace(utf8[cursor]) { cursor += 1 }
+                guard cursor < count, utf8[cursor] == 61 else { i += attrLen; continue }
+                cursor += 1
+                while cursor < count && isSpace(utf8[cursor]) { cursor += 1 }
+                guard cursor < count else { break }
+                let quote = utf8[cursor]
+                guard quote == 34 || quote == 39 else { i = cursor; continue }
+                let valueStart = cursor + 1
+                guard let valueEnd = utf8[valueStart...].firstIndex(of: quote) else { i = valueStart; continue }
+
+                if valueEnd > valueStart {
+                    let rawValue = String(decoding: utf8[valueStart..<valueEnd], as: UTF8.self)
+                    let attrName = String(decoding: utf8[i..<(i + attrLen)], as: UTF8.self)
+                    if let replacement = rewriteAttribute(attribute: attrName, rawValue: rawValue, directory: directory, spineIndexByPath: spineIndexByPath) {
+                        output.append(contentsOf: utf8[lastCopied..<i])
+                        output.append(contentsOf: replacement.utf8)
+                        lastCopied = valueEnd + 1
+                    }
+                }
+                i = valueEnd + 1
+                continue
+            }
+            i += 1
+        }
+        if lastCopied == 0 { return html }
+        output.append(contentsOf: utf8[lastCopied..<count])
+        return String(decoding: output, as: UTF8.self)
+    }
+
+    private static func rewriteAttribute(
+        attribute: String,
+        rawValue: String,
+        directory: String,
+        spineIndexByPath: [String: Int]
+    ) -> String? {
+        let value = HTMLText.decodeEntities(rawValue)
+        let lower = value.lowercased()
+        if value.hasPrefix("#") || ["http:", "https:", "data:", "mailto:", "file:", "tel:"].contains(where: lower.hasPrefix) {
+            return nil
+        }
+        let (path, fragment) = EPUBPath.split(value, relativeTo: directory)
+        guard !path.isEmpty else { return nil }
+
+        if attribute.lowercased() != "src", let spineIndex = spineIndexByPath[path] {
+            if let fragment {
+                return "\(attribute)=\"#\(fragment)\" data-chicken-target-chapter=\"\(spineIndex)\""
+            }
+            return "\(attribute)=\"#chapter-\(spineIndex)\""
+        }
+        let encodedPath = path
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map { segment in
+                String(segment).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String(segment)
+            }
+            .joined(separator: "/")
+        let rewritten = encodedPath + (fragment.map { "#\($0)" } ?? "")
+        return "\(attribute)=\"\(rewritten)\""
+    }
+
+    private static func rewriteResourceURLsSlow(
+        in html: String,
+        directory: String,
+        spineIndexByPath: [String: Int]
+    ) -> String {
         html.replacing(/(?i)\b(src|href|xlink:href)\s*=\s*["']([^"']+)["']/) { match in
             let attribute = String(match.output.1)
-            let value = HTMLText.decodeEntities(String(match.output.2))
-            let lower = value.lowercased()
-            if value.hasPrefix("#") || ["http:", "https:", "data:", "mailto:", "file:", "tel:"].contains(where: lower.hasPrefix) {
-                return String(match.output.0)
-            }
-            let (path, fragment) = EPUBPath.split(value, relativeTo: directory)
-            guard !path.isEmpty else { return String(match.output.0) }
-
-            if attribute.lowercased() != "src", let spineIndex = spineIndexByPath[path] {
-                if let fragment {
-                    return "\(attribute)=\"#\(fragment)\" data-chicken-target-chapter=\"\(spineIndex)\""
-                }
-                return "\(attribute)=\"#chapter-\(spineIndex)\""
-            }
-            let encodedPath = path
-                .split(separator: "/", omittingEmptySubsequences: false)
-                .map { segment in
-                    String(segment).addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? String(segment)
-                }
-                .joined(separator: "/")
-            let rewritten = encodedPath + (fragment.map { "#\($0)" } ?? "")
-            return "\(attribute)=\"\(rewritten)\""
+            let rawValue = String(match.output.2)
+            return rewriteAttribute(attribute: attribute, rawValue: rawValue, directory: directory, spineIndexByPath: spineIndexByPath)
+                ?? String(match.output.0)
         }
     }
 }

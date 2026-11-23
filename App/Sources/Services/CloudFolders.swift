@@ -106,8 +106,11 @@ nonisolated struct CloudFolders: Sendable, Equatable {
         if isDownloaded(url) { return }
         guard exists(url) else { throw CocoaError(.fileNoSuchFile) }
         try FileManager.default.startDownloadingUbiquitousItem(at: url)
+        var attempts = 0
         while !isDownloaded(url) {
-            try await Task.sleep(for: .milliseconds(400))
+            let delayMs = attempts < 20 ? 100 : 250
+            attempts += 1
+            try await Task.sleep(for: .milliseconds(delayMs))
             let values = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingErrorKey])
             if let error = values?.ubiquitousItemDownloadingError { throw error }
             if !exists(url) { throw CocoaError(.fileNoSuchFile) }

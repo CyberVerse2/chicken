@@ -216,12 +216,22 @@ public struct EPUBPackage: Sendable {
 
     private static func documentTitle(archive: ZipArchive, path: String) -> String? {
         guard let raw = archive.string(for: path) else { return nil }
-        if let match = raw.firstMatch(of: /(?i)<h[1-3]\b[^>]*>([\s\S]*?)<\/h[1-3]>/) {
-            let title = cleanTitle(String(match.output.1))
-            if !title.isEmpty { return title }
+        let limit = raw.index(raw.startIndex, offsetBy: min(raw.count, 8192))
+        let prefix = raw[..<limit]
+        for openTag in ["<h1", "<h2", "<h3"] {
+            if let openRange = prefix.range(of: openTag, options: .caseInsensitive),
+               let tagEnd = prefix[openRange.upperBound...].firstIndex(of: ">") {
+                let closeTag = "</" + openTag.dropFirst()
+                if let closeRange = prefix.range(of: closeTag, options: .caseInsensitive, range: prefix.index(after: tagEnd)..<prefix.endIndex) {
+                    let title = cleanTitle(String(prefix[prefix.index(after: tagEnd)..<closeRange.lowerBound]))
+                    if !title.isEmpty { return title }
+                }
+            }
         }
-        if let match = raw.firstMatch(of: /(?i)<title\b[^>]*>([\s\S]*?)<\/title>/) {
-            let title = cleanTitle(String(match.output.1))
+        if let openRange = prefix.range(of: "<title", options: .caseInsensitive),
+           let tagEnd = prefix[openRange.upperBound...].firstIndex(of: ">"),
+           let closeRange = prefix.range(of: "</title>", options: .caseInsensitive, range: prefix.index(after: tagEnd)..<prefix.endIndex) {
+            let title = cleanTitle(String(prefix[prefix.index(after: tagEnd)..<closeRange.lowerBound]))
             if !title.isEmpty { return title }
         }
         return nil

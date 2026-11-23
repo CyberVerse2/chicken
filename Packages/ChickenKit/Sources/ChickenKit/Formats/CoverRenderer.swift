@@ -7,7 +7,7 @@ import UniformTypeIdentifiers
 /// ImageIO, so the same code runs on macOS, iPadOS, and iOS.
 public enum CoverRenderer {
     /// Longest edge of a stored cover, in pixels.
-    static let maxPixelSize = 1200
+    static let maxPixelSize = 720
     private static let sRGBColorSpace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
     private static let imageExtensions: Set<String> = ["jpg", "jpeg", "png", "webp"]
 
@@ -27,22 +27,24 @@ public enum CoverRenderer {
     }
 
     static func generatePDFCover(for url: URL, id: UUID, in directory: URL) -> String? {
-        let name = "\(id.uuidString).jpg"
-        let destination = directory.appendingPathComponent(name)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         guard let image = renderFirstPDFPage(url), !looksLikeTextPage(image) else { return nil }
-        return writeJPEG(image, to: destination) ? name : nil
+        return writeCompressedCover(image, id: id, in: directory)
     }
 
     static func generateEPUBCover(archive: ZipArchive, package: EPUBPackage?, id: UUID, in directory: URL) -> String? {
-        let name = "\(id.uuidString).jpg"
-        let destination = directory.appendingPathComponent(name)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         guard
             let data = epubCoverData(archive: archive, package: package),
             let image = downsampledImage(from: data)
         else { return nil }
-        return writeJPEG(image, to: destination) ? name : nil
+        return writeCompressedCover(image, id: id, in: directory)
+    }
+
+    private static func writeCompressedCover(_ image: CGImage, id: UUID, in directory: URL) -> String? {
+        let jpgName = "\(id.uuidString).jpg"
+        let jpgURL = directory.appendingPathComponent(jpgName)
+        return writeJPEG(image, to: jpgURL, quality: 0.72) ? jpgName : nil
     }
 
     // MARK: PDF
@@ -100,20 +102,24 @@ public enum CoverRenderer {
         var paper = 0
         var ink = 0
         var color = 0
-        for index in stride(from: 0, to: pixels.count, by: 4) {
-            let red = Double(pixels[index]) / 255
-            let green = Double(pixels[index + 1]) / 255
-            let blue = Double(pixels[index + 2]) / 255
-            let luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
-            let chroma = max(red, green, blue) - min(red, green, blue)
-            if luminance > 0.8 && chroma < 0.12 { paper += 1 }
-            if luminance < 0.3 { ink += 1 }
-            if chroma > 0.2 { color += 1 }
+        pixels.withUnsafeBufferPointer { buffer in
+            var index = 0
+            while index < buffer.count {
+                let red = Int(buffer[index])
+                let green = Int(buffer[index + 1])
+                let blue = Int(buffer[index + 2])
+                let luminance = (54 * red + 183 * green + 19 * blue) >> 8
+                let chroma = max(red, max(green, blue)) - min(red, min(green, blue))
+                if luminance > 204 && chroma < 31 { paper += 1 }
+                if luminance < 77 { ink += 1 }
+                if chroma > 51 { color += 1 }
+                index += 4
+            }
         }
-        let total = Double(width * height)
-        return Double(paper) / total >= 0.85
-            && Double(ink) / total < 0.0025
-            && Double(color) / total < 0.003
+        let total = width * height
+        return paper * 100 >= total * 85
+            && ink * 10000 < total * 25
+            && color * 1000 < total * 3
     }
 
     // MARK: EPUB
@@ -177,13 +183,17 @@ public enum CoverRenderer {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, thumbnailOptions(maxPixelSize: maxPixelSize))
     }
 
-    @discardableResult
-    public static func writeJPEG(_ image: CGImage, to url: URL, quality: Double = 0.84) -> Bool {
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
+    private static func writeImage(_ image: CGImage, to url: URL, type: String, quality: Double) -> Bool {
+        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, type as CFString, 1, nil) else {
             return false
         }
         CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
         return CGImageDestinationFinalize(destination)
+    }
+
+    @discardableResult
+    public static func writeJPEG(_ image: CGImage, to url: URL, quality: Double = 0.84) -> Bool {
+        writeImage(image, to: url, type: UTType.jpeg.identifier, quality: quality)
     }
 
     /// Small JPEG used by the widget snapshot.

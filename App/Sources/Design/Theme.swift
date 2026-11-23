@@ -40,7 +40,7 @@ enum ReadingTheme: String, Codable, CaseIterable, Hashable, Identifiable {
 
 /// Theme colors, kept as hex values so the EPUB stylesheet can use the exact
 /// same colors as the SwiftUI chrome.
-struct ReaderPalette: Equatable {
+nonisolated struct ReaderPalette: Equatable, Sendable {
     let backgroundHex: UInt32
     let surfaceHex: UInt32
     let surfaceAltHex: UInt32
@@ -109,7 +109,7 @@ enum ChickenMotion {
 // MARK: - Reading typefaces
 
 /// Body faces for reflowable books. All ship with iOS and macOS.
-enum ReaderTypeface: String, CaseIterable, Identifiable {
+nonisolated enum ReaderTypeface: String, CaseIterable, Identifiable, Sendable {
     case newYork
     case iowan
     case charter
@@ -171,7 +171,7 @@ enum ReaderTypeface: String, CaseIterable, Identifiable {
 
 // MARK: - Highlight colors
 
-enum HighlightColor: String, Codable, CaseIterable, Hashable, Identifiable {
+nonisolated enum HighlightColor: String, Codable, CaseIterable, Hashable, Identifiable, Sendable {
     case amber
     case green
     case purple
@@ -267,7 +267,7 @@ extension Font {
 }
 
 extension Font.TextStyle {
-    static func chickenStyle(for size: CGFloat) -> Font.TextStyle {
+    nonisolated static func chickenStyle(for size: CGFloat) -> Font.TextStyle {
         switch size {
         case ..<11.5: .caption2
         case ..<12.5: .caption
@@ -284,7 +284,7 @@ extension Font.TextStyle {
 }
 
 extension Color {
-    static func hex(_ value: UInt32, alpha: Double = 1) -> Color {
+    nonisolated static func hex(_ value: UInt32, alpha: Double = 1) -> Color {
         Color(
             .sRGB,
             red: Double((value >> 16) & 0xFF) / 255,

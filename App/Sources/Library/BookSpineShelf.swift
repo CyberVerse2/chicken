@@ -11,7 +11,7 @@ struct BookSpineShelf: View {
 
     var body: some View {
         let rows = Self.pack(books: books, maxWidth: max(containerWidth, 260), compact: sizeClass == .compact)
-        VStack(alignment: .leading, spacing: 26) {
+        LazyVStack(alignment: .leading, spacing: 26) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 VStack(alignment: .leading, spacing: 0) {
                     HStack(alignment: .bottom, spacing: 5) {

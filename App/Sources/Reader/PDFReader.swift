@@ -70,7 +70,11 @@ private struct PDFSurface: PlatformViewRepresentable {
     }
 
     private func apply(to view: ChickenPDFView, coordinator: Coordinator) {
-        view.backgroundColor = PlatformColor.hex(inverted ? 0xEBEBEA : palette.surfaceAltHex)
+        let targetHex: UInt32 = inverted ? 0xEBEBEA : palette.surfaceAltHex
+        if coordinator.appliedBackgroundHex != targetHex {
+            coordinator.appliedBackgroundHex = targetHex
+            view.backgroundColor = PlatformColor.hex(targetHex)
+        }
         guard coordinator.appliedMode != readingMode else { return }
         coordinator.appliedMode = readingMode
         let page = view.currentPage
@@ -93,7 +97,7 @@ private struct PDFSurface: PlatformViewRepresentable {
         if let page { view.go(to: page) }
     }
 
-    final class Coordinator: NSObject, ReaderEngine {
+    final class Coordinator: NSObject, ReaderEngine, PDFDocumentDelegate {
         private enum RestoreState {
             case idle
             case pending(Int)
@@ -101,25 +105,48 @@ private struct PDFSurface: PlatformViewRepresentable {
             case ready
         }
 
-        private struct OutlineEntry {
+        nonisolated private struct OutlineEntry: Sendable {
             let page: Int
             let title: String
             let level: Int
+        }
+
+        nonisolated private struct UncheckedPDFDocumentBox: @unchecked Sendable {
+            let document: PDFDocument
+        }
+
+        nonisolated private struct PreparedPDF: Sendable {
+            let box: UncheckedPDFDocumentBox
+            let outline: [OutlineEntry]
+            let chapters: [ReaderChapter]
+            let isOutlineSorted: Bool
+            let pageCount: Int
+        }
+
+        private struct PendingHighlight: Sendable {
+            let text: String
+            let color: HighlightColor
         }
 
         let model: ReaderModel
         weak var view: ChickenPDFView?
         var onTapCenter: () -> Void = {}
         var appliedMode: ReadingMode?
+        var appliedBackgroundHex: UInt32?
 
         private var outline: [OutlineEntry] = []
+        private var isOutlineSorted = true
         private var searchQuery = ""
         private var searchMatches: [PDFSelection] = []
         private var searchIndex = -1
+        private var isSearching = false
+        private var searchBackwards = false
         private var observers: [NSObjectProtocol] = []
         private var restoreState: RestoreState = .idle
         private var loadTask: Task<Void, Never>?
         private var annotatedPages: Set<Int> = []
+        private var pendingHighlightsByPage: [Int: [PendingHighlight]] = [:]
+        private var appliedHighlightPages: Set<Int> = []
 
         init(model: ReaderModel) {
             self.model = model
@@ -145,6 +172,8 @@ private struct PDFSurface: PlatformViewRepresentable {
             captureLocation()
             loadTask?.cancel()
             loadTask = nil
+            view?.document?.cancelFindString()
+            view?.document?.delegate = nil
             if case .settling(let task) = restoreState { task.cancel() }
             restoreState = .idle
             observers.forEach(NotificationCenter.default.removeObserver)
@@ -159,33 +188,39 @@ private struct PDFSurface: PlatformViewRepresentable {
 
         func load(_ url: URL) {
             loadTask?.cancel()
+            let start = ContinuousClock.now
             loadTask = Task { [weak self] in
-                let data = await Self.readDocumentData(url)
+                let prepared = await Self.openDocumentAndOutline(url)
                 guard let self, !Task.isCancelled else { return }
-                guard let data, let document = PDFDocument(data: data) else {
+                guard let prepared else {
                     self.model.engineDidFail(
                         fileURL: url,
                         detail: "Chicken could not open this file as a PDF. It may be damaged, encrypted, or mislabeled."
                     )
                     return
                 }
+                let document = prepared.box.document
+                document.delegate = self
+                self.outline = prepared.outline
+                self.isOutlineSorted = prepared.isOutlineSorted
                 self.view?.document = document
                 self.model.engineDidBecomeReady()
-                self.buildOutline(document)
-                self.model.totalPages = document.pageCount
-                self.refreshHighlights()
+                self.model.chapters = prepared.chapters
+                self.model.totalPages = prepared.pageCount
                 self.restoreInitialLocation(document)
+                self.refreshHighlights()
+                let d = start.duration(to: .now)
+                let ms = Double(d.components.seconds) * 1000.0 + Double(d.components.attoseconds) / 1e15
+                PerfMonitor.log("pdf_open", ms: ms, detail: "pages=\(prepared.pageCount)")
             }
         }
 
         @concurrent
-        private static func readDocumentData(_ url: URL) async -> Data? {
-            try? Data(contentsOf: url, options: .mappedIfSafe)
-        }
-
-        private func buildOutline(_ document: PDFDocument) {
+        private static func openDocumentAndOutline(_ url: URL) async -> PreparedPDF? {
+            guard let document = PDFDocument(url: url) else { return nil }
             var entries: [OutlineEntry] = []
             func walk(_ node: PDFOutline, level: Int) {
+                if Task.isCancelled { return }
                 for index in 0..<node.numberOfChildren {
                     guard let child = node.child(at: index) else { continue }
                     if let page = child.destination?.page {
@@ -205,8 +240,13 @@ private struct PDFSurface: PlatformViewRepresentable {
                     OutlineEntry(page: $0, title: "Page \($0 + 1)", level: 0)
                 }
             }
-            outline = entries
-            model.chapters = entries.enumerated().map { index, entry in
+            var sorted = true
+            var prev = -1
+            for entry in entries {
+                if entry.page < prev { sorted = false; break }
+                prev = entry.page
+            }
+            let chapters = entries.enumerated().map { index, entry in
                 ReaderChapter(
                     id: index,
                     title: entry.title,
@@ -214,6 +254,13 @@ private struct PDFSurface: PlatformViewRepresentable {
                     level: entry.level
                 )
             }
+            return PreparedPDF(
+                box: UncheckedPDFDocumentBox(document: document),
+                outline: entries,
+                chapters: chapters,
+                isOutlineSorted: sorted,
+                pageCount: document.pageCount
+            )
         }
 
         private func restoreInitialLocation(_ document: PDFDocument) {
@@ -239,8 +286,8 @@ private struct PDFSurface: PlatformViewRepresentable {
                   let page = document.page(at: pageIndex) else { return }
             view.go(to: page)
             updatePageState(pageIndex: pageIndex, document: document)
-            let task = Task { [weak self] in
-                try? await Task.sleep(for: .milliseconds(220))
+            let task = Task { @MainActor [weak self] in
+                await Task.yield()
                 guard let self, !Task.isCancelled, let view = self.view else { return }
                 if view.currentPage != page { view.go(to: page) }
                 self.restoreState = .ready
@@ -250,7 +297,23 @@ private struct PDFSurface: PlatformViewRepresentable {
         }
 
         private func chapter(forPage pageIndex: Int) -> Int {
-            outline.lastIndex { $0.page <= pageIndex } ?? 0
+            guard !outline.isEmpty else { return 0 }
+            if !isOutlineSorted {
+                return outline.lastIndex { $0.page <= pageIndex } ?? 0
+            }
+            var low = 0
+            var high = outline.count - 1
+            var best = 0
+            while low <= high {
+                let mid = (low + high) >> 1
+                if outline[mid].page <= pageIndex {
+                    best = mid
+                    low = mid + 1
+                } else {
+                    high = mid - 1
+                }
+            }
+            return best
         }
 
         private func pageRange(forChapter index: Int, document: PDFDocument) -> Range<Int> {
@@ -263,6 +326,7 @@ private struct PDFSurface: PlatformViewRepresentable {
             guard case .ready = restoreState,
                   let view, let document = view.document, let page = view.currentPage else { return }
             let pageIndex = document.index(for: page)
+            applyHighlightsNear(pageIndex: pageIndex, in: document)
             updatePageState(pageIndex: pageIndex, document: document)
             let chapter = chapter(forPage: pageIndex)
             model.reportProgress(
@@ -356,24 +420,71 @@ private struct PDFSurface: PlatformViewRepresentable {
 
         func search(_ query: String, backwards: Bool) {
             guard let view, let document = view.document else { return }
-            if query != searchQuery {
-                searchQuery = query
-                searchMatches = document.findString(query, withOptions: [.caseInsensitive])
-                searchIndex = backwards ? searchMatches.count : -1
-            }
-            guard !searchMatches.isEmpty else {
-                model.searchMatchSummary = "No matches"
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                document.cancelFindString()
+                model.searchMatchSummary = nil
                 return
             }
+            if trimmed != searchQuery {
+                document.cancelFindString()
+                searchQuery = trimmed
+                searchMatches = []
+                searchIndex = -1
+                isSearching = true
+                searchBackwards = backwards
+                model.searchMatchSummary = "Searching…"
+                document.beginFindString(trimmed, withOptions: [.caseInsensitive])
+                return
+            }
+            searchBackwards = backwards
+            guard !searchMatches.isEmpty else {
+                if !isSearching { model.searchMatchSummary = "No matches" }
+                return
+            }
+            stepSearchMatch(view: view, backwards: backwards)
+        }
+
+        private func stepSearchMatch(view: ChickenPDFView, backwards: Bool) {
+            guard !searchMatches.isEmpty else { return }
             if backwards {
                 searchIndex = searchIndex <= 0 ? searchMatches.count - 1 : searchIndex - 1
             } else {
                 searchIndex = (searchIndex + 1) % searchMatches.count
             }
-            model.searchMatchSummary = "\(searchIndex + 1) of \(searchMatches.count)"
+            let suffix = isSearching ? "+" : ""
+            model.searchMatchSummary = "\(searchIndex + 1) of \(searchMatches.count)\(suffix)"
             let match = searchMatches[searchIndex]
             view.setCurrentSelection(match, animate: true)
             view.go(to: match)
+        }
+
+        nonisolated func didMatchString(_ instance: PDFSelection) {
+            nonisolated(unsafe) let selection = instance
+            Task { @MainActor [weak self] in
+                guard let self, self.isSearching, let view = self.view else { return }
+                self.searchMatches.append(selection)
+                if self.searchIndex < 0 {
+                    self.searchIndex = 0
+                    self.model.searchMatchSummary = "1 of \(self.searchMatches.count)+"
+                    view.setCurrentSelection(selection, animate: true)
+                    view.go(to: selection)
+                } else {
+                    self.model.searchMatchSummary = "\(self.searchIndex + 1) of \(self.searchMatches.count)+"
+                }
+            }
+        }
+
+        nonisolated func documentDidEndDocumentFind(_ notification: Notification) {
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isSearching = false
+                if self.searchMatches.isEmpty {
+                    self.model.searchMatchSummary = "No matches"
+                } else if self.searchIndex >= 0 {
+                    self.model.searchMatchSummary = "\(self.searchIndex + 1) of \(self.searchMatches.count)"
+                }
+            }
         }
 
         func clearSelection() {
@@ -381,7 +492,7 @@ private struct PDFSurface: PlatformViewRepresentable {
         }
 
         func refreshHighlights() {
-            guard let document = view?.document else { return }
+            guard let view, let document = view.document else { return }
             for index in annotatedPages {
                 guard let page = document.page(at: index) else { continue }
                 for annotation in page.annotations where annotation.userName == Self.annotationTag {
@@ -389,19 +500,39 @@ private struct PDFSurface: PlatformViewRepresentable {
                 }
             }
             annotatedPages.removeAll()
+            appliedHighlightPages.removeAll()
+            var grouped: [Int: [PendingHighlight]] = [:]
             for highlight in model.book.highlights ?? [] {
-                guard let location = PDFLocation.decode(highlight.location),
-                      let page = document.page(at: location.pageIndex),
+                guard let location = PDFLocation.decode(highlight.location) else { continue }
+                grouped[location.pageIndex, default: []].append(PendingHighlight(text: highlight.text, color: highlight.color))
+            }
+            pendingHighlightsByPage = grouped
+            let currentIndex = view.currentPage.map { document.index(for: $0) } ?? 0
+            applyHighlightsNear(pageIndex: currentIndex, in: document)
+        }
+
+        private func applyHighlightsNear(pageIndex: Int, in document: PDFDocument) {
+            guard !pendingHighlightsByPage.isEmpty else { return }
+            let low = max(0, pageIndex - 2)
+            let high = min(document.pageCount - 1, pageIndex + 2)
+            guard low <= high else { return }
+            for idx in low...high where !appliedHighlightPages.contains(idx) {
+                appliedHighlightPages.insert(idx)
+                guard let items = pendingHighlightsByPage[idx], !items.isEmpty,
+                      let page = document.page(at: idx),
                       let pageText = page.string else { continue }
-                let range = (pageText as NSString).range(of: highlight.text, options: [.caseInsensitive])
-                guard range.location != NSNotFound, let match = page.selection(for: range) else { continue }
-                for line in match.selectionsByLine() {
-                    let annotation = PDFAnnotation(bounds: line.bounds(for: page), forType: .highlight, withProperties: nil)
-                    annotation.color = PlatformColor(highlight.color.bar).withAlphaComponent(0.45)
-                    annotation.userName = Self.annotationTag
-                    page.addAnnotation(annotation)
+                let nsText = pageText as NSString
+                for item in items {
+                    let range = nsText.range(of: item.text, options: [.caseInsensitive])
+                    guard range.location != NSNotFound, let match = page.selection(for: range) else { continue }
+                    for line in match.selectionsByLine() {
+                        let annotation = PDFAnnotation(bounds: line.bounds(for: page), forType: .highlight, withProperties: nil)
+                        annotation.color = PlatformColor(item.color.bar).withAlphaComponent(0.45)
+                        annotation.userName = Self.annotationTag
+                        page.addAnnotation(annotation)
+                    }
+                    annotatedPages.insert(idx)
                 }
-                annotatedPages.insert(location.pageIndex)
             }
         }
 
@@ -413,7 +544,7 @@ private struct PDFSurface: PlatformViewRepresentable {
     }
 }
 
-private extension String {
+nonisolated private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 

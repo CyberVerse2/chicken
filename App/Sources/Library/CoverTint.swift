@@ -66,8 +66,11 @@ nonisolated struct CoverHue: Equatable, Sendable {
 extension CoverImageCache {
     /// The average colour of a cover image, or nil if it can't be read.
     nonisolated func hue(for url: URL) async -> CoverHue? {
+        if let cached = cachedHue(at: url) { return cached }
         guard let image = await image(for: url, maxPixelSize: 64) else { return nil }
-        return await Self.computeAverageHue(of: image)
+        let computed = await Self.computeAverageHue(of: image)
+        if let computed { storeHue(computed, at: url) }
+        return computed
     }
 
     @concurrent

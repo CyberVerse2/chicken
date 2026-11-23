@@ -54,6 +54,7 @@ final class LibraryStore {
     @ObservationIgnored var derivedDataTask: Task<Void, Never>?
     @ObservationIgnored var widgetTask: Task<Void, Never>?
     @ObservationIgnored var lastPublishedSnapshot: WidgetSnapshot?
+    @ObservationIgnored var lastPublishedWidgetCoverURL: URL?
     @ObservationIgnored var pendingProgress: (book: Book, progress: Double, location: String?)?
     @ObservationIgnored var progressFlushTask: Task<Void, Never>?
     @ObservationIgnored var cloudWatcher: CloudFileWatcher?
@@ -248,7 +249,7 @@ final class LibraryStore {
         pendingProgress = (book, progress, location)
         guard progressFlushTask == nil else { return }
         progressFlushTask = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1.5))
+            try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
             self?.flushPendingProgress()
         }
@@ -273,7 +274,7 @@ final class LibraryStore {
         let nowFinished = clamped >= 1
         let progressChanged = abs(book.progress - clamped) >= 0.001
         let locationChanged = location != nil && book.lastLocation != location
-        let refreshOpened = book.lastOpenedAt.map { now.timeIntervalSince($0) >= 60 } ?? true
+        let refreshOpened = book.lastOpenedAt.map { now.timeIntervalSince($0) >= 300 } ?? true
         guard progressChanged || locationChanged || wasFinished != nowFinished || refreshOpened else { return }
 
         book.progress = clamped

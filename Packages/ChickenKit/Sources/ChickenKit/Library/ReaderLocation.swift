@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 public protocol ReaderLocationCodable: Codable, Hashable, Sendable {
     static var typeTag: String { get }
@@ -73,16 +74,21 @@ public struct TextLocation: ReaderLocationCodable {
 }
 
 enum ReaderLocationCoding {
+    private static let encoder = Mutex<JSONEncoder>({
+        let e = JSONEncoder()
+        e.outputFormatting = .sortedKeys
+        return e
+    }())
+    private static let decoder = Mutex<JSONDecoder>(JSONDecoder())
+
     static func encode<T: Encodable>(_ value: T) -> String? {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = .sortedKeys
-        guard let data = try? encoder.encode(value) else { return nil }
+        guard let data = encoder.withLock({ try? $0.encode(value) }) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
-    static func decode<T: Decodable>(_ value: String?) -> T? {
+    static func decode<T: Decodable & Sendable>(_ value: String?) -> T? {
         guard let data = value?.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
+        return decoder.withLock { try? $0.decode(T.self, from: data) }
     }
 }
 

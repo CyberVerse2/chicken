@@ -383,6 +383,10 @@ struct ImageLightboxOverlay: View {
 
     @concurrent
     private static func loadImage(from url: URL) async -> PlatformImage? {
+        if url.scheme == EPUBSchemeRegistry.scheme,
+           let data = EPUBSchemeRegistry.shared.resourceData(for: url) {
+            return PlatformImage(data: data)
+        }
         guard url.isFileURL, let data = try? Data(contentsOf: url) else { return nil }
         return PlatformImage(data: data)
     }

@@ -65,11 +65,17 @@ struct BookCover: View {
 
     var body: some View {
         let preset = CoverPreset.preset(for: book.coverTintIndex)
+        let coverURL = library.coverURL(for: book)
+        let cached = coverURL.flatMap { CoverImageCache.shared.cachedImage(for: $0, maxPixelSize: style.decodeSize) }
+        let cachedTextPage = (book.format == .pdf)
+            ? (coverURL.flatMap { CoverImageCache.shared.cachedIsTextPage(at: $0) } ?? isTextPage)
+            : false
+        let shownImage = image ?? cached
         Rectangle()
             .fill(preset.cloth)
             .overlay {
-                if let image, !isTextPage, CGFloat(image.width) / CGFloat(max(image.height, 1)) <= 1.05 {
-                    Image(decorative: image, scale: 1)
+                if let shownImage, !cachedTextPage, CGFloat(shownImage.width) / CGFloat(max(shownImage.height, 1)) <= 1.05 {
+                    Image(decorative: shownImage, scale: 1)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
                 } else {
@@ -92,8 +98,17 @@ struct BookCover: View {
             ))
             .task(id: reloadKey) {
                 guard let url = library.coverURL(for: book) else {
-                    image = nil
-                    isTextPage = false
+                    if image != nil { image = nil }
+                    if isTextPage { isTextPage = false }
+                    return
+                }
+                if let hit = CoverImageCache.shared.cachedImage(for: url, maxPixelSize: style.decodeSize) {
+                    if book.format == .pdf {
+                        isTextPage = await CoverImageCache.shared.isTextPage(hit, at: url)
+                    } else if isTextPage {
+                        isTextPage = false
+                    }
+                    if image !== hit { image = hit }
                     return
                 }
                 let loaded = await CoverImageCache.shared.image(for: url, maxPixelSize: style.decodeSize)
@@ -322,6 +337,7 @@ private struct ClothWeave: View {
             }
             context.stroke(path, with: .color(color.opacity(0.025)), lineWidth: 0.5)
         }
+        .drawingGroup()
         .allowsHitTesting(false)
     }
 }
@@ -421,14 +437,36 @@ nonisolated final class CoverImageCache: @unchecked Sendable {
     static let shared = CoverImageCache()
     private let cache = NSCache<NSString, CGImage>()
     private let textPages = NSCache<NSString, NSNumber>()
+    private let hues = NSCache<NSString, CoverHueBox>()
+    private let inFlightLock = NSLock()
+    private var inFlight: [String: Task<CGImage?, Never>] = [:]
 
     private init() {
         cache.countLimit = 600
+        cache.totalCostLimit = 64 * 1024 * 1024
+        hues.countLimit = 600
     }
 
     func invalidate() {
         cache.removeAllObjects()
         textPages.removeAllObjects()
+        hues.removeAllObjects()
+    }
+
+    func cachedImage(for url: URL, maxPixelSize: Int) -> CGImage? {
+        cache.object(forKey: "\(url.path)@\(maxPixelSize)" as NSString)
+    }
+
+    func cachedIsTextPage(at url: URL) -> Bool? {
+        textPages.object(forKey: url.path as NSString)?.boolValue
+    }
+
+    func cachedHue(at url: URL) -> CoverHue? {
+        hues.object(forKey: url.path as NSString)?.hue
+    }
+
+    func storeHue(_ hue: CoverHue, at url: URL) {
+        hues.setObject(CoverHueBox(hue), forKey: url.path as NSString)
     }
 
     func isTextPage(_ image: CGImage, at url: URL) async -> Bool {
@@ -440,10 +478,23 @@ nonisolated final class CoverImageCache: @unchecked Sendable {
     }
 
     func image(for url: URL, maxPixelSize: Int) async -> CGImage? {
-        let key = "\(url.path)@\(maxPixelSize)" as NSString
+        let rawKey = "\(url.path)@\(maxPixelSize)"
+        let key = rawKey as NSString
         if let cached = cache.object(forKey: key) { return cached }
-        let image = await Self.decodeThumbnail(at: url, maxPixelSize: maxPixelSize)
-        if let image { cache.setObject(image, forKey: key) }
+        let task: Task<CGImage?, Never> = inFlightLock.withLock {
+            if let existing = inFlight[rawKey] { return existing }
+            let created = Task {
+                await Self.decodeThumbnail(at: url, maxPixelSize: maxPixelSize)
+            }
+            inFlight[rawKey] = created
+            return created
+        }
+        let image = await task.value
+        inFlightLock.withLock { _ = inFlight.removeValue(forKey: rawKey) }
+        if let image {
+            let cost = max(1, image.bytesPerRow * image.height)
+            cache.setObject(image, forKey: key, cost: cost)
+        }
         return image
     }
 
@@ -459,7 +510,13 @@ nonisolated final class CoverImageCache: @unchecked Sendable {
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceShouldCacheImmediately: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
+}
+
+nonisolated final class CoverHueBox: NSObject {
+    let hue: CoverHue
+    init(_ hue: CoverHue) { self.hue = hue }
 }

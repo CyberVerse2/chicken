@@ -57,18 +57,15 @@ public struct ZipArchive: Sendable {
                 var localHeaderOffset = Int(reader.uint32(at: offset + 42))
 
                 guard let nameStart = Self.checkedAdd(offset, 46),
-                      let nameData = reader.data(at: nameStart, count: nameLength),
-                      let extraStart = Self.checkedAdd(nameStart, nameLength),
-                      let extraEnd = Self.checkedAdd(extraStart, extraLength),
+                      let nameEnd = Self.checkedAdd(nameStart, nameLength),
+                      let extraEnd = Self.checkedAdd(nameEnd, extraLength),
                       let nextOffset = Self.checkedAdd(extraEnd, commentLength),
                       nextOffset <= reader.count
                 else { throw ZipError.corrupt }
+                let extraStart = nameEnd
 
                 let usesUTF8 = flags & 0x0800 != 0
-                let name = (usesUTF8 ? String(data: nameData, encoding: .utf8) : nil)
-                    ?? String(data: nameData, encoding: .utf8)
-                    ?? String(data: nameData, encoding: .isoLatin1)
-                    ?? ""
+                let name = reader.string(at: nameStart, count: nameLength, preferUTF8: usesUTF8)
 
                 // ZIP64 extended information replaces any 32-bit field saturated at 0xFFFFFFFF.
                 var extraOffset = extraStart
@@ -142,6 +139,10 @@ public struct ZipArchive: Sendable {
         return nil
     }
 
+    public func entryBytesCount(for path: String) -> Int? {
+        entry(path)?.uncompressedSize
+    }
+
     public func data(for path: String) throws -> Data {
         guard let entry = entry(path) else { throw ZipError.missingEntry(path) }
         return try data(for: entry)
@@ -151,7 +152,7 @@ public struct ZipArchive: Sendable {
         guard entry.uncompressedSize >= 0, entry.compressedSize >= 0 else { throw ZipError.corrupt }
         guard entry.uncompressedSize <= Self.maxEntrySize else { throw ZipError.entryTooLarge }
 
-        let compressed = try data.withUnsafeBytes { rawBuffer -> Data in
+        return try data.withUnsafeBytes { rawBuffer -> Data in
             let reader = ByteReader(buffer: rawBuffer)
             let header = entry.localHeaderOffset
             guard let fixedEnd = Self.checkedAdd(header, 30), fixedEnd <= reader.count,
@@ -161,18 +162,32 @@ public struct ZipArchive: Sendable {
             let extraLength = Int(reader.uint16(at: header + 28))
             guard let afterName = Self.checkedAdd(fixedEnd, nameLength),
                   let start = Self.checkedAdd(afterName, extraLength),
-                  let slice = reader.data(at: start, count: entry.compressedSize)
+                  let end = Self.checkedAdd(start, entry.compressedSize),
+                  end <= reader.count
             else { throw ZipError.corrupt }
-            return slice
-        }
 
-        switch entry.compressionMethod {
-        case 0:
-            return compressed
-        case 8:
-            return try Self.inflate(compressed, expectedSize: entry.uncompressedSize)
-        default:
-            throw ZipError.unsupportedCompression(entry.compressionMethod)
+            switch entry.compressionMethod {
+            case 0:
+                guard entry.compressedSize > 0, let base = rawBuffer.baseAddress else { return Data() }
+                return Data(bytes: base.advanced(by: start), count: entry.compressedSize)
+            case 8:
+                guard entry.uncompressedSize > 0 else { return Data() }
+                guard let base = rawBuffer.baseAddress else { throw ZipError.decompressionFailed }
+                let sourceBase = base.advanced(by: start).assumingMemoryBound(to: UInt8.self)
+                var output = Data(count: entry.uncompressedSize)
+                let written = output.withUnsafeMutableBytes { destination -> Int in
+                    guard let destinationBase = destination.bindMemory(to: UInt8.self).baseAddress else { return 0 }
+                    return compression_decode_buffer(
+                        destinationBase, entry.uncompressedSize,
+                        sourceBase, entry.compressedSize,
+                        nil, COMPRESSION_ZLIB
+                    )
+                }
+                guard written == entry.uncompressedSize else { throw ZipError.decompressionFailed }
+                return output
+            default:
+                throw ZipError.unsupportedCompression(entry.compressionMethod)
+            }
         }
     }
 
@@ -185,20 +200,30 @@ public struct ZipArchive: Sendable {
     public func extractAll(to directory: URL) throws {
         let fileManager = FileManager.default
         let root = directory.standardizedFileURL
-        try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        let staging = root.deletingLastPathComponent().appendingPathComponent(".staging-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: staging) }
 
+        var createdDirs: Set<String> = [staging.path]
         for entry in entries {
-            guard let destination = Self.safeDestination(for: entry.path, in: root) else { continue }
+            guard let destination = Self.safeDestination(for: entry.path, in: staging) else { continue }
             if entry.isDirectory {
-                try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+                if createdDirs.insert(destination.path).inserted {
+                    try fileManager.createDirectory(at: destination, withIntermediateDirectories: true)
+                }
                 continue
             }
-            try fileManager.createDirectory(
-                at: destination.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try data(for: entry).write(to: destination, options: .atomic)
+            let parent = destination.deletingLastPathComponent()
+            if createdDirs.insert(parent.path).inserted {
+                try fileManager.createDirectory(at: parent, withIntermediateDirectories: true)
+            }
+            try data(for: entry).write(to: destination)
         }
+        if fileManager.fileExists(atPath: root.path) {
+            try fileManager.removeItem(at: root)
+        }
+        try fileManager.createDirectory(at: root.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.moveItem(at: staging, to: root)
     }
 
     static func safeDestination(for path: String, in root: URL) -> URL? {
@@ -256,27 +281,6 @@ public struct ZipArchive: Sendable {
         guard count >= 0, offset >= 0, offset < reader.count else { throw ZipError.corrupt }
         return CentralDirectory(offset: offset, count: count)
     }
-
-    private static func inflate(_ compressed: Data, expectedSize: Int) throws -> Data {
-        guard expectedSize > 0 else { return Data() }
-        var output = Data(count: expectedSize)
-        let written = output.withUnsafeMutableBytes { destination -> Int in
-            compressed.withUnsafeBytes { source -> Int in
-                guard
-                    let destinationBase = destination.bindMemory(to: UInt8.self).baseAddress,
-                    let sourceBase = source.bindMemory(to: UInt8.self).baseAddress
-                else { return 0 }
-                // COMPRESSION_ZLIB is raw DEFLATE (RFC 1951), which is what ZIP stores.
-                return compression_decode_buffer(
-                    destinationBase, expectedSize,
-                    sourceBase, compressed.count,
-                    nil, COMPRESSION_ZLIB
-                )
-            }
-        }
-        guard written == expectedSize else { throw ZipError.decompressionFailed }
-        return output
-    }
 }
 
 private struct ByteReader {
@@ -304,10 +308,14 @@ private struct ByteReader {
         return low | (high << 32)
     }
 
-    func data(at offset: Int, count: Int) -> Data? {
-        guard offset >= 0, count >= 0, let end = checkedEnd(offset, count), end <= buffer.count else { return nil }
-        guard count > 0, let base = buffer.baseAddress else { return Data() }
-        return Data(bytes: base.advanced(by: offset), count: count)
+    func string(at offset: Int, count: Int, preferUTF8: Bool) -> String {
+        guard offset >= 0, count > 0, let end = checkedEnd(offset, count), end <= buffer.count else { return "" }
+        let slice = UnsafeRawBufferPointer(rebasing: buffer[offset..<end])
+        let bytes = slice.bindMemory(to: UInt8.self)
+        if let decoded = String(bytes: bytes, encoding: .utf8) {
+            return decoded
+        }
+        return String(bytes: bytes, encoding: .isoLatin1) ?? ""
     }
 
     private func checkedEnd(_ offset: Int, _ length: Int) -> Int? {

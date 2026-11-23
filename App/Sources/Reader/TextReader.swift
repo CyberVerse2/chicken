@@ -22,8 +22,10 @@ struct TextReader: PlatformViewRepresentable {
     }
 
     func updateView(_ view: ColumnTextScrollView, context: Context) {
-        view.columnWidth = columnWidth
-        view.needsLayout = true
+        if view.columnWidth != columnWidth {
+            view.columnWidth = columnWidth
+            view.needsLayout = true
+        }
         context.coordinator.render(palette: palette, fontSize: fontSize, lineHeight: lineHeight, typeface: typeface)
     }
 
@@ -39,8 +41,10 @@ struct TextReader: PlatformViewRepresentable {
     }
 
     func updateView(_ view: ColumnTextView, context: Context) {
-        view.columnWidth = columnWidth
-        view.setNeedsLayout()
+        if view.columnWidth != columnWidth {
+            view.columnWidth = columnWidth
+            view.setNeedsLayout()
+        }
         context.coordinator.onTapCenter = onTapCenter
         context.coordinator.render(palette: palette, fontSize: fontSize, lineHeight: lineHeight, typeface: typeface)
     }
@@ -58,9 +62,12 @@ struct TextReader: PlatformViewRepresentable {
         private var restored = false
         private var lastReported = Date.distantPast
         private var searchQuery = ""
+        private var searchMatches: [NSRange] = []
+        private var searchFingerprint = ""
         private var searchRange: NSRange?
         private var lastPalette: ReaderPalette
         private var loadTask: Task<Void, Never>?
+        private var renderTask: Task<Void, Never>?
         #if os(macOS)
         private weak var scrollView: ColumnTextScrollView?
         private var textView: NSTextView? { scrollView?.documentView as? NSTextView }
@@ -103,6 +110,8 @@ struct TextReader: PlatformViewRepresentable {
             captureLocation()
             loadTask?.cancel()
             loadTask = nil
+            renderTask?.cancel()
+            renderTask = nil
             #if os(macOS)
             if let scrollObserver {
                 NotificationCenter.default.removeObserver(scrollObserver)
@@ -113,6 +122,7 @@ struct TextReader: PlatformViewRepresentable {
 
         isolated deinit {
             loadTask?.cancel()
+            renderTask?.cancel()
             #if os(macOS)
             if let scrollObserver {
                 NotificationCenter.default.removeObserver(scrollObserver)
@@ -144,27 +154,36 @@ struct TextReader: PlatformViewRepresentable {
 
         func render(palette: ReaderPalette, fontSize: Double, lineHeight: Double, typeface: ReaderTypeface) {
             lastPalette = palette
-            guard let document, let textView else { return }
-            let highlights = (model.book.highlights ?? []).map { "\($0.id)\($0.colorRaw)" }.sorted().joined()
-            let key = "\(palette.backgroundHex)|\(fontSize)|\(lineHeight)|\(typeface.rawValue)|\(document.fingerprint)|\(highlights)"
+            guard let document, textView != nil else { return }
+            let highlightSpecs = (model.book.highlights ?? []).map {
+                TextDocumentLoader.HighlightSpec(id: $0.id, text: $0.text, color: $0.color)
+            }
+            let highlightsKey = highlightSpecs.map { "\($0.id)\($0.color.rawValue)" }.sorted().joined()
+            let key = "\(palette.backgroundHex)|\(fontSize)|\(lineHeight)|\(typeface.rawValue)|\(document.fingerprint)|\(highlightsKey)"
             guard key != renderKey else { return }
+            let isFirstRender = renderKey.isEmpty
             let anchor = currentProgress
             renderKey = key
-            let attributed = TextDocumentLoader.attributedString(
-                document,
-                palette: palette,
-                fontSize: fontSize,
-                lineHeight: lineHeight,
-                typeface: typeface,
-                highlights: model.book.highlights ?? []
-            )
-            #if os(macOS)
-            textView.textStorage?.setAttributedString(attributed)
-            #else
-            textView.attributedText = attributed
-            #endif
-            Task { @MainActor [weak self] in
-                guard let self else { return }
+            renderTask?.cancel()
+            renderTask = Task { [weak self] in
+                if !isFirstRender {
+                    try? await Task.sleep(for: .milliseconds(35))
+                }
+                guard !Task.isCancelled else { return }
+                let box = await TextDocumentLoader.renderAttributedString(
+                    document,
+                    palette: palette,
+                    fontSize: fontSize,
+                    lineHeight: lineHeight,
+                    typeface: typeface,
+                    highlights: highlightSpecs
+                )
+                guard let self, !Task.isCancelled, self.renderKey == key, let textView = self.textView else { return }
+                #if os(macOS)
+                textView.textStorage?.setAttributedString(box.value)
+                #else
+                textView.attributedText = box.value
+                #endif
                 if !self.restored {
                     self.restored = true
                     let target = TextLocation.decode(self.model.preferredStartLocation)?.progression ?? self.model.book.progress
@@ -234,16 +253,19 @@ struct TextReader: PlatformViewRepresentable {
 
         func search(_ query: String, backwards: Bool) {
             guard let textView else { return }
-            if query != searchQuery {
+            let fingerprint = document?.fingerprint ?? ""
+            if query != searchQuery || fingerprint != searchFingerprint {
                 searchQuery = query
+                searchFingerprint = fingerprint
                 searchRange = nil
+                #if os(macOS)
+                let string = textView.string as NSString
+                #else
+                let string = (textView.text ?? "") as NSString
+                #endif
+                searchMatches = Self.allMatches(of: query, in: string)
             }
-            #if os(macOS)
-            let string = textView.string as NSString
-            #else
-            let string = (textView.text ?? "") as NSString
-            #endif
-            let matches = Self.allMatches(of: query, in: string)
+            let matches = searchMatches
             guard !matches.isEmpty else {
                 model.searchMatchSummary = "No matches"
                 return
@@ -470,6 +492,35 @@ enum TextDocumentLoader {
         let message: String
     }
 
+    nonisolated struct HighlightSpec: Sendable, Hashable {
+        let id: UUID
+        let text: String
+        let color: HighlightColor
+    }
+
+    nonisolated struct UncheckedAttributedString: @unchecked Sendable {
+        let value: NSAttributedString
+    }
+
+    @concurrent
+    static func renderAttributedString(
+        _ document: TextDocument,
+        palette: ReaderPalette,
+        fontSize: Double,
+        lineHeight: Double,
+        typeface: ReaderTypeface,
+        highlights: [HighlightSpec]
+    ) async -> UncheckedAttributedString {
+        UncheckedAttributedString(value: attributedString(
+            document,
+            palette: palette,
+            fontSize: fontSize,
+            lineHeight: lineHeight,
+            typeface: typeface,
+            highlights: highlights
+        ))
+    }
+
     @concurrent
     static func load(_ url: URL) async -> Result<TextDocument, LoadError> {
         let maxBytes = 12_000_000
@@ -494,13 +545,13 @@ enum TextDocumentLoader {
         return .success(.plain(text))
     }
 
-    static func attributedString(
+    nonisolated static func attributedString(
         _ document: TextDocument,
         palette: ReaderPalette,
         fontSize: Double,
         lineHeight: Double,
         typeface: ReaderTypeface = .default,
-        highlights: [Highlight]
+        highlights: [HighlightSpec]
     ) -> NSAttributedString {
         let result: NSMutableAttributedString
         switch document {
@@ -515,7 +566,7 @@ enum TextDocumentLoader {
         return result
     }
 
-    private static func renderRTF(
+    private nonisolated static func renderRTF(
         _ data: Data,
         palette: ReaderPalette,
         fontSize: Double,
@@ -556,7 +607,7 @@ enum TextDocumentLoader {
         return mutable
     }
 
-    private static func renderMarkdown(
+    private nonisolated static func renderMarkdown(
         _ content: String,
         palette: ReaderPalette,
         fontSize: Double,
@@ -728,7 +779,7 @@ enum TextDocumentLoader {
         return output
     }
 
-    private static func parseHeading(_ line: String) -> (level: Int, text: String)? {
+    private nonisolated static func parseHeading(_ line: String) -> (level: Int, text: String)? {
         var hashes = 0
         for ch in line {
             if ch == "#" { hashes += 1 } else { break }
@@ -739,7 +790,7 @@ enum TextDocumentLoader {
         return (hashes, rest.trimmingCharacters(in: .whitespaces))
     }
 
-    private static func appendInlineMarkdown(
+    private nonisolated static func appendInlineMarkdown(
         _ raw: String,
         baseFont: PlatformFont,
         color: PlatformColor,
@@ -788,7 +839,7 @@ enum TextDocumentLoader {
         output.append(chunk)
     }
 
-    private static func renderPlain(
+    private nonisolated static func renderPlain(
         _ content: String,
         palette: ReaderPalette,
         fontSize: Double,
@@ -827,7 +878,7 @@ enum TextDocumentLoader {
         return result
     }
 
-    private static func applyHighlights(_ highlights: [Highlight], to result: NSMutableAttributedString) {
+    private nonisolated static func applyHighlights(_ highlights: [HighlightSpec], to result: NSMutableAttributedString) {
         let string = result.string as NSString
         for highlight in highlights {
             let range = string.range(of: highlight.text, options: [.caseInsensitive])
@@ -837,7 +888,7 @@ enum TextDocumentLoader {
         }
     }
 
-    private static func boldFont(from font: PlatformFont) -> PlatformFont {
+    private nonisolated static func boldFont(from font: PlatformFont) -> PlatformFont {
         #if os(macOS)
         let descriptor = font.fontDescriptor.withSymbolicTraits(.bold)
         return PlatformFont(descriptor: descriptor, size: font.pointSize) ?? PlatformFont.boldSystemFont(ofSize: font.pointSize)
@@ -849,7 +900,7 @@ enum TextDocumentLoader {
         #endif
     }
 
-    private static func italicFont(from font: PlatformFont) -> PlatformFont {
+    private nonisolated static func italicFont(from font: PlatformFont) -> PlatformFont {
         #if os(macOS)
         let descriptor = font.fontDescriptor.withSymbolicTraits(.italic)
         return PlatformFont(descriptor: descriptor, size: font.pointSize) ?? font
@@ -859,7 +910,7 @@ enum TextDocumentLoader {
         #endif
     }
 
-    private static func boldItalicFont(from font: PlatformFont) -> PlatformFont {
+    private nonisolated static func boldItalicFont(from font: PlatformFont) -> PlatformFont {
         #if os(macOS)
         let descriptor = font.fontDescriptor.withSymbolicTraits([.bold, .italic])
         return PlatformFont(descriptor: descriptor, size: font.pointSize) ?? boldFont(from: font)
