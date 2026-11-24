@@ -104,11 +104,15 @@ extension View {
 
     @ViewBuilder
     func chickenSwipeActionsContainer() -> some View {
+        #if compiler(>=6.4)
         if #available(iOS 27.0, macOS 27.0, *) {
             swipeActionsContainer()
         } else {
             self
         }
+        #else
+        self
+        #endif
     }
 }
 
